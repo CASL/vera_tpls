@@ -1,0 +1,161 @@
+#include "petscsys.h"
+#include "petscfix.h"
+#include "petsc/private/fortranimpl.h"
+/* nepsolve.c */
+/* Fortran interface file */
+
+/*
+* This file was generated automatically by bfort from the C source
+* file.  
+ */
+
+#ifdef PETSC_USE_POINTER_CONVERSION
+#if defined(__cplusplus)
+extern "C" { 
+#endif 
+extern void *PetscToPointer(void*);
+extern int PetscFromPointer(void *);
+extern void PetscRmPointer(void*);
+#if defined(__cplusplus)
+} 
+#endif 
+
+#else
+
+#define PetscToPointer(a) (*(PetscFortranAddr *)(a))
+#define PetscFromPointer(a) (PetscFortranAddr)(a)
+#define PetscRmPointer(a)
+#endif
+
+#include "slepcnep.h"
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepsolve_ NEPSOLVE
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepsolve_ nepsolve
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepprojectoperator_ NEPPROJECTOPERATOR
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepprojectoperator_ nepprojectoperator
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepapplyfunction_ NEPAPPLYFUNCTION
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepapplyfunction_ nepapplyfunction
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepapplyjacobian_ NEPAPPLYJACOBIAN
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepapplyjacobian_ nepapplyjacobian
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepgetiterationnumber_ NEPGETITERATIONNUMBER
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepgetiterationnumber_ nepgetiterationnumber
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepgetconverged_ NEPGETCONVERGED
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepgetconverged_ nepgetconverged
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepgetconvergedreason_ NEPGETCONVERGEDREASON
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepgetconvergedreason_ nepgetconvergedreason
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepgeteigenpair_ NEPGETEIGENPAIR
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepgeteigenpair_ nepgeteigenpair
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepgeterrorestimate_ NEPGETERRORESTIMATE
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepgeterrorestimate_ nepgeterrorestimate
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepcomputeerror_ NEPCOMPUTEERROR
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepcomputeerror_ nepcomputeerror
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepcomputefunction_ NEPCOMPUTEFUNCTION
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepcomputefunction_ nepcomputefunction
+#endif
+#ifdef PETSC_HAVE_FORTRAN_CAPS
+#define nepcomputejacobian_ NEPCOMPUTEJACOBIAN
+#elif !defined(PETSC_HAVE_FORTRAN_UNDERSCORE) && !defined(FORTRANDOUBLEUNDERSCORE)
+#define nepcomputejacobian_ nepcomputejacobian
+#endif
+
+
+/* Definitions of Fortran Wrapper routines */
+#if defined(__cplusplus)
+extern "C" {
+#endif
+PETSC_EXTERN void PETSC_STDCALL  nepsolve_(NEP nep, int *__ierr ){
+*__ierr = NEPSolve(
+	(NEP)PetscToPointer((nep) ));
+}
+PETSC_EXTERN void PETSC_STDCALL  nepprojectoperator_(NEP nep,PetscInt *j0,PetscInt *j1, int *__ierr ){
+*__ierr = NEPProjectOperator(
+	(NEP)PetscToPointer((nep) ),*j0,*j1);
+}
+PETSC_EXTERN void PETSC_STDCALL  nepapplyfunction_(NEP nep,PetscScalar *lambda,Vec x,Vec v,Vec y,Mat A,Mat B, int *__ierr ){
+*__ierr = NEPApplyFunction(
+	(NEP)PetscToPointer((nep) ),*lambda,
+	(Vec)PetscToPointer((x) ),
+	(Vec)PetscToPointer((v) ),
+	(Vec)PetscToPointer((y) ),
+	(Mat)PetscToPointer((A) ),
+	(Mat)PetscToPointer((B) ));
+}
+PETSC_EXTERN void PETSC_STDCALL  nepapplyjacobian_(NEP nep,PetscScalar *lambda,Vec x,Vec v,Vec y,Mat A, int *__ierr ){
+*__ierr = NEPApplyJacobian(
+	(NEP)PetscToPointer((nep) ),*lambda,
+	(Vec)PetscToPointer((x) ),
+	(Vec)PetscToPointer((v) ),
+	(Vec)PetscToPointer((y) ),
+	(Mat)PetscToPointer((A) ));
+}
+PETSC_EXTERN void PETSC_STDCALL  nepgetiterationnumber_(NEP nep,PetscInt *its, int *__ierr ){
+*__ierr = NEPGetIterationNumber(
+	(NEP)PetscToPointer((nep) ),its);
+}
+PETSC_EXTERN void PETSC_STDCALL  nepgetconverged_(NEP nep,PetscInt *nconv, int *__ierr ){
+*__ierr = NEPGetConverged(
+	(NEP)PetscToPointer((nep) ),nconv);
+}
+PETSC_EXTERN void PETSC_STDCALL  nepgetconvergedreason_(NEP nep,NEPConvergedReason *reason, int *__ierr ){
+*__ierr = NEPGetConvergedReason(
+	(NEP)PetscToPointer((nep) ),reason);
+}
+PETSC_EXTERN void PETSC_STDCALL  nepgeteigenpair_(NEP nep,PetscInt *i,PetscScalar *eigr,PetscScalar *eigi,Vec Vr,Vec Vi, int *__ierr ){
+*__ierr = NEPGetEigenpair(
+	(NEP)PetscToPointer((nep) ),*i,eigr,eigi,
+	(Vec)PetscToPointer((Vr) ),
+	(Vec)PetscToPointer((Vi) ));
+}
+PETSC_EXTERN void PETSC_STDCALL  nepgeterrorestimate_(NEP nep,PetscInt *i,PetscReal *errest, int *__ierr ){
+*__ierr = NEPGetErrorEstimate(
+	(NEP)PetscToPointer((nep) ),*i,errest);
+}
+PETSC_EXTERN void PETSC_STDCALL  nepcomputeerror_(NEP nep,PetscInt *i,NEPErrorType *type,PetscReal *error, int *__ierr ){
+*__ierr = NEPComputeError(
+	(NEP)PetscToPointer((nep) ),*i,*type,error);
+}
+PETSC_EXTERN void PETSC_STDCALL  nepcomputefunction_(NEP nep,PetscScalar *lambda,Mat A,Mat B, int *__ierr ){
+*__ierr = NEPComputeFunction(
+	(NEP)PetscToPointer((nep) ),*lambda,
+	(Mat)PetscToPointer((A) ),
+	(Mat)PetscToPointer((B) ));
+}
+PETSC_EXTERN void PETSC_STDCALL  nepcomputejacobian_(NEP nep,PetscScalar *lambda,Mat A, int *__ierr ){
+*__ierr = NEPComputeJacobian(
+	(NEP)PetscToPointer((nep) ),*lambda,
+	(Mat)PetscToPointer((A) ));
+}
+#if defined(__cplusplus)
+}
+#endif

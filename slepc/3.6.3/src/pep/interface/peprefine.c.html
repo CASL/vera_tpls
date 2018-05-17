@@ -1,0 +1,409 @@
+<center><a href="peprefine.c">Actual source code: peprefine.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://slepc.upv.es/documentation/current/src/pep/interface/peprefine.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2016-03-29T14:58:54+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>slepc-3.6.3 2016-03-29</b></div>
+   <div id="bugreport" align=right><a href="mailto:slepc-maint@upv.es?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: slepc-3.6.3 v3.6.3 src/pep/interface/peprefine.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80"><a name="line1">  1: </a><font color="#B22222">/*</font>
+<a name="line2">  2: </a><font color="#B22222">   Newton refinement for <a href="../../../docs/manualpages/PEP/PEP.html#PEP">PEP</a>, simple version.</font>
+
+<a name="line4">  4: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line5">  5: </a><font color="#B22222">   SLEPc - Scalable Library for Eigenvalue Problem Computations</font>
+<a name="line6">  6: </a><font color="#B22222">   Copyright (c) 2002-2015, Universitat Politecnica de Valencia, Spain</font>
+
+<a name="line8">  8: </a><font color="#B22222">   This file is part of SLEPc.</font>
+
+<a name="line10"> 10: </a><font color="#B22222">   SLEPc is free software: you can redistribute it and/or modify it under  the</font>
+<a name="line11"> 11: </a><font color="#B22222">   terms of version 3 of the GNU Lesser General Public License as published by</font>
+<a name="line12"> 12: </a><font color="#B22222">   the Free Software Foundation.</font>
+
+<a name="line14"> 14: </a><font color="#B22222">   SLEPc  is  distributed in the hope that it will be useful, but WITHOUT  ANY</font>
+<a name="line15"> 15: </a><font color="#B22222">   WARRANTY;  without even the implied warranty of MERCHANTABILITY or  FITNESS</font>
+<a name="line16"> 16: </a><font color="#B22222">   FOR  A  PARTICULAR PURPOSE. See the GNU Lesser General Public  License  for</font>
+<a name="line17"> 17: </a><font color="#B22222">   more details.</font>
+
+<a name="line19"> 19: </a><font color="#B22222">   You  should have received a copy of the GNU Lesser General  Public  License</font>
+<a name="line20"> 20: </a><font color="#B22222">   along with SLEPc. If not, see &lt;http://www.gnu.org/licenses/&gt;.</font>
+<a name="line21"> 21: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line22"> 22: </a><font color="#B22222">*/</font>
+
+<a name="line24"> 24: </a><font color="#A020F0">#include &lt;slepc/private/pepimpl.h&gt;</font>
+<a name="line25"> 25: </a><font color="#A020F0">#include &lt;slepcblaslapack.h&gt;</font>
+
+<a name="line27"> 27: </a><strong><font color="#228B22">#define NREF_MAXIT 10</font></strong>
+
+<a name="line29"> 29: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line30"> 30: </a>  VecScatter    *scatter_id;
+<a name="line31"> 31: </a>  Mat           *A;
+<a name="line32"> 32: </a>  Vec           vg,v;
+<a name="line33"> 33: </a>} PEPSimpNRefctx;
+
+<a name="line37"> 37: </a><strong><font color="#4169E1"><a name="PEPSimpleNRefSetUp"></a>static PetscErrorCode PEPSimpleNRefSetUp(<a href="../../../docs/manualpages/PEP/PEP.html#PEP">PEP</a> pep,PEPSimpNRefctx **ctx_)</font></strong>
+<a name="line38"> 38: </a>{
+<a name="line40"> 40: </a>  PetscInt       i,si,j,n0,m0,nloc,*idx1,*idx2;
+<a name="line41"> 41: </a>  IS             is1,is2;
+<a name="line42"> 42: </a>  PEPSimpNRefctx *ctx;
+<a name="line43"> 43: </a>  Vec            v;
+
+<a name="line46"> 46: </a>  PetscMalloc1(1,ctx_);
+<a name="line47"> 47: </a>  ctx = *ctx_;
+<a name="line48"> 48: </a>  <font color="#4169E1">if</font> (pep-&gt;npart==1) {
+<a name="line49"> 49: </a>    pep-&gt;refinesubc = NULL;
+<a name="line50"> 50: </a>    ctx-&gt;scatter_id = NULL;
+<a name="line51"> 51: </a>    ctx-&gt;A = pep-&gt;A;
+<a name="line52"> 52: </a>  } <font color="#4169E1">else</font> {
+<a name="line53"> 53: </a>    PetscMalloc2(pep-&gt;nmat,&amp;ctx-&gt;A,pep-&gt;npart,&amp;ctx-&gt;scatter_id);
+
+<a name="line55"> 55: </a>    <font color="#B22222">/* Duplicate matrices */</font>
+<a name="line56"> 56: </a>    <font color="#4169E1">for</font> (i=0;i&lt;pep-&gt;nmat;i++) {
+<a name="line57"> 57: </a>      MatCreateRedundantMatrix(pep-&gt;A[i],0,PetscSubcommChild(pep-&gt;refinesubc),MAT_INITIAL_MATRIX,&amp;ctx-&gt;A[i]);
+<a name="line58"> 58: </a>    }
+<a name="line59"> 59: </a>    MatCreateVecs(ctx-&gt;A[0],&amp;ctx-&gt;v,NULL);
+
+<a name="line61"> 61: </a>    <font color="#B22222">/* Create scatters for sending vectors to each subcommucator */</font>
+<a name="line62"> 62: </a>    <a href="../../../docs/manualpages/BV/BVGetColumn.html#BVGetColumn">BVGetColumn</a>(pep-&gt;V,0,&amp;v);
+<a name="line63"> 63: </a>    VecGetOwnershipRange(v,&amp;n0,&amp;m0);
+<a name="line64"> 64: </a>    <a href="../../../docs/manualpages/BV/BVRestoreColumn.html#BVRestoreColumn">BVRestoreColumn</a>(pep-&gt;V,0,&amp;v);
+<a name="line65"> 65: </a>    VecGetLocalSize(ctx-&gt;v,&amp;nloc);
+<a name="line66"> 66: </a>    PetscMalloc2(m0-n0,&amp;idx1,m0-n0,&amp;idx2);
+<a name="line67"> 67: </a>    VecCreateMPI(PetscObjectComm((PetscObject)pep),nloc,PETSC_DECIDE,&amp;ctx-&gt;vg);
+<a name="line68"> 68: </a>    <font color="#4169E1">for</font> (si=0;si&lt;pep-&gt;npart;si++) {
+<a name="line69"> 69: </a>      j = 0;
+<a name="line70"> 70: </a>      <font color="#4169E1">for</font> (i=n0;i&lt;m0;i++) {
+<a name="line71"> 71: </a>        idx1[j]   = i;
+<a name="line72"> 72: </a>        idx2[j++] = i+pep-&gt;n*si;
+<a name="line73"> 73: </a>      }
+<a name="line74"> 74: </a>      ISCreateGeneral(PetscObjectComm((PetscObject)pep),(m0-n0),idx1,PETSC_COPY_VALUES,&amp;is1);
+<a name="line75"> 75: </a>      ISCreateGeneral(PetscObjectComm((PetscObject)pep),(m0-n0),idx2,PETSC_COPY_VALUES,&amp;is2);
+<a name="line76"> 76: </a>      <a href="../../../docs/manualpages/BV/BVGetColumn.html#BVGetColumn">BVGetColumn</a>(pep-&gt;V,0,&amp;v);
+<a name="line77"> 77: </a>      VecScatterCreate(v,is1,ctx-&gt;vg,is2,&amp;ctx-&gt;scatter_id[si]);
+<a name="line78"> 78: </a>      <a href="../../../docs/manualpages/BV/BVRestoreColumn.html#BVRestoreColumn">BVRestoreColumn</a>(pep-&gt;V,0,&amp;v);
+<a name="line79"> 79: </a>      ISDestroy(&amp;is1);
+<a name="line80"> 80: </a>      ISDestroy(&amp;is2);
+<a name="line81"> 81: </a>    }
+<a name="line82"> 82: </a>    PetscFree2(idx1,idx2);
+<a name="line83"> 83: </a>  }
+<a name="line84"> 84: </a>  <font color="#4169E1">return</font>(0);  
+<a name="line85"> 85: </a>}
+
+<a name="line87"> 87: </a><font color="#B22222">/*</font>
+<a name="line88"> 88: </a><font color="#B22222">  Gather Eigenpair idx from subcommunicator with color sc</font>
+<a name="line89"> 89: </a><font color="#B22222">*/</font>
+<a name="line92"> 92: </a><strong><font color="#4169E1"><a name="PEPSimpleNRefGatherEigenpair"></a>static PetscErrorCode PEPSimpleNRefGatherEigenpair(<a href="../../../docs/manualpages/PEP/PEP.html#PEP">PEP</a> pep,PEPSimpNRefctx *ctx,PetscInt sc,PetscInt idx)</font></strong>
+<a name="line93"> 93: </a>{
+<a name="line94"> 94: </a>  PetscErrorCode    ierr;
+<a name="line95"> 95: </a>  PetscMPIInt       nproc,p;
+<a name="line96"> 96: </a>  MPI_Comm          comm=((PetscObject)pep)-&gt;comm;
+<a name="line97"> 97: </a>  Vec               v;
+<a name="line98"> 98: </a>  const PetscScalar *array;
+
+<a name="line101">101: </a>  <font color="#B22222">/* The eigenvalue information is in the last process of the </font>
+<a name="line102">102: </a><font color="#B22222">     subcommunicator sc. p is its mapping in the general comm */</font>
+<a name="line103">103: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm,&amp;nproc);
+<a name="line104">104: </a>  p = (nproc/pep-&gt;npart)*(sc+1)+PetscMin(nproc%pep-&gt;npart,sc+1)-1;
+<a name="line105">105: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Bcast.html#MPI_Bcast">MPI_Bcast</a>(&amp;pep-&gt;eigr[idx],1,MPIU_SCALAR,p,comm);
+
+<a name="line107">107: </a>  <font color="#4169E1">if</font> (pep-&gt;npart&gt;1) {
+<a name="line108">108: </a>    <font color="#B22222">/* Gather pep-&gt;V[idx] from the subcommuniator sc */</font>
+<a name="line109">109: </a>    <a href="../../../docs/manualpages/BV/BVGetColumn.html#BVGetColumn">BVGetColumn</a>(pep-&gt;V,idx,&amp;v);
+<a name="line110">110: </a>    <font color="#4169E1">if</font> (pep-&gt;refinesubc-&gt;color==sc) {
+<a name="line111">111: </a>      VecGetArrayRead(ctx-&gt;v,&amp;array);
+<a name="line112">112: </a>      VecPlaceArray(ctx-&gt;vg,array);
+<a name="line113">113: </a>    }
+<a name="line114">114: </a>    VecScatterBegin(ctx-&gt;scatter_id[sc],ctx-&gt;vg,v,INSERT_VALUES,SCATTER_REVERSE);
+<a name="line115">115: </a>    VecScatterEnd(ctx-&gt;scatter_id[sc],ctx-&gt;vg,v,INSERT_VALUES,SCATTER_REVERSE);
+<a name="line116">116: </a>    <font color="#4169E1">if</font> (pep-&gt;refinesubc-&gt;color==sc) {
+<a name="line117">117: </a>      VecResetArray(ctx-&gt;vg);
+<a name="line118">118: </a>      VecRestoreArrayRead(ctx-&gt;v,&amp;array);
+<a name="line119">119: </a>    }
+<a name="line120">120: </a>    <a href="../../../docs/manualpages/BV/BVRestoreColumn.html#BVRestoreColumn">BVRestoreColumn</a>(pep-&gt;V,idx,&amp;v);
+<a name="line121">121: </a>  }
+<a name="line122">122: </a>  <font color="#4169E1">return</font>(0);
+<a name="line123">123: </a>}
+
+<a name="line127">127: </a><strong><font color="#4169E1"><a name="PEPSimpleNRefScatterEigenvector"></a>static PetscErrorCode PEPSimpleNRefScatterEigenvector(<a href="../../../docs/manualpages/PEP/PEP.html#PEP">PEP</a> pep,PEPSimpNRefctx *ctx,PetscInt sc,PetscInt idx)</font></strong>
+<a name="line128">128: </a>{
+<a name="line129">129: </a>  PetscErrorCode    ierr;
+<a name="line130">130: </a>  Vec               v;
+<a name="line131">131: </a>  const PetscScalar *array;
+<a name="line132">132: </a>  
+<a name="line134">134: </a>  <font color="#4169E1">if</font> (pep-&gt;npart&gt;1) {
+<a name="line135">135: </a>    <a href="../../../docs/manualpages/BV/BVGetColumn.html#BVGetColumn">BVGetColumn</a>(pep-&gt;V,idx,&amp;v);
+<a name="line136">136: </a>    <font color="#4169E1">if</font> (pep-&gt;refinesubc-&gt;color==sc) {
+<a name="line137">137: </a>      VecGetArrayRead(ctx-&gt;v,&amp;array);
+<a name="line138">138: </a>      VecPlaceArray(ctx-&gt;vg,array);
+<a name="line139">139: </a>    }
+<a name="line140">140: </a>    VecScatterBegin(ctx-&gt;scatter_id[sc],v,ctx-&gt;vg,INSERT_VALUES,SCATTER_FORWARD);
+<a name="line141">141: </a>    VecScatterEnd(ctx-&gt;scatter_id[sc],v,ctx-&gt;vg,INSERT_VALUES,SCATTER_FORWARD);
+<a name="line142">142: </a>    <font color="#4169E1">if</font> (pep-&gt;refinesubc-&gt;color==sc) {
+<a name="line143">143: </a>      VecResetArray(ctx-&gt;vg);
+<a name="line144">144: </a>      VecRestoreArrayRead(ctx-&gt;v,&amp;array);
+<a name="line145">145: </a>    }
+<a name="line146">146: </a>    <a href="../../../docs/manualpages/BV/BVRestoreColumn.html#BVRestoreColumn">BVRestoreColumn</a>(pep-&gt;V,idx,&amp;v);
+<a name="line147">147: </a>  }
+<a name="line148">148: </a>  <font color="#4169E1">return</font>(0);
+<a name="line149">149: </a>}
+
+<a name="line153">153: </a><strong><font color="#4169E1"><a name="PEPEvaluateFunctionDerivatives"></a>static PetscErrorCode PEPEvaluateFunctionDerivatives(<a href="../../../docs/manualpages/PEP/PEP.html#PEP">PEP</a> pep,PetscScalar alpha,PetscScalar *vals)</font></strong>
+<a name="line154">154: </a>{
+<a name="line155">155: </a>  PetscInt    i,nmat=pep-&gt;nmat;
+<a name="line156">156: </a>  PetscScalar a0,a1,a2;
+<a name="line157">157: </a>  PetscReal   *a=pep-&gt;pbc,*b=a+nmat,*g=b+nmat;
+
+<a name="line160">160: </a>  a0 = 0.0;
+<a name="line161">161: </a>  a1 = 1.0;
+<a name="line162">162: </a>  vals[0] = 0.0;
+<a name="line163">163: </a>  <font color="#4169E1">if</font> (nmat&gt;1) vals[1] = 1/a[0];
+<a name="line164">164: </a>  <font color="#4169E1">for</font> (i=2;i&lt;nmat;i++) {
+<a name="line165">165: </a>    a2 = ((alpha-b[i-2])*a1-g[i-2]*a0)/a[i-2];
+<a name="line166">166: </a>    vals[i] = (a2+(alpha-b[i-1])*vals[i-1]-g[i-1]*vals[i-2])/a[i-1];
+<a name="line167">167: </a>    a0 = a1; a1 = a2;
+<a name="line168">168: </a>  }
+<a name="line169">169: </a>  <font color="#4169E1">return</font>(0);
+<a name="line170">170: </a>}
+
+<a name="line174">174: </a><strong><font color="#4169E1"><a name="PEPSimpleNRefSetUpSystem"></a>static PetscErrorCode PEPSimpleNRefSetUpSystem(<a href="../../../docs/manualpages/PEP/PEP.html#PEP">PEP</a> pep,Mat *A,PetscInt idx,Mat *M,Mat *T,PetscBool ini,Vec *t,Vec v)</font></strong>
+<a name="line175">175: </a>{
+<a name="line176">176: </a>  PetscErrorCode    ierr;
+<a name="line177">177: </a>  PetscInt          i,nmat=pep-&gt;nmat,ml,m0,m1,mg;
+<a name="line178">178: </a>  PetscInt          *dnz,*onz,ncols,*cols2,*nnz;
+<a name="line179">179: </a>  PetscScalar       zero=0.0,*coeffs;
+<a name="line180">180: </a>  PetscMPIInt       rank,size;
+<a name="line181">181: </a>  MPI_Comm          comm;
+<a name="line182">182: </a>  const PetscInt    *cols;
+<a name="line183">183: </a>  const PetscScalar *vals,*array;
+<a name="line184">184: </a>  MatStructure      str;
+<a name="line185">185: </a>  Vec               w=t[1],q=t[0];
+
+<a name="line188">188: </a>  comm = PetscObjectComm((PetscObject)A[0]);
+<a name="line189">189: </a>  <a href="../../../docs/manualpages/ST/STGetMatStructure.html#STGetMatStructure">STGetMatStructure</a>(pep-&gt;st,&amp;str);
+<a name="line190">190: </a>  PetscMalloc1(nmat,&amp;coeffs);
+<a name="line191">191: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(comm,&amp;rank);
+<a name="line192">192: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm,&amp;size);
+<a name="line193">193: </a>  <font color="#4169E1">if</font> (ini) {
+<a name="line194">194: </a>    MatDuplicate(A[0],MAT_COPY_VALUES,T);
+<a name="line195">195: </a>  } <font color="#4169E1">else</font> {
+<a name="line196">196: </a>    MatCopy(A[0],*T,DIFFERENT_NONZERO_PATTERN);
+<a name="line197">197: </a>  }
+<a name="line198">198: </a>  PEPEvaluateBasis(pep,pep-&gt;eigr[idx],0,coeffs,NULL);
+<a name="line199">199: </a>  MatScale(*T,coeffs[0]);
+<a name="line200">200: </a>  <font color="#4169E1">for</font> (i=1;i&lt;nmat;i++) {
+<a name="line201">201: </a>    MatAXPY(*T,coeffs[i],A[i],(ini)?str:SUBSET_NONZERO_PATTERN);
+<a name="line202">202: </a>  }
+<a name="line203">203: </a>  MatGetSize(*T,&amp;mg,NULL);
+<a name="line204">204: </a>  MatGetOwnershipRange(*T,&amp;m0,&amp;m1);
+<a name="line205">205: </a>  <font color="#4169E1">if</font> (ini) {
+<a name="line206">206: </a>    MatCreate(comm,M);
+<a name="line207">207: </a>    MatGetLocalSize(*T,&amp;ml,NULL);
+<a name="line208">208: </a>    <font color="#4169E1">if</font> (rank==size-1) ml++;
+<a name="line209">209: </a>    MatSetSizes(*M,ml,ml,mg+1,mg+1);
+<a name="line210">210: </a>    MatSetFromOptions(*M);
+<a name="line211">211: </a>    MatSetUp(*M);
+<a name="line212">212: </a>    <font color="#B22222">/* Preallocate M */</font>
+<a name="line213">213: </a>    <font color="#4169E1">if</font> (size&gt;1) {
+<a name="line214">214: </a>      MatPreallocateInitialize(comm,ml,ml,dnz,onz);
+<a name="line215">215: </a>      <font color="#4169E1">for</font> (i=m0;i&lt;m1;i++) {
+<a name="line216">216: </a>        MatGetRow(*T,i,&amp;ncols,&amp;cols,NULL);
+<a name="line217">217: </a>        MatPreallocateSet(i,ncols,cols,dnz,onz);
+<a name="line218">218: </a>        MatPreallocateSet(i,1,&amp;mg,dnz,onz);
+<a name="line219">219: </a>        MatRestoreRow(*T,i,&amp;ncols,&amp;cols,NULL);
+<a name="line220">220: </a>      }
+<a name="line221">221: </a>      <font color="#4169E1">if</font> (rank==size-1) {
+<a name="line222">222: </a>        PetscCalloc1(mg+1,&amp;cols2);
+<a name="line223">223: </a>        <font color="#4169E1">for</font> (i=0;i&lt;mg+1;i++) cols2[i]=i;
+<a name="line224">224: </a>        MatPreallocateSet(m1,mg+1,cols2,dnz,onz);
+<a name="line225">225: </a>        PetscFree(cols2);
+<a name="line226">226: </a>      }
+<a name="line227">227: </a>      MatMPIAIJSetPreallocation(*M,0,dnz,0,onz);
+<a name="line228">228: </a>      MatPreallocateFinalize(dnz,onz);
+<a name="line229">229: </a>    } <font color="#4169E1">else</font> {
+<a name="line230">230: </a>      PetscCalloc1(mg+1,&amp;nnz);
+<a name="line231">231: </a>      <font color="#4169E1">for</font> (i=0;i&lt;mg;i++) {
+<a name="line232">232: </a>        MatGetRow(*T,i,&amp;ncols,NULL,NULL);
+<a name="line233">233: </a>        nnz[i] = ncols+1;
+<a name="line234">234: </a>        MatRestoreRow(*T,i,&amp;ncols,NULL,NULL);
+<a name="line235">235: </a>      }
+<a name="line236">236: </a>      nnz[mg] = mg+1;
+<a name="line237">237: </a>      MatSeqAIJSetPreallocation(*M,0,nnz);
+<a name="line238">238: </a>      PetscFree(nnz);
+<a name="line239">239: </a>    }
+<a name="line240">240: </a>  }
+<a name="line241">241: </a>  PEPEvaluateFunctionDerivatives(pep,pep-&gt;eigr[idx],coeffs);
+<a name="line242">242: </a>  <font color="#4169E1">for</font> (i=0;i&lt;nmat &amp;&amp; PetscAbsScalar(coeffs[i])==0.0;i++);
+<a name="line243">243: </a>  MatMult(A[i],v,w);
+<a name="line244">244: </a>  <font color="#4169E1">if</font> (coeffs[i]!=1.0) {
+<a name="line245">245: </a>    VecScale(w,coeffs[i]);
+<a name="line246">246: </a>  }
+<a name="line247">247: </a>  <font color="#4169E1">for</font> (i++;i&lt;nmat;i++) {
+<a name="line248">248: </a>    MatMult(A[i],v,q);
+<a name="line249">249: </a>    VecAXPY(w,coeffs[i],q);
+<a name="line250">250: </a>  }
+<a name="line251">251: </a>  
+<a name="line252">252: </a>  <font color="#B22222">/* Set values */</font>
+<a name="line253">253: </a>  PetscMalloc1(m1-m0,&amp;cols2);
+<a name="line254">254: </a>  <font color="#4169E1">for</font> (i=0;i&lt;m1-m0;i++) cols2[i]=m0+i;
+<a name="line255">255: </a>  VecGetArrayRead(w,&amp;array);
+<a name="line256">256: </a>  <font color="#4169E1">for</font> (i=m0;i&lt;m1;i++) {
+<a name="line257">257: </a>    MatGetRow(*T,i,&amp;ncols,&amp;cols,&amp;vals);
+<a name="line258">258: </a>    MatSetValues(*M,1,&amp;i,ncols,cols,vals,INSERT_VALUES);
+<a name="line259">259: </a>    MatRestoreRow(*T,i,&amp;ncols,&amp;cols,&amp;vals);
+<a name="line260">260: </a>    MatSetValues(*M,1,&amp;i,1,&amp;mg,array+i-m0,INSERT_VALUES);
+<a name="line261">261: </a>  }
+<a name="line262">262: </a>  VecRestoreArrayRead(w,&amp;array);
+<a name="line263">263: </a>  VecConjugate(v);
+<a name="line264">264: </a>  VecGetArrayRead(v,&amp;array);
+<a name="line265">265: </a>  MatSetValues(*M,1,&amp;mg,m1-m0,cols2,array,INSERT_VALUES);
+<a name="line266">266: </a>  MatSetValues(*M,1,&amp;mg,1,&amp;mg,&amp;zero,INSERT_VALUES);
+<a name="line267">267: </a>  VecRestoreArrayRead(v,&amp;array);
+<a name="line268">268: </a>  VecConjugate(v);
+<a name="line269">269: </a>  MatAssemblyBegin(*M,MAT_FINAL_ASSEMBLY);
+<a name="line270">270: </a>  MatAssemblyEnd(*M,MAT_FINAL_ASSEMBLY);  
+<a name="line271">271: </a>  PetscFree(cols2);
+<a name="line272">272: </a>  PetscFree(coeffs);
+<a name="line273">273: </a>  <font color="#4169E1">return</font>(0);
+<a name="line274">274: </a>}
+
+<a name="line278">278: </a><strong><font color="#4169E1"><a name="PEPNewtonRefinementSimple"></a>PetscErrorCode PEPNewtonRefinementSimple(<a href="../../../docs/manualpages/PEP/PEP.html#PEP">PEP</a> pep,PetscInt *maxits,PetscReal *tol,PetscInt k)</font></strong>
+<a name="line279">279: </a>{
+<a name="line280">280: </a>  PetscErrorCode    ierr;
+<a name="line281">281: </a>  PetscInt          i,n,its,idx=0,*idx_sc,*its_sc,color;
+<a name="line282">282: </a>  PetscMPIInt       rank,size;
+<a name="line283">283: </a>  KSP               ksp;
+<a name="line284">284: </a>  Mat               M=NULL,T=NULL;
+<a name="line285">285: </a>  MPI_Comm          comm;
+<a name="line286">286: </a>  Vec               r,v,dv,rr=NULL,dvv=NULL,t[2];
+<a name="line287">287: </a>  PetscScalar       *array2;
+<a name="line288">288: </a>  const PetscScalar *array;
+<a name="line289">289: </a>  PetscReal         norm,error;
+<a name="line290">290: </a>  PetscBool         ini=PETSC_TRUE,sc_pend,solved=PETSC_FALSE;
+<a name="line291">291: </a>  PEPSimpNRefctx    *ctx;
+<a name="line292">292: </a>  KSPConvergedReason reason;
+
+<a name="line295">295: </a>  PetscLogEventBegin(PEP_Refine,pep,0,0,0);
+<a name="line296">296: </a>  PEPSimpleNRefSetUp(pep,&amp;ctx);
+<a name="line297">297: </a>  its = (maxits)?*maxits:NREF_MAXIT;
+<a name="line298">298: </a>  comm = (pep-&gt;npart==1)?PetscObjectComm((PetscObject)pep):PetscSubcommChild(pep-&gt;refinesubc);
+<a name="line299">299: </a>  <a href="../../../docs/manualpages/PEP/PEPRefineGetKSP.html#PEPRefineGetKSP">PEPRefineGetKSP</a>(pep,&amp;ksp);
+<a name="line300">300: </a>  <font color="#4169E1">if</font> (pep-&gt;npart==1) {
+<a name="line301">301: </a>    <a href="../../../docs/manualpages/BV/BVGetColumn.html#BVGetColumn">BVGetColumn</a>(pep-&gt;V,0,&amp;v);
+<a name="line302">302: </a>  } <font color="#4169E1">else</font> v = ctx-&gt;v;
+<a name="line303">303: </a>  VecDuplicate(v,&amp;r);
+<a name="line304">304: </a>  VecDuplicate(v,&amp;dv);
+<a name="line305">305: </a>  VecDuplicate(v,&amp;t[0]);
+<a name="line306">306: </a>  VecDuplicate(v,&amp;t[1]);
+<a name="line307">307: </a>  <font color="#4169E1">if</font> (pep-&gt;npart==1) { <a href="../../../docs/manualpages/BV/BVRestoreColumn.html#BVRestoreColumn">BVRestoreColumn</a>(pep-&gt;V,0,&amp;v); }
+<a name="line308">308: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm,&amp;size);
+<a name="line309">309: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(comm,&amp;rank);
+<a name="line310">310: </a>  VecGetLocalSize(r,&amp;n);
+<a name="line311">311: </a>  PetscMalloc2(pep-&gt;npart,&amp;idx_sc,pep-&gt;npart,&amp;its_sc);
+<a name="line312">312: </a>  <font color="#4169E1">for</font> (i=0;i&lt;pep-&gt;npart;i++) its_sc[i] = 0;
+<a name="line313">313: </a>  color = (pep-&gt;npart==1)?0:pep-&gt;refinesubc-&gt;color;
+<a name="line314">314: </a>   
+<a name="line315">315: </a>  <font color="#B22222">/* Loop performing iterative refinements */</font>
+<a name="line316">316: </a>  <font color="#4169E1">while</font> (!solved) {
+<a name="line317">317: </a>    <font color="#4169E1">for</font> (i=0;i&lt;pep-&gt;npart;i++) {
+<a name="line318">318: </a>      sc_pend = PETSC_TRUE;
+<a name="line319">319: </a>      <font color="#4169E1">if</font> (its_sc[i]==0) {
+<a name="line320">320: </a>        idx_sc[i] = idx++;
+<a name="line321">321: </a>        <font color="#4169E1">if</font> (idx_sc[i]&gt;=k) {
+<a name="line322">322: </a>          sc_pend = PETSC_FALSE;
+<a name="line323">323: </a>        } <font color="#4169E1">else</font> {
+<a name="line324">324: </a>          PEPSimpleNRefScatterEigenvector(pep,ctx,i,idx_sc[i]);
+<a name="line325">325: </a>        }
+<a name="line326">326: </a>      }  <font color="#4169E1">else</font> { <font color="#B22222">/* Gather Eigenpair from subcommunicator i */</font>
+<a name="line327">327: </a>        PEPSimpleNRefGatherEigenpair(pep,ctx,i,idx_sc[i]);
+<a name="line328">328: </a>      }
+<a name="line329">329: </a>      <font color="#4169E1">while</font> (sc_pend) {
+<a name="line330">330: </a>        <font color="#4169E1">if</font> (tol) {
+<a name="line331">331: </a>          <a href="../../../docs/manualpages/PEP/PEPComputeError.html#PEPComputeError">PEPComputeError</a>(pep,idx_sc[i],PEP_ERROR_BACKWARD,&amp;error);
+<a name="line332">332: </a>        }
+<a name="line333">333: </a>        <font color="#4169E1">if</font> (error&lt;=*tol || its_sc[i]&gt;=its) {
+<a name="line334">334: </a>          idx_sc[i] = idx++;
+<a name="line335">335: </a>          its_sc[i] = 0;
+<a name="line336">336: </a>          <font color="#4169E1">if</font> (idx_sc[i]&lt;k) { PEPSimpleNRefScatterEigenvector(pep,ctx,i,idx_sc[i]); }
+<a name="line337">337: </a>        } <font color="#4169E1">else</font> {
+<a name="line338">338: </a>          sc_pend = PETSC_FALSE;
+<a name="line339">339: </a>          its_sc[i]++;
+<a name="line340">340: </a>        }
+<a name="line341">341: </a>        <font color="#4169E1">if</font> (idx_sc[i]&gt;=k) sc_pend = PETSC_FALSE;
+<a name="line342">342: </a>      }
+<a name="line343">343: </a>    }
+<a name="line344">344: </a>    solved = PETSC_TRUE;
+<a name="line345">345: </a>    <font color="#4169E1">for</font> (i=0;i&lt;pep-&gt;npart&amp;&amp;solved;i++) solved = (idx_sc[i]&lt;k)?PETSC_FALSE:PETSC_TRUE;
+<a name="line346">346: </a>    <font color="#4169E1">if</font> (idx_sc[color]&lt;k) {
+<a name="line347">347: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line348">348: </a>      <font color="#4169E1">if</font> (pep-&gt;eigi[idx_sc[color]]!=0.0) SETERRQ(PetscObjectComm((PetscObject)pep),1,<font color="#666666">"Simple Refinement not implemented in real scalars for complex eigenvalues"</font>);
+<a name="line349">349: </a><font color="#A020F0">#endif</font>
+<a name="line350">350: </a>      <font color="#4169E1">if</font> (pep-&gt;npart==1) {
+<a name="line351">351: </a>        <a href="../../../docs/manualpages/BV/BVGetColumn.html#BVGetColumn">BVGetColumn</a>(pep-&gt;V,idx_sc[color],&amp;v);
+<a name="line352">352: </a>      } <font color="#4169E1">else</font> v = ctx-&gt;v; 
+<a name="line353">353: </a>      PEPSimpleNRefSetUpSystem(pep,ctx-&gt;A,idx_sc[color],&amp;M,&amp;T,ini,t,v);
+<a name="line354">354: </a>      KSPSetOperators(ksp,M,M);
+<a name="line355">355: </a>      <font color="#4169E1">if</font> (ini) {
+<a name="line356">356: </a>        KSPSetFromOptions(ksp);
+<a name="line357">357: </a>        MatCreateVecs(M,&amp;dvv,NULL);
+<a name="line358">358: </a>        VecDuplicate(dvv,&amp;rr);
+<a name="line359">359: </a>        ini = PETSC_FALSE;
+<a name="line360">360: </a>      }
+<a name="line361">361: </a>      MatMult(T,v,r);
+<a name="line362">362: </a>      VecGetArrayRead(r,&amp;array);
+<a name="line363">363: </a>      <font color="#4169E1">if</font> (rank==size-1) {
+<a name="line364">364: </a>        VecGetArray(rr,&amp;array2);
+<a name="line365">365: </a>        PetscMemcpy(array2,array,n*<font color="#4169E1">sizeof</font>(PetscScalar));
+<a name="line366">366: </a>        array2[n] = 0.0;
+<a name="line367">367: </a>        VecRestoreArray(rr,&amp;array2);
+<a name="line368">368: </a>      } <font color="#4169E1">else</font> {
+<a name="line369">369: </a>        VecPlaceArray(rr,array);
+<a name="line370">370: </a>      }
+<a name="line371">371: </a>      KSPSolve(ksp,rr,dvv);
+<a name="line372">372: </a>      KSPGetConvergedReason(ksp,&amp;reason);
+<a name="line373">373: </a>      <font color="#4169E1">if</font> (reason&lt;0) SETERRQ1(PetscObjectComm((PetscObject)ksp),PETSC_ERR_NOT_CONVERGED,<font color="#666666">"KSP did not converge (reason=%s)"</font>,KSPConvergedReasons[reason]);
+<a name="line374">374: </a>      <font color="#4169E1">if</font> (rank != size-1) {
+<a name="line375">375: </a>        VecResetArray(rr);
+<a name="line376">376: </a>      }
+<a name="line377">377: </a>      VecRestoreArrayRead(r,&amp;array);
+<a name="line378">378: </a>      VecGetArrayRead(dvv,&amp;array);
+<a name="line379">379: </a>      VecPlaceArray(dv,array);
+<a name="line380">380: </a>      VecAXPY(v,-1.0,dv);
+<a name="line381">381: </a>      VecNorm(v,NORM_2,&amp;norm);
+<a name="line382">382: </a>      VecScale(v,1.0/norm);
+<a name="line383">383: </a>      VecResetArray(dv);
+<a name="line384">384: </a>      <font color="#4169E1">if</font> (rank==size-1) pep-&gt;eigr[idx_sc[color]] -= array[n];
+<a name="line385">385: </a>      VecRestoreArrayRead(dvv,&amp;array);
+<a name="line386">386: </a>      <font color="#4169E1">if</font> (pep-&gt;npart==1) { <a href="../../../docs/manualpages/BV/BVRestoreColumn.html#BVRestoreColumn">BVRestoreColumn</a>(pep-&gt;V,idx_sc[color],&amp;v); } 
+<a name="line387">387: </a>    }
+<a name="line388">388: </a>  }
+<a name="line389">389: </a>  MatDestroy(&amp;M);
+<a name="line390">390: </a>  MatDestroy(&amp;T);
+<a name="line391">391: </a>  VecDestroy(&amp;t[0]);
+<a name="line392">392: </a>  VecDestroy(&amp;t[1]);
+<a name="line393">393: </a>  VecDestroy(&amp;dv);
+<a name="line394">394: </a>  VecDestroy(&amp;dvv);
+<a name="line395">395: </a>  VecDestroy(&amp;r);
+<a name="line396">396: </a>  VecDestroy(&amp;rr);
+<a name="line397">397: </a>  PetscFree2(idx_sc,its_sc);
+<a name="line398">398: </a>  <font color="#4169E1">if</font> (pep-&gt;npart&gt;1) {
+<a name="line399">399: </a>    VecDestroy(&amp;ctx-&gt;vg);
+<a name="line400">400: </a>    VecDestroy(&amp;ctx-&gt;v);
+<a name="line401">401: </a>    <font color="#4169E1">for</font> (i=0;i&lt;pep-&gt;nmat;i++) {
+<a name="line402">402: </a>      MatDestroy(&amp;ctx-&gt;A[i]);
+<a name="line403">403: </a>    }
+<a name="line404">404: </a>    <font color="#4169E1">for</font> (i=0;i&lt;pep-&gt;npart;i++) {
+<a name="line405">405: </a>      VecScatterDestroy(&amp;ctx-&gt;scatter_id[i]);
+<a name="line406">406: </a>    }
+<a name="line407">407: </a>    PetscFree2(ctx-&gt;A,ctx-&gt;scatter_id);
+<a name="line408">408: </a>  }
+<a name="line409">409: </a>  PetscFree(ctx);
+<a name="line410">410: </a>  PetscLogEventEnd(PEP_Refine,pep,0,0,0);
+<a name="line411">411: </a>  <font color="#4169E1">return</font>(0);
+<a name="line412">412: </a>}
+</pre>
+</body>
+
+</html>

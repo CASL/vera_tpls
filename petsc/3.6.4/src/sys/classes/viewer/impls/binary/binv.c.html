@@ -1,0 +1,1378 @@
+<center><a href="binv.c">Actual source code: binv.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/sys/classes/viewer/impls/binary/binv.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2016-04-12T16:27:39+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.6.4 2016-04-12</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.6.4 v3.6.4 src/sys/classes/viewer/impls/binary/binv.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line2">  2: </a><font color="#A020F0">#include &lt;petsc/private/viewerimpl.h&gt;    </font><font color="#B22222">/*I   "petscviewer.h"   I*/</font><font color="#A020F0"></font>
+<a name="line3">  3: </a><font color="#A020F0">#include &lt;fcntl.h&gt;</font>
+<a name="line4">  4: </a><font color="#A020F0">#if defined(PETSC_HAVE_UNISTD_H)</font>
+<a name="line5">  5: </a><font color="#A020F0">#include &lt;unistd.h&gt;</font>
+<a name="line6">  6: </a><font color="#A020F0">#endif</font>
+<a name="line7">  7: </a><font color="#A020F0">#if defined(PETSC_HAVE_IO_H)</font>
+<a name="line8">  8: </a><font color="#A020F0">#include &lt;io.h&gt;</font>
+<a name="line9">  9: </a><font color="#A020F0">#endif</font>
+
+<a name="line11"> 11: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font>  {
+<a name="line12"> 12: </a>  int           fdes;                 <font color="#B22222">/* file descriptor, ignored if using MPI IO */</font>
+<a name="line13"> 13: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line14"> 14: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>     usempiio;
+<a name="line15"> 15: </a>  MPI_File      mfdes;                <font color="#B22222">/* ignored unless using MPI IO */</font>
+<a name="line16"> 16: </a>  MPI_Offset    moff;
+<a name="line17"> 17: </a><font color="#A020F0">#endif</font>
+<a name="line18"> 18: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a> btype;                <font color="#B22222">/* read or write? */</font>
+<a name="line19"> 19: </a>  FILE          *fdes_info;           <font color="#B22222">/* optional file containing info on binary file*/</font>
+<a name="line20"> 20: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>     storecompressed;      <font color="#B22222">/* gzip the write binary file when closing it*/</font>
+<a name="line21"> 21: </a>  char          *filename;
+<a name="line22"> 22: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>     skipinfo;             <font color="#B22222">/* Don't create info file for writing; don't use for reading */</font>
+<a name="line23"> 23: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>     skipoptions;          <font color="#B22222">/* don't use PETSc options database when loading */</font>
+<a name="line24"> 24: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>      flowcontrol;          <font color="#B22222">/* allow only &lt;flowcontrol&gt; messages outstanding at a time while doing IO */</font>
+<a name="line25"> 25: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>     skipheader;           <font color="#B22222">/* don't write header, only raw data */</font>
+<a name="line26"> 26: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>     matlabheaderwritten;  <font color="#B22222">/* if format is PETSC_VIEWER_BINARY_MATLAB has the MATLAB .info header been written yet */</font>
+<a name="line27"> 27: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>     setfromoptionscalled;
+<a name="line28"> 28: </a>} PetscViewer_Binary;
+
+<a name="line32"> 32: </a><strong><font color="#4169E1"><a name="PetscViewerGetSingleton_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerGetSingleton_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> *outviewer)</font></strong>
+<a name="line33"> 33: </a>{
+<a name="line34"> 34: </a>  int                rank;
+<a name="line35"> 35: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line36"> 36: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data,*obinary;
+
+<a name="line39"> 39: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetUp.html#PetscViewerSetUp">PetscViewerSetUp</a>(viewer);
+<a name="line40"> 40: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),&amp;rank);
+<a name="line41"> 41: </a>  <font color="#4169E1">if</font> (!rank) {
+<a name="line42"> 42: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,outviewer);
+<a name="line43"> 43: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>(*outviewer,PETSCVIEWERBINARY);
+<a name="line44"> 44: </a>    obinary = (PetscViewer_Binary*)(*outviewer)-&gt;data;
+<a name="line45"> 45: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscMemcpy.html#PetscMemcpy">PetscMemcpy</a>(obinary,vbinary,<font color="#4169E1">sizeof</font>(PetscViewer_Binary));
+<a name="line46"> 46: </a>  } <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),PETSC_ERR_SUP,<font color="#666666">"Cannot get singleton viewer for binary files or sockets"</font>);
+<a name="line47"> 47: </a>  <font color="#4169E1">return</font>(0);
+<a name="line48"> 48: </a>}
+
+<a name="line52"> 52: </a><strong><font color="#4169E1"><a name="PetscViewerRestoreSingleton_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerRestoreSingleton_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> *outviewer)</font></strong>
+<a name="line53"> 53: </a>{
+<a name="line55"> 55: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> rank;
+
+<a name="line58"> 58: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),&amp;rank);
+<a name="line59"> 59: </a>  <font color="#4169E1">if</font> (!rank) {
+<a name="line60"> 60: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>((*outviewer)-&gt;data);
+<a name="line61"> 61: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscHeaderDestroy.html#PetscHeaderDestroy">PetscHeaderDestroy</a>(outviewer);
+<a name="line62"> 62: </a>  }
+<a name="line63"> 63: </a>  <font color="#4169E1">return</font>(0);
+<a name="line64"> 64: </a>}
+
+<a name="line66"> 66: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line69"> 69: </a><font color="#B22222">/*@C</font>
+<a name="line70"> 70: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetMPIIOOffset.html#PetscViewerBinaryGetMPIIOOffset">PetscViewerBinaryGetMPIIOOffset</a> - Gets the current offset that should be passed to MPI_File_set_view()</font>
+
+<a name="line72"> 72: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line74"> 74: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line75"> 75: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line77"> 77: </a><font color="#B22222">    Output Parameter:</font>
+<a name="line78"> 78: </a><font color="#B22222">.    off - the current offset</font>
+
+<a name="line80"> 80: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line82"> 82: </a><font color="#B22222">    Fortran Note:</font>
+<a name="line83"> 83: </a><font color="#B22222">    This routine is not supported in Fortran.</font>
+
+<a name="line85"> 85: </a><font color="#B22222">    Use <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryAddMPIIOOffset.html#PetscViewerBinaryAddMPIIOOffset">PetscViewerBinaryAddMPIIOOffset</a>() to increase this value after you have written a view.</font>
+
+<a name="line87"> 87: </a><font color="#B22222">  Concepts: file descriptor^getting</font>
+<a name="line88"> 88: </a><font color="#B22222">  Concepts: PetscViewerBinary^accessing file descriptor</font>
+
+<a name="line90"> 90: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(),<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>()</font>
+<a name="line91"> 91: </a><font color="#B22222">@*/</font>
+<a name="line92"> 92: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetMPIIOOffset"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetMPIIOOffset.html#PetscViewerBinaryGetMPIIOOffset">PetscViewerBinaryGetMPIIOOffset</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,MPI_Offset *off)</font></strong>
+<a name="line93"> 93: </a>{
+<a name="line94"> 94: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line97"> 97: </a>  *off = vbinary-&gt;moff;
+<a name="line98"> 98: </a>  <font color="#4169E1">return</font>(0);
+<a name="line99"> 99: </a>}
+
+<a name="line103">103: </a><font color="#B22222">/*@C</font>
+<a name="line104">104: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryAddMPIIOOffset.html#PetscViewerBinaryAddMPIIOOffset">PetscViewerBinaryAddMPIIOOffset</a> - Adds to the current offset that should be passed to MPI_File_set_view()</font>
+
+<a name="line106">106: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line108">108: </a><font color="#B22222">    Input Parameters:</font>
+<a name="line109">109: </a><font color="#B22222">+   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+<a name="line110">110: </a><font color="#B22222">-    off - the addition to the offset</font>
+
+<a name="line112">112: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line114">114: </a><font color="#B22222">    Fortran Note:</font>
+<a name="line115">115: </a><font color="#B22222">    This routine is not supported in Fortran.</font>
+
+<a name="line117">117: </a><font color="#B22222">    Use <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetMPIIOOffset.html#PetscViewerBinaryGetMPIIOOffset">PetscViewerBinaryGetMPIIOOffset</a>() to get the value that you should pass to MPI_File_set_view()</font>
+
+<a name="line119">119: </a><font color="#B22222">  Concepts: file descriptor^getting</font>
+<a name="line120">120: </a><font color="#B22222">  Concepts: PetscViewerBinary^accessing file descriptor</font>
+
+<a name="line122">122: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(),<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>()</font>
+<a name="line123">123: </a><font color="#B22222">@*/</font>
+<a name="line124">124: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryAddMPIIOOffset"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryAddMPIIOOffset.html#PetscViewerBinaryAddMPIIOOffset">PetscViewerBinaryAddMPIIOOffset</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,MPI_Offset off)</font></strong>
+<a name="line125">125: </a>{
+<a name="line126">126: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line129">129: </a>  vbinary-&gt;moff += off;
+<a name="line130">130: </a>  <font color="#4169E1">return</font>(0);
+<a name="line131">131: </a>}
+
+<a name="line135">135: </a><font color="#B22222">/*@C</font>
+<a name="line136">136: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetMPIIODescriptor.html#PetscViewerBinaryGetMPIIODescriptor">PetscViewerBinaryGetMPIIODescriptor</a> - Extracts the MPI IO file descriptor from a <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>.</font>
+
+<a name="line138">138: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line140">140: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line141">141: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line143">143: </a><font color="#B22222">    Output Parameter:</font>
+<a name="line144">144: </a><font color="#B22222">.   fdes - file descriptor</font>
+
+<a name="line146">146: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line148">148: </a><font color="#B22222">    Fortran Note:</font>
+<a name="line149">149: </a><font color="#B22222">    This routine is not supported in Fortran.</font>
+
+<a name="line151">151: </a><font color="#B22222">  Concepts: file descriptor^getting</font>
+<a name="line152">152: </a><font color="#B22222">  Concepts: PetscViewerBinary^accessing file descriptor</font>
+
+<a name="line154">154: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(),<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>()</font>
+<a name="line155">155: </a><font color="#B22222">@*/</font>
+<a name="line156">156: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetMPIIODescriptor"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetMPIIODescriptor.html#PetscViewerBinaryGetMPIIODescriptor">PetscViewerBinaryGetMPIIODescriptor</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,MPI_File *fdes)</font></strong>
+<a name="line157">157: </a>{
+<a name="line158">158: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line159">159: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line162">162: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetUp.html#PetscViewerSetUp">PetscViewerSetUp</a>(viewer);
+<a name="line163">163: </a>  *fdes = vbinary-&gt;mfdes;
+<a name="line164">164: </a>  <font color="#4169E1">return</font>(0);
+<a name="line165">165: </a>}
+
+<a name="line169">169: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetUseMPIIO_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinaryGetUseMPIIO_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>  *flg)</font></strong>
+<a name="line170">170: </a>{
+<a name="line171">171: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+<a name="line172">172: </a>
+<a name="line174">174: </a>  *flg = vbinary-&gt;usempiio;
+<a name="line175">175: </a>  <font color="#4169E1">return</font>(0);
+<a name="line176">176: </a>}
+<a name="line177">177: </a><font color="#A020F0">#endif</font>
+
+
+<a name="line182">182: </a><font color="#B22222">/*@C</font>
+<a name="line183">183: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetUseMPIIO.html#PetscViewerBinaryGetUseMPIIO">PetscViewerBinaryGetUseMPIIO</a> - Returns <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> if the binary viewer uses MPI-IO.</font>
+
+<a name="line185">185: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line187">187: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line188">188: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line190">190: </a><font color="#B22222">    Output Parameter:</font>
+<a name="line191">191: </a><font color="#B22222">-   flg - <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> if MPI-IO is being used</font>
+
+<a name="line193">193: </a><font color="#B22222">    Options Database:</font>
+<a name="line194">194: </a><font color="#B22222">    -viewer_binary_mpiio : Flag for using MPI-IO</font>
+
+<a name="line196">196: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line198">198: </a><font color="#B22222">    Note:</font>
+<a name="line199">199: </a><font color="#B22222">    If MPI-IO is not available, this function will always return <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a></font>
+
+<a name="line201">201: </a><font color="#B22222">    Fortran Note:</font>
+<a name="line202">202: </a><font color="#B22222">    This routine is not supported in Fortran.</font>
+
+<a name="line204">204: </a><font color="#B22222">  Concepts: file descriptor^getting</font>
+<a name="line205">205: </a><font color="#B22222">  Concepts: PetscViewerBinary^accessing file descriptor</font>
+
+<a name="line207">207: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>()</font>
+<a name="line208">208: </a><font color="#B22222">@*/</font>
+<a name="line209">209: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetUseMPIIO"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetUseMPIIO.html#PetscViewerBinaryGetUseMPIIO">PetscViewerBinaryGetUseMPIIO</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *flg)</font></strong>
+<a name="line210">210: </a>{
+<a name="line212">212: </a>
+<a name="line214">214: </a>  *flg = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line215">215: </a>  PetscTryMethod(viewer,<font color="#666666">"PetscViewerBinaryGetUseMPIIO_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>*),(viewer,flg));
+<a name="line216">216: </a>  <font color="#4169E1">return</font>(0);
+<a name="line217">217: </a>}
+
+<a name="line221">221: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetFlowControl_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  PetscViewerBinaryGetFlowControl_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *fc)</font></strong>
+<a name="line222">222: </a>{
+<a name="line223">223: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line226">226: </a>  *fc = vbinary-&gt;flowcontrol;
+<a name="line227">227: </a>  <font color="#4169E1">return</font>(0);
+<a name="line228">228: </a>}
+
+<a name="line232">232: </a><font color="#B22222">/*@C</font>
+<a name="line233">233: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetFlowControl.html#PetscViewerBinaryGetFlowControl">PetscViewerBinaryGetFlowControl</a> - Returns how many messages are allowed to outstanding at the same time during parallel IO reads/writes</font>
+
+<a name="line235">235: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line237">237: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line238">238: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line240">240: </a><font color="#B22222">    Output Parameter:</font>
+<a name="line241">241: </a><font color="#B22222">.   fc - the number of messages</font>
+
+<a name="line243">243: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line245">245: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(),<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetFlowControl.html#PetscViewerBinarySetFlowControl">PetscViewerBinarySetFlowControl</a>()</font>
+
+<a name="line247">247: </a><font color="#B22222">@*/</font>
+<a name="line248">248: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetFlowControl"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetFlowControl.html#PetscViewerBinaryGetFlowControl">PetscViewerBinaryGetFlowControl</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *fc)</font></strong>
+<a name="line249">249: </a>{
+
+<a name="line253">253: </a>  PetscTryMethod(viewer,<font color="#666666">"PetscViewerBinaryGetFlowControl_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*),(viewer,fc));
+<a name="line254">254: </a>  <font color="#4169E1">return</font>(0);
+<a name="line255">255: </a>}
+
+<a name="line259">259: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySetFlowControl_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinarySetFlowControl_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> fc)</font></strong>
+<a name="line260">260: </a>{
+<a name="line261">261: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line264">264: </a>  <font color="#4169E1">if</font> (fc &lt;= 1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Flow control count must be greater than 1, %D was set"</font>,fc);
+<a name="line265">265: </a>  vbinary-&gt;flowcontrol = fc;
+<a name="line266">266: </a>  <font color="#4169E1">return</font>(0);
+<a name="line267">267: </a>}
+
+<a name="line271">271: </a><font color="#B22222">/*@C</font>
+<a name="line272">272: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetFlowControl.html#PetscViewerBinarySetFlowControl">PetscViewerBinarySetFlowControl</a> - Sets how many messages are allowed to outstanding at the same time during parallel IO reads/writes</font>
+
+<a name="line274">274: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line276">276: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line277">277: </a><font color="#B22222">+   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+<a name="line278">278: </a><font color="#B22222">-   fc - the number of messages, defaults to 256 if this function was not called</font>
+
+<a name="line280">280: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line282">282: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(),<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetFlowControl.html#PetscViewerBinaryGetFlowControl">PetscViewerBinaryGetFlowControl</a>()</font>
+
+<a name="line284">284: </a><font color="#B22222">@*/</font>
+<a name="line285">285: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySetFlowControl"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetFlowControl.html#PetscViewerBinarySetFlowControl">PetscViewerBinarySetFlowControl</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> fc)</font></strong>
+<a name="line286">286: </a>{
+
+<a name="line290">290: </a>  PetscUseMethod(viewer,<font color="#666666">"PetscViewerBinarySetFlowControl_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>),(viewer,fc));
+<a name="line291">291: </a>  <font color="#4169E1">return</font>(0);
+<a name="line292">292: </a>}
+
+<a name="line296">296: </a><font color="#B22222">/*@C</font>
+<a name="line297">297: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a> - Extracts the file descriptor from a <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>.</font>
+
+<a name="line299">299: </a><font color="#B22222">    Collective On <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a></font>
+
+<a name="line301">301: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line302">302: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line304">304: </a><font color="#B22222">    Output Parameter:</font>
+<a name="line305">305: </a><font color="#B22222">.   fdes - file descriptor</font>
+
+<a name="line307">307: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line309">309: </a><font color="#B22222">    Notes:</font>
+<a name="line310">310: </a><font color="#B22222">      For writable binary <a href="../../../../../../docs/manualpages/Viewer/PetscViewers.html#PetscViewers">PetscViewers</a>, the descriptor will only be valid for the</font>
+<a name="line311">311: </a><font color="#B22222">    first processor in the communicator that shares the <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>. For readable</font>
+<a name="line312">312: </a><font color="#B22222">    files it will only be valid on nodes that have the file. If node 0 does not</font>
+<a name="line313">313: </a><font color="#B22222">    have the file it generates an error even if another node does have the file.</font>
+
+<a name="line315">315: </a><font color="#B22222">    Fortran Note:</font>
+<a name="line316">316: </a><font color="#B22222">    This routine is not supported in Fortran.</font>
+
+<a name="line318">318: </a><font color="#B22222">    Developer Notes: This must be called on all processes because Dave May changed</font>
+<a name="line319">319: </a><font color="#B22222">    the source code that this may be trigger a <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetUp.html#PetscViewerSetUp">PetscViewerSetUp</a>() call if it was not previously triggered.</font>
+
+
+<a name="line322">322: </a><font color="#B22222">  Concepts: file descriptor^getting</font>
+<a name="line323">323: </a><font color="#B22222">  Concepts: PetscViewerBinary^accessing file descriptor</font>
+
+<a name="line325">325: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(),<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>()</font>
+<a name="line326">326: </a><font color="#B22222">@*/</font>
+<a name="line327">327: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetDescriptor"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,int *fdes)</font></strong>
+<a name="line328">328: </a>{
+<a name="line329">329: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line330">330: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line333">333: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetUp.html#PetscViewerSetUp">PetscViewerSetUp</a>(viewer);
+<a name="line334">334: </a>  *fdes = vbinary-&gt;fdes;
+<a name="line335">335: </a>  <font color="#4169E1">return</font>(0);
+<a name="line336">336: </a>}
+
+<a name="line340">340: </a><font color="#B22222">/*@</font>
+<a name="line341">341: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySkipInfo.html#PetscViewerBinarySkipInfo">PetscViewerBinarySkipInfo</a> - Binary file will not have .info file created with it</font>
+
+<a name="line343">343: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line345">345: </a><font color="#B22222">    Input Paramter:</font>
+<a name="line346">346: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>()</font>
+
+<a name="line348">348: </a><font color="#B22222">    Options Database Key:</font>
+<a name="line349">349: </a><font color="#B22222">.   -viewer_binary_skip_info</font>
+
+<a name="line351">351: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line353">353: </a><font color="#B22222">    Notes: This must be called after <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>(). If you use <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>() then</font>
+<a name="line354">354: </a><font color="#B22222">    you can only skip the info file with the -viewer_binary_skip_info flag. To use the function you must open the</font>
+<a name="line355">355: </a><font color="#B22222">    viewer with <a href="../../../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySkipInfo.html#PetscViewerBinarySkipInfo">PetscViewerBinarySkipInfo</a>().</font>
+
+<a name="line357">357: </a><font color="#B22222">    The .info contains meta information about the data in the binary file, for example the block size if it was</font>
+<a name="line358">358: </a><font color="#B22222">    set for a vector or matrix.</font>
+
+<a name="line360">360: </a><font color="#B22222">   Concepts: PetscViewerBinary^accessing info file</font>
+
+<a name="line362">362: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipOptions.html#PetscViewerBinarySetSkipOptions">PetscViewerBinarySetSkipOptions</a>(),</font>
+<a name="line363">363: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipOptions.html#PetscViewerBinaryGetSkipOptions">PetscViewerBinaryGetSkipOptions</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipInfo.html#PetscViewerBinaryGetSkipInfo">PetscViewerBinaryGetSkipInfo</a>()</font>
+<a name="line364">364: </a><font color="#B22222">@*/</font>
+<a name="line365">365: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySkipInfo"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySkipInfo.html#PetscViewerBinarySkipInfo">PetscViewerBinarySkipInfo</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line366">366: </a>{
+<a name="line367">367: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line370">370: </a>  vbinary-&gt;skipinfo = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line371">371: </a>  <font color="#4169E1">return</font>(0);
+<a name="line372">372: </a>}
+
+<a name="line376">376: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySetSkipInfo_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinarySetSkipInfo_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> skip)</font></strong>
+<a name="line377">377: </a>{
+<a name="line378">378: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line381">381: </a>  vbinary-&gt;skipinfo = skip;
+<a name="line382">382: </a>  <font color="#4169E1">return</font>(0);
+<a name="line383">383: </a>}
+
+<a name="line387">387: </a><font color="#B22222">/*@</font>
+<a name="line388">388: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipInfo.html#PetscViewerBinarySetSkipInfo">PetscViewerBinarySetSkipInfo</a> - Binary file will not have .info file created with it</font>
+
+<a name="line390">390: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line392">392: </a><font color="#B22222">    Input Paramter:</font>
+<a name="line393">393: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>()</font>
+
+<a name="line395">395: </a><font color="#B22222">    Options Database Key:</font>
+<a name="line396">396: </a><font color="#B22222">.   -viewer_binary_skip_info</font>
+
+<a name="line398">398: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line400">400: </a><font color="#B22222">    Concepts: PetscViewerBinary^accessing info file</font>
+
+<a name="line402">402: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipOptions.html#PetscViewerBinarySetSkipOptions">PetscViewerBinarySetSkipOptions</a>(),</font>
+<a name="line403">403: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipOptions.html#PetscViewerBinaryGetSkipOptions">PetscViewerBinaryGetSkipOptions</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipInfo.html#PetscViewerBinaryGetSkipInfo">PetscViewerBinaryGetSkipInfo</a>()</font>
+<a name="line404">404: </a><font color="#B22222">@*/</font>
+<a name="line405">405: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySetSkipInfo"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipInfo.html#PetscViewerBinarySetSkipInfo">PetscViewerBinarySetSkipInfo</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> skip)</font></strong>
+<a name="line406">406: </a>{
+
+<a name="line410">410: </a>  PetscUseMethod(viewer,<font color="#666666">"PetscViewerBinarySetSkipInfo_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>),(viewer,skip));
+<a name="line411">411: </a>  <font color="#4169E1">return</font>(0);
+<a name="line412">412: </a>}
+
+<a name="line416">416: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetSkipInfo_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinaryGetSkipInfo_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *skip)</font></strong>
+<a name="line417">417: </a>{
+<a name="line418">418: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line421">421: </a>  *skip  = vbinary-&gt;skipinfo;
+<a name="line422">422: </a>  <font color="#4169E1">return</font>(0);
+<a name="line423">423: </a>}
+
+<a name="line427">427: </a><font color="#B22222">/*@</font>
+<a name="line428">428: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipInfo.html#PetscViewerBinaryGetSkipInfo">PetscViewerBinaryGetSkipInfo</a> - check if viewer wrote a .info file</font>
+
+<a name="line430">430: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line432">432: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line433">433: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line435">435: </a><font color="#B22222">    Output Parameter:</font>
+<a name="line436">436: </a><font color="#B22222">.   skip - <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> implies the .info file was not generated</font>
+
+<a name="line438">438: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line440">440: </a><font color="#B22222">    Notes: This must be called after <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>()</font>
+
+<a name="line442">442: </a><font color="#B22222">    Concepts: PetscViewerBinary^accessing info file</font>
+
+<a name="line444">444: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySkipInfo.html#PetscViewerBinarySkipInfo">PetscViewerBinarySkipInfo</a>(),</font>
+<a name="line445">445: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipOptions.html#PetscViewerBinarySetSkipOptions">PetscViewerBinarySetSkipOptions</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipInfo.html#PetscViewerBinarySetSkipInfo">PetscViewerBinarySetSkipInfo</a>()</font>
+<a name="line446">446: </a><font color="#B22222">@*/</font>
+<a name="line447">447: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetSkipInfo"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipInfo.html#PetscViewerBinaryGetSkipInfo">PetscViewerBinaryGetSkipInfo</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *skip)</font></strong>
+<a name="line448">448: </a>{
+
+<a name="line452">452: </a>  PetscUseMethod(viewer,<font color="#666666">"PetscViewerBinaryGetSkipInfo_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>*),(viewer,skip));
+<a name="line453">453: </a>  <font color="#4169E1">return</font>(0);
+<a name="line454">454: </a>}
+
+<a name="line458">458: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySetSkipOptions_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinarySetSkipOptions_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> skip)</font></strong>
+<a name="line459">459: </a>{
+<a name="line460">460: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line463">463: </a>  vbinary-&gt;skipoptions = skip;
+<a name="line464">464: </a>  <font color="#4169E1">return</font>(0);
+<a name="line465">465: </a>}
+
+<a name="line469">469: </a><font color="#B22222">/*@</font>
+<a name="line470">470: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipOptions.html#PetscViewerBinarySetSkipOptions">PetscViewerBinarySetSkipOptions</a> - do not use the PETSc options database when loading objects</font>
+
+<a name="line472">472: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line474">474: </a><font color="#B22222">    Input Parameters:</font>
+<a name="line475">475: </a><font color="#B22222">+   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+<a name="line476">476: </a><font color="#B22222">-   skip - <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> means do not use</font>
+
+<a name="line478">478: </a><font color="#B22222">    Options Database Key:</font>
+<a name="line479">479: </a><font color="#B22222">.   -viewer_binary_skip_options</font>
+
+<a name="line481">481: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line483">483: </a><font color="#B22222">    Notes: This must be called after <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>()</font>
+
+<a name="line485">485: </a><font color="#B22222">   Concepts: PetscViewerBinary^accessing info file</font>
+
+<a name="line487">487: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySkipInfo.html#PetscViewerBinarySkipInfo">PetscViewerBinarySkipInfo</a>(),</font>
+<a name="line488">488: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipOptions.html#PetscViewerBinaryGetSkipOptions">PetscViewerBinaryGetSkipOptions</a>()</font>
+<a name="line489">489: </a><font color="#B22222">@*/</font>
+<a name="line490">490: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySetSkipOptions"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipOptions.html#PetscViewerBinarySetSkipOptions">PetscViewerBinarySetSkipOptions</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> skip)</font></strong>
+<a name="line491">491: </a>{
+
+<a name="line495">495: </a>  PetscUseMethod(viewer,<font color="#666666">"PetscViewerBinarySetSkipOptions_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>),(viewer,skip));
+<a name="line496">496: </a>  <font color="#4169E1">return</font>(0);
+<a name="line497">497: </a>}
+
+<a name="line501">501: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetSkipOptions_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinaryGetSkipOptions_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *skip)</font></strong>
+<a name="line502">502: </a>{
+<a name="line503">503: </a>  PetscViewer_Binary *vbinary;
+
+<a name="line507">507: </a>  vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+<a name="line508">508: </a>  *skip   = vbinary-&gt;skipoptions;
+<a name="line509">509: </a>  <font color="#4169E1">return</font>(0);
+<a name="line510">510: </a>}
+
+<a name="line514">514: </a><font color="#B22222">/*@</font>
+<a name="line515">515: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipOptions.html#PetscViewerBinaryGetSkipOptions">PetscViewerBinaryGetSkipOptions</a> - checks if viewer uses the PETSc options database when loading objects</font>
+
+<a name="line517">517: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line519">519: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line520">520: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line522">522: </a><font color="#B22222">    Output Parameter:</font>
+<a name="line523">523: </a><font color="#B22222">.   skip - <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> means do not use</font>
+
+<a name="line525">525: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line527">527: </a><font color="#B22222">    Notes: This must be called after <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>()</font>
+
+<a name="line529">529: </a><font color="#B22222">   Concepts: PetscViewerBinary^accessing info file</font>
+
+<a name="line531">531: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySkipInfo.html#PetscViewerBinarySkipInfo">PetscViewerBinarySkipInfo</a>(),</font>
+<a name="line532">532: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipOptions.html#PetscViewerBinarySetSkipOptions">PetscViewerBinarySetSkipOptions</a>()</font>
+<a name="line533">533: </a><font color="#B22222">@*/</font>
+<a name="line534">534: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetSkipOptions"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipOptions.html#PetscViewerBinaryGetSkipOptions">PetscViewerBinaryGetSkipOptions</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *skip)</font></strong>
+<a name="line535">535: </a>{
+
+<a name="line539">539: </a>  PetscUseMethod(viewer,<font color="#666666">"PetscViewerBinaryGetSkipOptions_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>*),(viewer,skip));
+<a name="line540">540: </a>  <font color="#4169E1">return</font>(0);
+<a name="line541">541: </a>}
+
+<a name="line545">545: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySetSkipHeader_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinarySetSkipHeader_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> skip)</font></strong>
+<a name="line546">546: </a>{
+<a name="line547">547: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line550">550: </a>  vbinary-&gt;skipheader = skip;
+<a name="line551">551: </a>  <font color="#4169E1">return</font>(0);
+<a name="line552">552: </a>}
+
+<a name="line556">556: </a><font color="#B22222">/*@</font>
+<a name="line557">557: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipHeader.html#PetscViewerBinarySetSkipHeader">PetscViewerBinarySetSkipHeader</a> - do not write a header with size information on output, just raw data</font>
+
+<a name="line559">559: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line561">561: </a><font color="#B22222">    Input Parameters:</font>
+<a name="line562">562: </a><font color="#B22222">+   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+<a name="line563">563: </a><font color="#B22222">-   skip - <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> means do not write header</font>
+
+<a name="line565">565: </a><font color="#B22222">    Options Database Key:</font>
+<a name="line566">566: </a><font color="#B22222">.   -viewer_binary_skip_header</font>
+
+<a name="line568">568: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line570">570: </a><font color="#B22222">    Notes: This must be called after <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>()</font>
+
+<a name="line572">572: </a><font color="#B22222">           Can ONLY be called on a binary viewer</font>
+
+<a name="line574">574: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySkipInfo.html#PetscViewerBinarySkipInfo">PetscViewerBinarySkipInfo</a>(),</font>
+<a name="line575">575: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipHeader.html#PetscViewerBinaryGetSkipHeader">PetscViewerBinaryGetSkipHeader</a>()</font>
+<a name="line576">576: </a><font color="#B22222">@*/</font>
+<a name="line577">577: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySetSkipHeader"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipHeader.html#PetscViewerBinarySetSkipHeader">PetscViewerBinarySetSkipHeader</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> skip)</font></strong>
+<a name="line578">578: </a>{
+
+<a name="line582">582: </a>  PetscUseMethod(viewer,<font color="#666666">"PetscViewerBinarySetSkipHeader_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>),(viewer,skip));
+<a name="line583">583: </a>  <font color="#4169E1">return</font>(0);
+<a name="line584">584: </a>}
+
+<a name="line588">588: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetSkipHeader_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinaryGetSkipHeader_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>  *skip)</font></strong>
+<a name="line589">589: </a>{
+<a name="line590">590: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line593">593: </a>  *skip = vbinary-&gt;skipheader;
+<a name="line594">594: </a>  <font color="#4169E1">return</font>(0);
+<a name="line595">595: </a>}
+
+<a name="line599">599: </a><font color="#B22222">/*@</font>
+<a name="line600">600: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipHeader.html#PetscViewerBinaryGetSkipHeader">PetscViewerBinaryGetSkipHeader</a> - checks whether to write a header with size information on output, or just raw data</font>
+
+<a name="line602">602: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line604">604: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line605">605: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line607">607: </a><font color="#B22222">    Output Parameter:</font>
+<a name="line608">608: </a><font color="#B22222">.   skip - <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> means do not write header</font>
+
+<a name="line610">610: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line612">612: </a><font color="#B22222">    Notes: This must be called after <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>()</font>
+
+<a name="line614">614: </a><font color="#B22222">            Returns false for PETSCSOCKETVIEWER, you cannot skip the header for it.</font>
+
+<a name="line616">616: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySkipInfo.html#PetscViewerBinarySkipInfo">PetscViewerBinarySkipInfo</a>(),</font>
+<a name="line617">617: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipHeader.html#PetscViewerBinarySetSkipHeader">PetscViewerBinarySetSkipHeader</a>()</font>
+<a name="line618">618: </a><font color="#B22222">@*/</font>
+<a name="line619">619: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetSkipHeader"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetSkipHeader.html#PetscViewerBinaryGetSkipHeader">PetscViewerBinaryGetSkipHeader</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>  *skip)</font></strong>
+<a name="line620">620: </a>{
+
+<a name="line624">624: </a>  *skip = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line625">625: </a>  PetscTryMethod(viewer,<font color="#666666">"PetscViewerBinaryGetSkipHeader_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>*),(viewer,skip));
+<a name="line626">626: </a>  <font color="#4169E1">return</font>(0);
+<a name="line627">627: </a>}
+
+<a name="line631">631: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetInfoPointer_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinaryGetInfoPointer_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,FILE **file)</font></strong>
+<a name="line632">632: </a>{
+<a name="line633">633: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+<a name="line634">634: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line635">635: </a>  <a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>           comm;
+
+<a name="line638">638: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetUp.html#PetscViewerSetUp">PetscViewerSetUp</a>(viewer);
+<a name="line639">639: </a>  *file = vbinary-&gt;fdes_info;
+<a name="line640">640: </a>  <font color="#4169E1">if</font> (viewer-&gt;format == PETSC_VIEWER_BINARY_MATLAB &amp;&amp; !vbinary-&gt;matlabheaderwritten) {
+<a name="line641">641: </a>    vbinary-&gt;matlabheaderwritten = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line642">642: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+<a name="line643">643: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(comm,*file,<font color="#666666">"#--- begin code written by PetscViewerBinary for MATLAB format ---#\n"</font>);
+<a name="line644">644: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(comm,*file,<font color="#666666">"#$$ Set.filename = '%s';\n"</font>,vbinary-&gt;filename);
+<a name="line645">645: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(comm,*file,<font color="#666666">"#$$ fd = PetscOpenFile(Set.filename);\n"</font>);
+<a name="line646">646: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(comm,*file,<font color="#666666">"#--- end code written by PetscViewerBinary for MATLAB format ---#\n\n"</font>);
+<a name="line647">647: </a>  }
+<a name="line648">648: </a>  <font color="#4169E1">return</font>(0);
+<a name="line649">649: </a>}
+
+<a name="line653">653: </a><font color="#B22222">/*@C</font>
+<a name="line654">654: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a> - Extracts the file pointer for the ASCII</font>
+<a name="line655">655: </a><font color="#B22222">          info file associated with a binary file.</font>
+
+<a name="line657">657: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line659">659: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line660">660: </a><font color="#B22222">.   viewer - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> context, obtained from <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line662">662: </a><font color="#B22222">    Output Parameter:</font>
+<a name="line663">663: </a><font color="#B22222">.   file - file pointer  Always returns NULL if not a binary viewer</font>
+
+<a name="line665">665: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line667">667: </a><font color="#B22222">    Notes:</font>
+<a name="line668">668: </a><font color="#B22222">      For writable binary <a href="../../../../../../docs/manualpages/Viewer/PetscViewers.html#PetscViewers">PetscViewers</a>, the descriptor will only be valid for the</font>
+<a name="line669">669: </a><font color="#B22222">    first processor in the communicator that shares the <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>.</font>
+
+<a name="line671">671: </a><font color="#B22222">    Fortran Note:</font>
+<a name="line672">672: </a><font color="#B22222">    This routine is not supported in Fortran.</font>
+
+<a name="line674">674: </a><font color="#B22222">  Concepts: PetscViewerBinary^accessing info file</font>
+
+<a name="line676">676: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(),<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>()</font>
+<a name="line677">677: </a><font color="#B22222">@*/</font>
+<a name="line678">678: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryGetInfoPointer"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,FILE **file)</font></strong>
+<a name="line679">679: </a>{
+
+<a name="line683">683: </a>  *file = NULL;
+<a name="line684">684: </a>  PetscTryMethod(viewer,<font color="#666666">"PetscViewerBinaryGetInfoPointer_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,FILE **),(viewer,file));
+<a name="line685">685: </a>  <font color="#4169E1">return</font>(0);
+<a name="line686">686: </a>}
+
+<a name="line690">690: </a><strong><font color="#4169E1"><a name="PetscViewerFileClose_Binary"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerFileClose_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> v)</font></strong>
+<a name="line691">691: </a>{
+<a name="line692">692: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)v-&gt;data;
+<a name="line693">693: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line694">694: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>        rank;
+<a name="line695">695: </a>  int                err;
+
+<a name="line698">698: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v),&amp;rank);
+<a name="line699">699: </a>  <font color="#4169E1">if</font> ((!rank || vbinary-&gt;btype == FILE_MODE_READ) &amp;&amp; vbinary-&gt;fdes) {
+<a name="line700">700: </a>    close(vbinary-&gt;fdes);
+<a name="line701">701: </a>    <font color="#4169E1">if</font> (!rank &amp;&amp; vbinary-&gt;storecompressed) {
+<a name="line702">702: </a>      char par[PETSC_MAX_PATH_LEN],buf[PETSC_MAX_PATH_LEN];
+<a name="line703">703: </a>      FILE *fp;
+<a name="line704">704: </a>      <font color="#B22222">/* compress the file */</font>
+<a name="line705">705: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscStrcpy.html#PetscStrcpy">PetscStrcpy</a>(par,<font color="#666666">"gzip -f "</font>);
+<a name="line706">706: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscStrcat.html#PetscStrcat">PetscStrcat</a>(par,vbinary-&gt;filename);
+<a name="line707">707: </a><font color="#A020F0">#if defined(PETSC_HAVE_POPEN)</font>
+<a name="line708">708: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscPOpen.html#PetscPOpen">PetscPOpen</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,NULL,par,<font color="#666666">"r"</font>,&amp;fp);
+<a name="line709">709: </a>      <font color="#4169E1">if</font> (fgets(buf,1024,fp)) <a href="../../../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error from command %s\n%s"</font>,par,buf);
+<a name="line710">710: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscPClose.html#PetscPClose">PetscPClose</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fp,NULL);
+<a name="line711">711: </a><font color="#A020F0">#else</font>
+<a name="line712">712: </a>      <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP_SYS,<font color="#666666">"Cannot run external programs on this machine"</font>);
+<a name="line713">713: </a><font color="#A020F0">#endif</font>
+<a name="line714">714: </a>    }
+<a name="line715">715: </a>  }
+<a name="line716">716: </a>  <font color="#4169E1">if</font> (vbinary-&gt;fdes_info) {
+<a name="line717">717: </a>    err = fclose(vbinary-&gt;fdes_info);
+<a name="line718">718: </a>    <font color="#4169E1">if</font> (err) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SYS,<font color="#666666">"fclose() failed on file"</font>);
+<a name="line719">719: </a>  }
+<a name="line720">720: </a>  <font color="#4169E1">return</font>(0);
+<a name="line721">721: </a>}
+
+<a name="line723">723: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line726">726: </a><strong><font color="#4169E1"><a name="PetscViewerFileClose_BinaryMPIIO"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerFileClose_BinaryMPIIO(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> v)</font></strong>
+<a name="line727">727: </a>{
+<a name="line728">728: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)v-&gt;data;
+<a name="line729">729: </a>  int                err;
+<a name="line730">730: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+
+<a name="line733">733: </a>  <font color="#4169E1">if</font> (vbinary-&gt;mfdes) {
+<a name="line734">734: </a>    MPI_File_close(&amp;vbinary-&gt;mfdes);
+<a name="line735">735: </a>  }
+<a name="line736">736: </a>  <font color="#4169E1">if</font> (vbinary-&gt;fdes_info) {
+<a name="line737">737: </a>    err = fclose(vbinary-&gt;fdes_info);
+<a name="line738">738: </a>    <font color="#4169E1">if</font> (err) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SYS,<font color="#666666">"fclose() failed on file"</font>);
+<a name="line739">739: </a>  }
+<a name="line740">740: </a>  <font color="#4169E1">return</font>(0);
+<a name="line741">741: </a>}
+<a name="line742">742: </a><font color="#A020F0">#endif</font>
+
+<a name="line746">746: </a><strong><font color="#4169E1"><a name="PetscViewerDestroy_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerDestroy_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> v)</font></strong>
+<a name="line747">747: </a>{
+<a name="line748">748: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)v-&gt;data;
+<a name="line749">749: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+
+<a name="line752">752: </a>  <font color="#4169E1">if</font> (v-&gt;format == PETSC_VIEWER_BINARY_MATLAB) {
+<a name="line753">753: </a>    <a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm;
+<a name="line754">754: </a>    FILE     *info;
+
+<a name="line756">756: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,&amp;comm);
+<a name="line757">757: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>(v,&amp;info);
+<a name="line758">758: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(comm,info,<font color="#666666">"#--- begin code written by PetscViewerBinary for MATLAB format ---#\n"</font>);
+<a name="line759">759: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(comm,info,<font color="#666666">"#$$ close(fd);\n"</font>);
+<a name="line760">760: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(comm,info,<font color="#666666">"#--- end code written by PetscViewerBinary for MATLAB format ---#\n\n"</font>);
+<a name="line761">761: </a>  }
+<a name="line762">762: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line763">763: </a>  <font color="#4169E1">if</font> (vbinary-&gt;usempiio) {
+<a name="line764">764: </a>    PetscViewerFileClose_BinaryMPIIO(v);
+<a name="line765">765: </a>  } <font color="#4169E1">else</font> {
+<a name="line766">766: </a><font color="#A020F0">#endif</font>
+<a name="line767">767: </a>    PetscViewerFileClose_Binary(v);
+<a name="line768">768: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line769">769: </a>  }
+<a name="line770">770: </a><font color="#A020F0">#endif</font>
+<a name="line771">771: </a>  <font color="#4169E1">if</font> (vbinary-&gt;filename) { <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vbinary-&gt;filename); }
+<a name="line772">772: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vbinary);
+<a name="line773">773: </a>  <font color="#4169E1">return</font>(0);
+<a name="line774">774: </a>}
+
+<a name="line778">778: </a><font color="#B22222">/*@C</font>
+<a name="line779">779: </a><font color="#B22222">   <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a> - Opens a file for binary input/output.</font>
+
+<a name="line781">781: </a><font color="#B22222">   Collective on <a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a></font>
+
+<a name="line783">783: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line784">784: </a><font color="#B22222">+  comm - MPI communicator</font>
+<a name="line785">785: </a><font color="#B22222">.  name - name of file</font>
+<a name="line786">786: </a><font color="#B22222">-  type - type of file</font>
+<a name="line787">787: </a><font color="#B22222">$    FILE_MODE_WRITE - create new file for binary output</font>
+<a name="line788">788: </a><font color="#B22222">$    FILE_MODE_READ - open existing file for binary input</font>
+<a name="line789">789: </a><font color="#B22222">$    FILE_MODE_APPEND - open existing file for binary output</font>
+
+<a name="line791">791: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line792">792: </a><font color="#B22222">.  binv - <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> for binary input/output to use with the specified file</font>
+
+<a name="line794">794: </a><font color="#B22222">    Options Database Keys:</font>
+<a name="line795">795: </a><font color="#B22222">+    -viewer_binary_filename &lt;name&gt;</font>
+<a name="line796">796: </a><font color="#B22222">.    -viewer_binary_skip_info</font>
+<a name="line797">797: </a><font color="#B22222">.    -viewer_binary_skip_options</font>
+<a name="line798">798: </a><font color="#B22222">.    -viewer_binary_skip_header</font>
+<a name="line799">799: </a><font color="#B22222">-    -viewer_binary_mpiio</font>
+
+<a name="line801">801: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line803">803: </a><font color="#B22222">   Note:</font>
+<a name="line804">804: </a><font color="#B22222">   This <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> should be destroyed with <a href="../../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>().</font>
+
+<a name="line806">806: </a><font color="#B22222">    For reading files, the filename may begin with ftp:// or http:// and/or</font>
+<a name="line807">807: </a><font color="#B22222">    end with .gz; in this case file is brought over and uncompressed.</font>
+
+<a name="line809">809: </a><font color="#B22222">    For creating files, if the file name ends with .gz it is automatically</font>
+<a name="line810">810: </a><font color="#B22222">    compressed when closed.</font>
+
+<a name="line812">812: </a><font color="#B22222">    For writing files it only opens the file on processor 0 in the communicator.</font>
+<a name="line813">813: </a><font color="#B22222">    For readable files it opens the file on all nodes that have the file. If</font>
+<a name="line814">814: </a><font color="#B22222">    node 0 does not have the file it generates an error even if other nodes</font>
+<a name="line815">815: </a><font color="#B22222">    do have the file.</font>
+
+<a name="line817">817: </a><font color="#B22222">   Concepts: binary files</font>
+<a name="line818">818: </a><font color="#B22222">   Concepts: PetscViewerBinary^creating</font>
+<a name="line819">819: </a><font color="#B22222">   Concepts: gzip</font>
+<a name="line820">820: </a><font color="#B22222">   Concepts: accessing remote file</font>
+<a name="line821">821: </a><font color="#B22222">   Concepts: remote file</font>
+
+<a name="line823">823: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIOpen.html#PetscViewerASCIIOpen">PetscViewerASCIIOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetFormat.html#PetscViewerSetFormat">PetscViewerSetFormat</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(),</font>
+<a name="line824">824: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(), <a href="../../../../../../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(), <a href="../../../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(), <a href="../../../../../../docs/manualpages/Mat/MatLoad.html#MatLoad">MatLoad</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(),</font>
+<a name="line825">825: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>(), <a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>, <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>, <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryRead.html#PetscViewerBinaryRead">PetscViewerBinaryRead</a>()</font>
+<a name="line826">826: </a><font color="#B22222">@*/</font>
+<a name="line827">827: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryOpen"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(<a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm,const char name[],<a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a> type,<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> *binv)</font></strong>
+<a name="line828">828: </a>{
+
+<a name="line832">832: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>(comm,binv);
+<a name="line833">833: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>(*binv,PETSCVIEWERBINARY);
+<a name="line834">834: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetMode.html#PetscViewerFileSetMode">PetscViewerFileSetMode</a>(*binv,type);
+<a name="line835">835: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetName.html#PetscViewerFileSetName">PetscViewerFileSetName</a>(*binv,name);
+<a name="line836">836: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetFromOptions.html#PetscViewerSetFromOptions">PetscViewerSetFromOptions</a>(*binv);
+<a name="line837">837: </a>  <font color="#4169E1">return</font>(0);
+<a name="line838">838: </a>}
+
+<a name="line840">840: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line843">843: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryWriteReadMPIIO"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinaryWriteReadMPIIO(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,void *data,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> num,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *count,<a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PetscDataType</a> dtype,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> write)</font></strong>
+<a name="line844">844: </a>{
+<a name="line845">845: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+<a name="line846">846: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line847">847: </a>  MPI_Datatype       mdtype;
+<a name="line848">848: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>        cnt;
+<a name="line849">849: </a>  MPI_Status         status;
+<a name="line850">850: </a>  MPI_Aint           ul,dsize;
+
+<a name="line853">853: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMPIIntCast.html#PetscMPIIntCast">PetscMPIIntCast</a>(num,&amp;cnt);
+<a name="line854">854: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscDataTypeToMPIDataType.html#PetscDataTypeToMPIDataType">PetscDataTypeToMPIDataType</a>(dtype,&amp;mdtype);
+<a name="line855">855: </a>  MPI_File_set_view(vbinary-&gt;mfdes,vbinary-&gt;moff,mdtype,mdtype,(char*)<font color="#666666">"native"</font>,MPI_INFO_NULL);
+<a name="line856">856: </a>  <font color="#4169E1">if</font> (write) {
+<a name="line857">857: </a>    MPIU_File_write_all(vbinary-&gt;mfdes,data,cnt,mdtype,&amp;status);
+<a name="line858">858: </a>  } <font color="#4169E1">else</font> {
+<a name="line859">859: </a>    MPIU_File_read_all(vbinary-&gt;mfdes,data,cnt,mdtype,&amp;status);
+<a name="line860">860: </a>  }
+<a name="line861">861: </a>  MPI_Type_get_extent(mdtype,&amp;ul,&amp;dsize);
+
+<a name="line863">863: </a>  vbinary-&gt;moff += dsize*cnt;
+<a name="line864">864: </a>  <font color="#4169E1">if</font> (count) *count = num;
+<a name="line865">865: </a>  <font color="#4169E1">return</font>(0);
+<a name="line866">866: </a>}
+<a name="line867">867: </a><font color="#A020F0">#endif</font>
+
+<a name="line871">871: </a><font color="#B22222">/*@C</font>
+<a name="line872">872: </a><font color="#B22222">   <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryRead.html#PetscViewerBinaryRead">PetscViewerBinaryRead</a> - Reads from a binary file, all processors get the same result</font>
+
+<a name="line874">874: </a><font color="#B22222">   Collective on <a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a></font>
+
+<a name="line876">876: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line877">877: </a><font color="#B22222">+  viewer - the binary viewer</font>
+<a name="line878">878: </a><font color="#B22222">.  data - location of the data to be written</font>
+<a name="line879">879: </a><font color="#B22222">.  num - number of items of data to read</font>
+<a name="line880">880: </a><font color="#B22222">-  dtype - type of data to read</font>
+
+<a name="line882">882: </a><font color="#B22222">   Output Parameters:</font>
+<a name="line883">883: </a><font color="#B22222">.  count - number of items of data actually read, or NULL</font>
+
+<a name="line885">885: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line887">887: </a><font color="#B22222">   Concepts: binary files</font>
+
+<a name="line889">889: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIOpen.html#PetscViewerASCIIOpen">PetscViewerASCIIOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetFormat.html#PetscViewerSetFormat">PetscViewerSetFormat</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(),</font>
+<a name="line890">890: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(), <a href="../../../../../../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(), <a href="../../../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(), <a href="../../../../../../docs/manualpages/Mat/MatLoad.html#MatLoad">MatLoad</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(),</font>
+<a name="line891">891: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>(), <a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>, <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>, PetscBinaryViewerRead()</font>
+<a name="line892">892: </a><font color="#B22222">@*/</font>
+<a name="line893">893: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryRead"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryRead.html#PetscViewerBinaryRead">PetscViewerBinaryRead</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,void *data,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> num,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *count,<a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PetscDataType</a> dtype)</font></strong>
+<a name="line894">894: </a>{
+<a name="line895">895: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line896">896: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line898">898: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetUp.html#PetscViewerSetUp">PetscViewerSetUp</a>(viewer);
+<a name="line899">899: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line900">900: </a>  <font color="#4169E1">if</font> (vbinary-&gt;usempiio) {
+<a name="line901">901: </a>    PetscViewerBinaryWriteReadMPIIO(viewer,data,num,count,dtype,<a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line902">902: </a>  } <font color="#4169E1">else</font> {
+<a name="line903">903: </a><font color="#A020F0">#endif</font>
+<a name="line904">904: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBinarySynchronizedRead.html#PetscBinarySynchronizedRead">PetscBinarySynchronizedRead</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),vbinary-&gt;fdes,data,num,dtype);
+<a name="line905">905: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line906">906: </a>  }
+<a name="line907">907: </a><font color="#A020F0">#endif</font>
+<a name="line908">908: </a>  <font color="#4169E1">return</font>(0);
+<a name="line909">909: </a>}
+
+<a name="line913">913: </a><font color="#B22222">/*@C</font>
+<a name="line914">914: </a><font color="#B22222">   <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryWrite.html#PetscViewerBinaryWrite">PetscViewerBinaryWrite</a> - writes to a binary file, only from the first process</font>
+
+<a name="line916">916: </a><font color="#B22222">   Collective on <a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a></font>
+
+<a name="line918">918: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line919">919: </a><font color="#B22222">+  viewer - the binary viewer</font>
+<a name="line920">920: </a><font color="#B22222">.  data - location of data</font>
+<a name="line921">921: </a><font color="#B22222">.  count - number of items of data to write</font>
+<a name="line922">922: </a><font color="#B22222">.  dtype - type of data to write</font>
+<a name="line923">923: </a><font color="#B22222">-  istemp - data may be overwritten</font>
+
+<a name="line925">925: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line927">927: </a><font color="#B22222">   Notes: because byte-swapping may be done on the values in data it cannot be declared const</font>
+
+<a name="line929">929: </a><font color="#B22222">   Concepts: binary files</font>
+
+<a name="line931">931: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIOpen.html#PetscViewerASCIIOpen">PetscViewerASCIIOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetFormat.html#PetscViewerSetFormat">PetscViewerSetFormat</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(),</font>
+<a name="line932">932: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(), <a href="../../../../../../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(), <a href="../../../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(), <a href="../../../../../../docs/manualpages/Mat/MatLoad.html#MatLoad">MatLoad</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(), <a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PetscDataType</a></font>
+<a name="line933">933: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>(), <a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>, <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>, PetscBinaryViewerRead()</font>
+<a name="line934">934: </a><font color="#B22222">@*/</font>
+<a name="line935">935: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryWrite"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryWrite.html#PetscViewerBinaryWrite">PetscViewerBinaryWrite</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,void *data,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> count,<a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PetscDataType</a> dtype,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> istemp)</font></strong>
+<a name="line936">936: </a>{
+<a name="line937">937: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line938">938: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line941">941: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetUp.html#PetscViewerSetUp">PetscViewerSetUp</a>(viewer);
+<a name="line942">942: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line943">943: </a>  <font color="#4169E1">if</font> (vbinary-&gt;usempiio) {
+<a name="line944">944: </a>    PetscViewerBinaryWriteReadMPIIO(viewer,data,count,NULL,dtype,<a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line945">945: </a>  } <font color="#4169E1">else</font> {
+<a name="line946">946: </a><font color="#A020F0">#endif</font>
+<a name="line947">947: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBinarySynchronizedWrite.html#PetscBinarySynchronizedWrite">PetscBinarySynchronizedWrite</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),vbinary-&gt;fdes,data,count,dtype,istemp);
+<a name="line948">948: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line949">949: </a>  }
+<a name="line950">950: </a><font color="#A020F0">#endif</font>
+<a name="line951">951: </a>  <font color="#4169E1">return</font>(0);
+<a name="line952">952: </a>}
+
+<a name="line956">956: </a><font color="#B22222">/*@C</font>
+<a name="line957">957: </a><font color="#B22222">   <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryWriteStringArray.html#PetscViewerBinaryWriteStringArray">PetscViewerBinaryWriteStringArray</a> - writes to a binary file, only from the first process an array of strings</font>
+
+<a name="line959">959: </a><font color="#B22222">   Collective on <a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a></font>
+
+<a name="line961">961: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line962">962: </a><font color="#B22222">+  viewer - the binary viewer</font>
+<a name="line963">963: </a><font color="#B22222">-  data - location of the array of strings</font>
+
+
+<a name="line966">966: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line968">968: </a><font color="#B22222">   Concepts: binary files</font>
+
+<a name="line970">970: </a><font color="#B22222">    Notes: array of strings is null terminated</font>
+
+<a name="line972">972: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIOpen.html#PetscViewerASCIIOpen">PetscViewerASCIIOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetFormat.html#PetscViewerSetFormat">PetscViewerSetFormat</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(),</font>
+<a name="line973">973: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(), <a href="../../../../../../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(), <a href="../../../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(), <a href="../../../../../../docs/manualpages/Mat/MatLoad.html#MatLoad">MatLoad</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(),</font>
+<a name="line974">974: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>(), <a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>, <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>, PetscBinaryViewerRead()</font>
+<a name="line975">975: </a><font color="#B22222">@*/</font>
+<a name="line976">976: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryWriteStringArray"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryWriteStringArray.html#PetscViewerBinaryWriteStringArray">PetscViewerBinaryWriteStringArray</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,char **data)</font></strong>
+<a name="line977">977: </a>{
+<a name="line979">979: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,n = 0,*sizes;
+
+<a name="line981">981: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetUp.html#PetscViewerSetUp">PetscViewerSetUp</a>(viewer);
+<a name="line982">982: </a>  <font color="#B22222">/* count number of strings */</font>
+<a name="line983">983: </a>  <font color="#4169E1">while</font> (data[n++]) ;
+<a name="line984">984: </a>  n--;
+<a name="line985">985: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n+1,&amp;sizes);
+<a name="line986">986: </a>  sizes[0] = n;
+<a name="line987">987: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line988">988: </a>    size_t tmp;
+<a name="line989">989: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscStrlen.html#PetscStrlen">PetscStrlen</a>(data[i],&amp;tmp);
+<a name="line990">990: </a>    sizes[i+1] = tmp + 1;   <font color="#B22222">/* size includes space for the null terminator */</font>
+<a name="line991">991: </a>  }
+<a name="line992">992: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryWrite.html#PetscViewerBinaryWrite">PetscViewerBinaryWrite</a>(viewer,sizes,n+1,PETSC_INT,<a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line993">993: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line994">994: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryWrite.html#PetscViewerBinaryWrite">PetscViewerBinaryWrite</a>(viewer,data[i],sizes[i+1],PETSC_CHAR,<a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line995">995: </a>  }
+<a name="line996">996: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(sizes);
+<a name="line997">997: </a>  <font color="#4169E1">return</font>(0);
+<a name="line998">998: </a>}
+
+<a name="line1002">1002: </a><font color="#B22222">/*@C</font>
+<a name="line1003">1003: </a><font color="#B22222">   <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryReadStringArray.html#PetscViewerBinaryReadStringArray">PetscViewerBinaryReadStringArray</a> - reads a binary file an array of strings</font>
+
+<a name="line1005">1005: </a><font color="#B22222">   Collective on <a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a></font>
+
+<a name="line1007">1007: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line1008">1008: </a><font color="#B22222">.  viewer - the binary viewer</font>
+
+<a name="line1010">1010: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line1011">1011: </a><font color="#B22222">.  data - location of the array of strings</font>
+
+<a name="line1013">1013: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line1015">1015: </a><font color="#B22222">   Concepts: binary files</font>
+
+<a name="line1017">1017: </a><font color="#B22222">    Notes: array of strings is null terminated</font>
+
+<a name="line1019">1019: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIOpen.html#PetscViewerASCIIOpen">PetscViewerASCIIOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetFormat.html#PetscViewerSetFormat">PetscViewerSetFormat</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(),</font>
+<a name="line1020">1020: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(), <a href="../../../../../../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(), <a href="../../../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(), <a href="../../../../../../docs/manualpages/Mat/MatLoad.html#MatLoad">MatLoad</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetDescriptor.html#PetscViewerBinaryGetDescriptor">PetscViewerBinaryGetDescriptor</a>(),</font>
+<a name="line1021">1021: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetInfoPointer.html#PetscViewerBinaryGetInfoPointer">PetscViewerBinaryGetInfoPointer</a>(), <a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>, <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>, PetscBinaryViewerRead()</font>
+<a name="line1022">1022: </a><font color="#B22222">@*/</font>
+<a name="line1023">1023: </a><strong><font color="#4169E1"><a name="PetscViewerBinaryReadStringArray"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryReadStringArray.html#PetscViewerBinaryReadStringArray">PetscViewerBinaryReadStringArray</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,char ***data)</font></strong>
+<a name="line1024">1024: </a>{
+<a name="line1026">1026: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,n,*sizes,N = 0;
+
+<a name="line1028">1028: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetUp.html#PetscViewerSetUp">PetscViewerSetUp</a>(viewer);
+<a name="line1029">1029: </a>  <font color="#B22222">/* count number of strings */</font>
+<a name="line1030">1030: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryRead.html#PetscViewerBinaryRead">PetscViewerBinaryRead</a>(viewer,&amp;n,1,NULL,PETSC_INT);
+<a name="line1031">1031: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n,&amp;sizes);
+<a name="line1032">1032: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryRead.html#PetscViewerBinaryRead">PetscViewerBinaryRead</a>(viewer,sizes,n,NULL,PETSC_INT);
+<a name="line1033">1033: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) N += sizes[i];
+<a name="line1034">1034: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>((n+1)*<font color="#4169E1">sizeof</font>(char*) + N*<font color="#4169E1">sizeof</font>(char),data);
+<a name="line1035">1035: </a>  (*data)[0] = (char*)((*data) + n + 1);
+<a name="line1036">1036: </a>  <font color="#4169E1">for</font> (i=1; i&lt;n; i++) (*data)[i] = (*data)[i-1] + sizes[i-1];
+<a name="line1037">1037: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryRead.html#PetscViewerBinaryRead">PetscViewerBinaryRead</a>(viewer,(*data)[0],N,NULL,PETSC_CHAR);
+
+<a name="line1039">1039: </a>  (*data)[n] = 0;
+
+<a name="line1041">1041: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(sizes);
+<a name="line1042">1042: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1043">1043: </a>}
+
+<a name="line1047">1047: </a><strong><font color="#4169E1"><a name="PetscViewerFileGetName_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerFileGetName_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,const char **name)</font></strong>
+<a name="line1048">1048: </a>{
+<a name="line1049">1049: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line1052">1052: </a>  *name = vbinary-&gt;filename;
+<a name="line1053">1053: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1054">1054: </a>}
+
+<a name="line1058">1058: </a><font color="#B22222">/*@C</font>
+<a name="line1059">1059: </a><font color="#B22222">     <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileGetMode.html#PetscViewerFileGetMode">PetscViewerFileGetMode</a> - Gets the type of file to be open</font>
+
+<a name="line1061">1061: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line1063">1063: </a><font color="#B22222">  Input Parameter:</font>
+<a name="line1064">1064: </a><font color="#B22222">.  viewer - the <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>; must be a binary, MATLAB, hdf, or netcdf <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a></font>
+
+<a name="line1066">1066: </a><font color="#B22222">  Output Parameter:</font>
+<a name="line1067">1067: </a><font color="#B22222">.  type - type of file</font>
+<a name="line1068">1068: </a><font color="#B22222">$    FILE_MODE_WRITE - create new file for binary output</font>
+<a name="line1069">1069: </a><font color="#B22222">$    FILE_MODE_READ - open existing file for binary input</font>
+<a name="line1070">1070: </a><font color="#B22222">$    FILE_MODE_APPEND - open existing file for binary output</font>
+
+<a name="line1072">1072: </a><font color="#B22222">  Level: advanced</font>
+
+<a name="line1074">1074: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetMode.html#PetscViewerFileSetMode">PetscViewerFileSetMode</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line1076">1076: </a><font color="#B22222">@*/</font>
+<a name="line1077">1077: </a><strong><font color="#4169E1"><a name="PetscViewerFileGetMode"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileGetMode.html#PetscViewerFileGetMode">PetscViewerFileGetMode</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a> *type)</font></strong>
+<a name="line1078">1078: </a>{
+
+<a name="line1084">1084: </a>  PetscUseMethod(viewer,<font color="#666666">"PetscViewerFileGetMode_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>*),(viewer,type));
+<a name="line1085">1085: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1086">1086: </a>}
+
+<a name="line1090">1090: </a><font color="#B22222">/*@</font>
+<a name="line1091">1091: </a><font color="#B22222">    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetUseMPIIO.html#PetscViewerBinarySetUseMPIIO">PetscViewerBinarySetUseMPIIO</a> - Sets a binary viewer to use MPI-IO for reading/writing. Must be called</font>
+<a name="line1092">1092: </a><font color="#B22222">        before <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetName.html#PetscViewerFileSetName">PetscViewerFileSetName</a>()</font>
+
+<a name="line1094">1094: </a><font color="#B22222">    Logically Collective on <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a></font>
+
+<a name="line1096">1096: </a><font color="#B22222">    Input Parameters:</font>
+<a name="line1097">1097: </a><font color="#B22222">+   viewer - the <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>; must be a binary</font>
+<a name="line1098">1098: </a><font color="#B22222">-   flg - <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> means MPI-IO will be used</font>
+
+<a name="line1100">1100: </a><font color="#B22222">    Options Database:</font>
+<a name="line1101">1101: </a><font color="#B22222">    -viewer_binary_mpiio : Flag for using MPI-IO</font>
+
+<a name="line1103">1103: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line1105">1105: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetMode.html#PetscViewerFileSetMode">PetscViewerFileSetMode</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(),</font>
+<a name="line1106">1106: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryGetUseMPIIO.html#PetscViewerBinaryGetUseMPIIO">PetscViewerBinaryGetUseMPIIO</a>()</font>
+
+<a name="line1108">1108: </a><font color="#B22222">@*/</font>
+<a name="line1109">1109: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySetUseMPIIO"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetUseMPIIO.html#PetscViewerBinarySetUseMPIIO">PetscViewerBinarySetUseMPIIO</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> flg)</font></strong>
+<a name="line1110">1110: </a>{
+
+<a name="line1115">1115: </a>  PetscTryMethod(viewer,<font color="#666666">"PetscViewerBinarySetUseMPIIO_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>),(viewer,flg));
+<a name="line1116">1116: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1117">1117: </a>}
+
+<a name="line1121">1121: </a><font color="#B22222">/*@C</font>
+<a name="line1122">1122: </a><font color="#B22222">     <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetMode.html#PetscViewerFileSetMode">PetscViewerFileSetMode</a> - Sets the type of file to be open</font>
+
+<a name="line1124">1124: </a><font color="#B22222">    Logically Collective on <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a></font>
+
+<a name="line1126">1126: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line1127">1127: </a><font color="#B22222">+  viewer - the <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>; must be a binary, Matlab, hdf, or netcdf <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a></font>
+<a name="line1128">1128: </a><font color="#B22222">-  type - type of file</font>
+<a name="line1129">1129: </a><font color="#B22222">$    FILE_MODE_WRITE - create new file for binary output</font>
+<a name="line1130">1130: </a><font color="#B22222">$    FILE_MODE_READ - open existing file for binary input</font>
+<a name="line1131">1131: </a><font color="#B22222">$    FILE_MODE_APPEND - open existing file for binary output</font>
+
+<a name="line1133">1133: </a><font color="#B22222">  Level: advanced</font>
+
+<a name="line1135">1135: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetMode.html#PetscViewerFileSetMode">PetscViewerFileSetMode</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()</font>
+
+<a name="line1137">1137: </a><font color="#B22222">@*/</font>
+<a name="line1138">1138: </a><strong><font color="#4169E1"><a name="PetscViewerFileSetMode"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetMode.html#PetscViewerFileSetMode">PetscViewerFileSetMode</a>(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a> type)</font></strong>
+<a name="line1139">1139: </a>{
+
+<a name="line1145">1145: </a>  PetscTryMethod(viewer,<font color="#666666">"PetscViewerFileSetMode_C"</font>,(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>,<a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>),(viewer,type));
+<a name="line1146">1146: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1147">1147: </a>}
+
+<a name="line1151">1151: </a><strong><font color="#4169E1"><a name="PetscViewerFileGetMode_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerFileGetMode_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a> *type)</font></strong>
+<a name="line1152">1152: </a>{
+<a name="line1153">1153: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line1156">1156: </a>  *type = vbinary-&gt;btype;
+<a name="line1157">1157: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1158">1158: </a>}
+
+<a name="line1162">1162: </a><strong><font color="#4169E1"><a name="PetscViewerFileSetMode_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerFileSetMode_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a> type)</font></strong>
+<a name="line1163">1163: </a>{
+<a name="line1164">1164: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+
+<a name="line1167">1167: </a>  vbinary-&gt;btype = type;
+<a name="line1168">1168: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1169">1169: </a>}
+
+<a name="line1173">1173: </a><strong><font color="#4169E1"><a name="PetscViewerFileSetName_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerFileSetName_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,const char name[])</font></strong>
+<a name="line1174">1174: </a>{
+<a name="line1175">1175: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+<a name="line1176">1176: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1177">1177: </a>
+<a name="line1179">1179: </a>  <font color="#4169E1">if</font> (vbinary-&gt;filename) { <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vbinary-&gt;filename); }
+<a name="line1180">1180: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscStrallocpy.html#PetscStrallocpy">PetscStrallocpy</a>(name,&amp;vbinary-&gt;filename);
+<a name="line1181">1181: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1182">1182: </a>}
+<a name="line1183">1183: </a><font color="#B22222">/*</font>
+<a name="line1184">1184: </a><font color="#B22222">        Actually opens the file</font>
+<a name="line1185">1185: </a><font color="#B22222">*/</font>
+<a name="line1188">1188: </a><strong><font color="#4169E1"><a name="PetscViewerFileSetUp_Binary"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerFileSetUp_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line1189">1189: </a>{
+<a name="line1190">1190: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>        rank;
+<a name="line1191">1191: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1192">1192: </a>  size_t             len;
+<a name="line1193">1193: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+<a name="line1194">1194: </a>  const char         *fname;
+<a name="line1195">1195: </a>  char               bname[PETSC_MAX_PATH_LEN],*gz;
+<a name="line1196">1196: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>          found;
+<a name="line1197">1197: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>      type = vbinary-&gt;btype;
+
+<a name="line1200">1200: </a>  <font color="#4169E1">if</font> (type == (<a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>) -1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ORDER,<font color="#666666">"Must call <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetMode.html#PetscViewerFileSetMode">PetscViewerFileSetMode</a>()"</font>);
+<a name="line1201">1201: </a>  <font color="#4169E1">if</font> (!vbinary-&gt;filename) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ORDER,<font color="#666666">"Must call <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetName.html#PetscViewerFileSetName">PetscViewerFileSetName</a>()"</font>);
+<a name="line1202">1202: </a>  PetscViewerFileClose_Binary(viewer);
+
+<a name="line1204">1204: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),&amp;rank);
+
+<a name="line1206">1206: </a>  <font color="#B22222">/* if ends in .gz strip that off and note user wants file compressed */</font>
+<a name="line1207">1207: </a>  vbinary-&gt;storecompressed = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1208">1208: </a>  <font color="#4169E1">if</font> (!rank &amp;&amp; type == FILE_MODE_WRITE) {
+<a name="line1209">1209: </a>    <font color="#B22222">/* remove .gz if it ends library name */</font>
+<a name="line1210">1210: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscStrstr.html#PetscStrstr">PetscStrstr</a>(vbinary-&gt;filename,<font color="#666666">".gz"</font>,&amp;gz);
+<a name="line1211">1211: </a>    <font color="#4169E1">if</font> (gz) {
+<a name="line1212">1212: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscStrlen.html#PetscStrlen">PetscStrlen</a>(gz,&amp;len);
+<a name="line1213">1213: </a>      <font color="#4169E1">if</font> (len == 3) {
+<a name="line1214">1214: </a>        *gz = 0;
+<a name="line1215">1215: </a>        vbinary-&gt;storecompressed = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1216">1216: </a>      }
+<a name="line1217">1217: </a>    }
+<a name="line1218">1218: </a>  }
+
+<a name="line1220">1220: </a>  <font color="#B22222">/* only first processor opens file if writeable */</font>
+<a name="line1221">1221: </a>  <font color="#4169E1">if</font> (!rank || type == FILE_MODE_READ) {
+
+<a name="line1223">1223: </a>    <font color="#4169E1">if</font> (type == FILE_MODE_READ) {
+<a name="line1224">1224: </a>      <font color="#B22222">/* possibly get the file from remote site or compressed file */</font>
+<a name="line1225">1225: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscFileRetrieve.html#PetscFileRetrieve">PetscFileRetrieve</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),vbinary-&gt;filename,bname,PETSC_MAX_PATH_LEN,&amp;found);
+<a name="line1226">1226: </a>      fname = bname;
+<a name="line1227">1227: </a>      <font color="#4169E1">if</font> (!rank &amp;&amp; !found) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_FILE_OPEN,<font color="#666666">"Cannot locate file: %s on node zero"</font>,vbinary-&gt;filename);
+<a name="line1228">1228: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (!found) {
+<a name="line1229">1229: </a>        <a href="../../../../../../docs/manualpages/Profiling/PetscInfo.html#PetscInfo">PetscInfo</a>(viewer,<font color="#666666">"Nonzero processor did not locate readonly file\n"</font>);
+<a name="line1230">1230: </a>        fname = 0;
+<a name="line1231">1231: </a>      }
+<a name="line1232">1232: </a>    } <font color="#4169E1">else</font> fname = vbinary-&gt;filename;
+
+<a name="line1234">1234: </a><font color="#A020F0">#if defined(PETSC_HAVE_O_BINARY)</font>
+<a name="line1235">1235: </a>    <font color="#4169E1">if</font> (type == FILE_MODE_WRITE) {
+<a name="line1236">1236: </a>      <font color="#4169E1">if</font> ((vbinary-&gt;fdes = open(fname,O_WRONLY|O_CREAT|O_TRUNC|O_BINARY,0666)) == -1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_FILE_OPEN,<font color="#666666">"Cannot create file %s for writing"</font>,fname);
+<a name="line1237">1237: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type == FILE_MODE_READ &amp;&amp; fname) {
+<a name="line1238">1238: </a>      <font color="#4169E1">if</font> ((vbinary-&gt;fdes = open(fname,O_RDONLY|O_BINARY,0)) == -1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_FILE_OPEN,<font color="#666666">"Cannot open file %s for reading"</font>,fname);
+<a name="line1239">1239: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type == FILE_MODE_APPEND) {
+<a name="line1240">1240: </a>      <font color="#4169E1">if</font> ((vbinary-&gt;fdes = open(fname,O_WRONLY|O_APPEND|O_BINARY,0)) == -1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_FILE_OPEN,<font color="#666666">"Cannot open file %s for writing"</font>,fname);
+<a name="line1241">1241: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (fname) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Unknown file type"</font>);
+<a name="line1242">1242: </a><font color="#A020F0">#else</font>
+<a name="line1243">1243: </a>    <font color="#4169E1">if</font> (type == FILE_MODE_WRITE) {
+<a name="line1244">1244: </a>      <font color="#4169E1">if</font> ((vbinary-&gt;fdes = creat(fname,0666)) == -1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_FILE_OPEN,<font color="#666666">"Cannot create file %s for writing"</font>,fname);
+<a name="line1245">1245: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type == FILE_MODE_READ &amp;&amp; fname) {
+<a name="line1246">1246: </a>      <font color="#4169E1">if</font> ((vbinary-&gt;fdes = open(fname,O_RDONLY,0)) == -1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_FILE_OPEN,<font color="#666666">"Cannot open file %s for reading"</font>,fname);
+<a name="line1247">1247: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type == FILE_MODE_APPEND) {
+<a name="line1248">1248: </a>      <font color="#4169E1">if</font> ((vbinary-&gt;fdes = open(fname,O_WRONLY|O_APPEND,0)) == -1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_FILE_OPEN,<font color="#666666">"Cannot open file %s for writing"</font>,fname);
+<a name="line1249">1249: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (fname) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Unknown file type"</font>);
+<a name="line1250">1250: </a><font color="#A020F0">#endif</font>
+<a name="line1251">1251: </a>  } <font color="#4169E1">else</font> vbinary-&gt;fdes = -1;
+
+<a name="line1253">1253: </a>  <font color="#B22222">/*</font>
+<a name="line1254">1254: </a><font color="#B22222">      try to open info file: all processors open this file if read only</font>
+<a name="line1255">1255: </a><font color="#B22222">  */</font>
+<a name="line1256">1256: </a>  <font color="#4169E1">if</font> (!vbinary-&gt;skipinfo &amp;&amp; (!rank || type == FILE_MODE_READ)) {
+<a name="line1257">1257: </a>    char infoname[PETSC_MAX_PATH_LEN],iname[PETSC_MAX_PATH_LEN];
+
+<a name="line1259">1259: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscStrcpy.html#PetscStrcpy">PetscStrcpy</a>(infoname,vbinary-&gt;filename);
+<a name="line1260">1260: </a>    <font color="#B22222">/* remove .gz if it ends library name */</font>
+<a name="line1261">1261: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscStrstr.html#PetscStrstr">PetscStrstr</a>(infoname,<font color="#666666">".gz"</font>,&amp;gz);
+<a name="line1262">1262: </a>    <font color="#4169E1">if</font> (gz) {
+<a name="line1263">1263: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscStrlen.html#PetscStrlen">PetscStrlen</a>(gz,&amp;len);
+<a name="line1264">1264: </a>      <font color="#4169E1">if</font> (len == 3) *gz = 0;
+<a name="line1265">1265: </a>    }
+
+<a name="line1267">1267: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscStrcat.html#PetscStrcat">PetscStrcat</a>(infoname,<font color="#666666">".info"</font>);
+<a name="line1268">1268: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFixFilename.html#PetscFixFilename">PetscFixFilename</a>(infoname,iname);
+<a name="line1269">1269: </a>    <font color="#4169E1">if</font> (type == FILE_MODE_READ) {
+<a name="line1270">1270: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscFileRetrieve.html#PetscFileRetrieve">PetscFileRetrieve</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),iname,infoname,PETSC_MAX_PATH_LEN,&amp;found);
+<a name="line1271">1271: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscOptionsInsertFile.html#PetscOptionsInsertFile">PetscOptionsInsertFile</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),infoname,<a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line1272">1272: </a>    } <font color="#4169E1">else</font> {
+<a name="line1273">1273: </a>      vbinary-&gt;fdes_info = fopen(infoname,<font color="#666666">"w"</font>);
+<a name="line1274">1274: </a>      <font color="#4169E1">if</font> (!vbinary-&gt;fdes_info) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_FILE_OPEN,<font color="#666666">"Cannot open .info file %s for writing"</font>,infoname);
+<a name="line1275">1275: </a>    }
+<a name="line1276">1276: </a>  }
+<a name="line1277">1277: </a><font color="#A020F0">#if defined(PETSC_USE_LOG)</font>
+<a name="line1278">1278: </a>  PetscLogObjectState((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<font color="#666666">"File: %s"</font>,vbinary-&gt;filename);
+<a name="line1279">1279: </a><font color="#A020F0">#endif</font>
+<a name="line1280">1280: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1281">1281: </a>}
+
+<a name="line1283">1283: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line1286">1286: </a><strong><font color="#4169E1"><a name="PetscViewerFileSetUp_BinaryMPIIO"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerFileSetUp_BinaryMPIIO(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line1287">1287: </a>{
+<a name="line1288">1288: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>        rank;
+<a name="line1289">1289: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1290">1290: </a>  size_t             len;
+<a name="line1291">1291: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+<a name="line1292">1292: </a>  char               *gz;
+<a name="line1293">1293: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>          found;
+<a name="line1294">1294: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>      type = vbinary-&gt;btype;
+
+<a name="line1297">1297: </a>  <font color="#4169E1">if</font> (type == (<a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>) -1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ORDER,<font color="#666666">"Must call <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetMode.html#PetscViewerFileSetMode">PetscViewerFileSetMode</a>()"</font>);
+<a name="line1298">1298: </a>  <font color="#4169E1">if</font> (!vbinary-&gt;filename) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ORDER,<font color="#666666">"Must call <a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetName.html#PetscViewerFileSetName">PetscViewerFileSetName</a>()"</font>);
+<a name="line1299">1299: </a>  PetscViewerFileClose_BinaryMPIIO(viewer);
+
+<a name="line1301">1301: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),&amp;rank);
+
+<a name="line1303">1303: </a>  vbinary-&gt;storecompressed = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+
+<a name="line1305">1305: </a>  <font color="#B22222">/* only first processor opens file if writeable */</font>
+<a name="line1306">1306: </a>  <font color="#4169E1">if</font> (type == FILE_MODE_READ) {
+<a name="line1307">1307: </a>    MPI_File_open(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),vbinary-&gt;filename,MPI_MODE_RDONLY,MPI_INFO_NULL,&amp;vbinary-&gt;mfdes);
+<a name="line1308">1308: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type == FILE_MODE_WRITE) {
+<a name="line1309">1309: </a>    MPI_File_open(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),vbinary-&gt;filename,MPI_MODE_WRONLY | MPI_MODE_CREATE,MPI_INFO_NULL,&amp;vbinary-&gt;mfdes);
+<a name="line1310">1310: </a>  }
+
+<a name="line1312">1312: </a>  <font color="#B22222">/*</font>
+<a name="line1313">1313: </a><font color="#B22222">      try to open info file: all processors open this file if read only</font>
+
+<a name="line1315">1315: </a><font color="#B22222">      Below is identical code to the code for Binary above, should be put in separate routine</font>
+<a name="line1316">1316: </a><font color="#B22222">  */</font>
+<a name="line1317">1317: </a>  <font color="#4169E1">if</font> (!vbinary-&gt;skipinfo &amp;&amp; (!rank || type == FILE_MODE_READ)) {
+<a name="line1318">1318: </a>    char infoname[PETSC_MAX_PATH_LEN],iname[PETSC_MAX_PATH_LEN];
+
+<a name="line1320">1320: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscStrcpy.html#PetscStrcpy">PetscStrcpy</a>(infoname,vbinary-&gt;filename);
+<a name="line1321">1321: </a>    <font color="#B22222">/* remove .gz if it ends library name */</font>
+<a name="line1322">1322: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscStrstr.html#PetscStrstr">PetscStrstr</a>(infoname,<font color="#666666">".gz"</font>,&amp;gz);
+<a name="line1323">1323: </a>    <font color="#4169E1">if</font> (gz) {
+<a name="line1324">1324: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscStrlen.html#PetscStrlen">PetscStrlen</a>(gz,&amp;len);
+<a name="line1325">1325: </a>      <font color="#4169E1">if</font> (len == 3) *gz = 0;
+<a name="line1326">1326: </a>    }
+
+<a name="line1328">1328: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscStrcat.html#PetscStrcat">PetscStrcat</a>(infoname,<font color="#666666">".info"</font>);
+<a name="line1329">1329: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFixFilename.html#PetscFixFilename">PetscFixFilename</a>(infoname,iname);
+<a name="line1330">1330: </a>    <font color="#4169E1">if</font> (type == FILE_MODE_READ) {
+<a name="line1331">1331: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscFileRetrieve.html#PetscFileRetrieve">PetscFileRetrieve</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),iname,infoname,PETSC_MAX_PATH_LEN,&amp;found);
+<a name="line1332">1332: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscOptionsInsertFile.html#PetscOptionsInsertFile">PetscOptionsInsertFile</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),infoname,<a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line1333">1333: </a>    } <font color="#4169E1">else</font> {
+<a name="line1334">1334: </a>      vbinary-&gt;fdes_info = fopen(infoname,<font color="#666666">"w"</font>);
+<a name="line1335">1335: </a>      <font color="#4169E1">if</font> (!vbinary-&gt;fdes_info) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_FILE_OPEN,<font color="#666666">"Cannot open .info file %s for writing"</font>,infoname);
+<a name="line1336">1336: </a>    }
+<a name="line1337">1337: </a>  }
+<a name="line1338">1338: </a><font color="#A020F0">#if defined(PETSC_USE_LOG)</font>
+<a name="line1339">1339: </a>  PetscLogObjectState((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<font color="#666666">"File: %s"</font>,vbinary-&gt;filename);
+<a name="line1340">1340: </a><font color="#A020F0">#endif</font>
+<a name="line1341">1341: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1342">1342: </a>}
+
+<a name="line1346">1346: </a><strong><font color="#4169E1"><a name="PetscViewerBinarySetUseMPIIO_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerBinarySetUseMPIIO_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> flg)</font></strong>
+<a name="line1347">1347: </a>{
+<a name="line1348">1348: </a>  PetscViewer_Binary *vbinary = (PetscViewer_Binary*)viewer-&gt;data;
+<a name="line1350">1350: </a>  vbinary-&gt;usempiio = flg;
+<a name="line1351">1351: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1352">1352: </a>}
+<a name="line1353">1353: </a><font color="#A020F0">#endif</font>
+
+<a name="line1357">1357: </a><strong><font color="#4169E1"><a name="PetscViewerView_Binary"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerView_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> v,<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line1358">1358: </a>{
+<a name="line1359">1359: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1360">1360: </a>  PetscViewer_Binary *binary = (PetscViewer_Binary*)v-&gt;data;
+
+<a name="line1363">1363: </a>  <font color="#4169E1">if</font> (binary-&gt;filename) {
+<a name="line1364">1364: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Filename: %s\n"</font>,binary-&gt;filename);
+<a name="line1365">1365: </a>  }
+<a name="line1366">1366: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1367">1367: </a>}
+
+<a name="line1371">1371: </a><strong><font color="#4169E1"><a name="PetscViewerSetUp_Binary"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerSetUp_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> v)</font></strong>
+<a name="line1372">1372: </a>{
+<a name="line1373">1373: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1374">1374: </a>  PetscViewer_Binary *binary = (PetscViewer_Binary*)v-&gt;data;
+
+<a name="line1377">1377: </a>  <font color="#4169E1">if</font> (!binary-&gt;setfromoptionscalled) { <a href="../../../../../../docs/manualpages/Viewer/PetscViewerSetFromOptions.html#PetscViewerSetFromOptions">PetscViewerSetFromOptions</a>(v); }
+<a name="line1378">1378: </a>
+<a name="line1379">1379: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line1380">1380: </a>  <font color="#4169E1">if</font> (binary-&gt;usempiio) {
+<a name="line1381">1381: </a>    PetscViewerFileSetUp_BinaryMPIIO(v);
+<a name="line1382">1382: </a>  } <font color="#4169E1">else</font> {
+<a name="line1383">1383: </a><font color="#A020F0">#endif</font>
+<a name="line1384">1384: </a>    PetscViewerFileSetUp_Binary(v);
+<a name="line1385">1385: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line1386">1386: </a>  }
+<a name="line1387">1387: </a><font color="#A020F0">#endif</font>
+<a name="line1388">1388: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1389">1389: </a>}
+
+<a name="line1393">1393: </a><strong><font color="#4169E1"><a name="PetscViewerSetFromOptions_Binary"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerSetFromOptions_Binary(PetscOptions *PetscOptionsObject,<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> v)</font></strong>
+<a name="line1394">1394: </a>{
+<a name="line1395">1395: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1396">1396: </a>  PetscViewer_Binary *binary = (PetscViewer_Binary*)v-&gt;data;
+<a name="line1397">1397: </a>  char               defaultname[PETSC_MAX_PATH_LEN];
+<a name="line1398">1398: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>          flg;
+
+<a name="line1401">1401: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsHead.html#PetscOptionsHead">PetscOptionsHead</a>(PetscOptionsObject,<font color="#666666">"Binary <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> Options"</font>);
+<a name="line1402">1402: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintf.html#PetscSNPrintf">PetscSNPrintf</a>(defaultname,PETSC_MAX_PATH_LEN-1,<font color="#666666">"binaryoutput"</font>);
+<a name="line1403">1403: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsString.html#PetscOptionsString">PetscOptionsString</a>(<font color="#666666">"-viewer_binary_filename"</font>,<font color="#666666">"Specify filename"</font>,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PetscViewerFileSetName.html#PetscViewerFileSetName">PetscViewerFileSetName</a>"</font>,defaultname,defaultname,PETSC_MAX_PATH_LEN-1,&amp;flg);
+<a name="line1404">1404: </a>  <font color="#4169E1">if</font> (flg) { PetscViewerFileSetName_Binary(v,defaultname); }
+<a name="line1405">1405: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-viewer_binary_skip_info"</font>,<font color="#666666">"Skip writing/reading .info file"</font>,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipInfo.html#PetscViewerBinarySetSkipInfo">PetscViewerBinarySetSkipInfo</a>"</font>,<a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;binary-&gt;skipinfo,&amp;flg);
+<a name="line1406">1406: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-viewer_binary_skip_options"</font>,<font color="#666666">"Skip parsing vec load options"</font>,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipOptions.html#PetscViewerBinarySetSkipOptions">PetscViewerBinarySetSkipOptions</a>"</font>,<a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>,&amp;binary-&gt;skipoptions,&amp;flg);
+<a name="line1407">1407: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-viewer_binary_skip_header"</font>,<font color="#666666">"Skip writing/reading header information"</font>,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetSkipHeader.html#PetscViewerBinarySetSkipHeader">PetscViewerBinarySetSkipHeader</a>"</font>,<a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;binary-&gt;skipheader,&amp;flg);
+<a name="line1408">1408: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line1409">1409: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-viewer_binary_mpiio"</font>,<font color="#666666">"Use MPI-IO functionality to write/read binary file"</font>,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinarySetUseMPIIO.html#PetscViewerBinarySetUseMPIIO">PetscViewerBinarySetUseMPIIO</a>"</font>,<a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;binary-&gt;usempiio,&amp;flg);
+<a name="line1410">1410: </a><font color="#A020F0">#endif</font>
+<a name="line1411">1411: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsTail.html#PetscOptionsTail">PetscOptionsTail</a>();
+<a name="line1412">1412: </a>  binary-&gt;setfromoptionscalled = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1413">1413: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1414">1414: </a>}
+
+<a name="line1418">1418: </a><strong><font color="#4169E1"><a name="PetscViewerCreate_Binary"></a>PETSC_EXTERN <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscViewerCreate_Binary(<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> v)</font></strong>
+<a name="line1419">1419: </a>{
+<a name="line1420">1420: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1421">1421: </a>  PetscViewer_Binary *vbinary;
+
+<a name="line1424">1424: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(v,&amp;vbinary);
+<a name="line1425">1425: </a>  v-&gt;data                  = (void*)vbinary;
+<a name="line1426">1426: </a>  v-&gt;ops-&gt;setfromoptions   = PetscViewerSetFromOptions_Binary;
+<a name="line1427">1427: </a>  v-&gt;ops-&gt;destroy          = PetscViewerDestroy_Binary;
+<a name="line1428">1428: </a>  v-&gt;ops-&gt;view             = PetscViewerView_Binary;
+<a name="line1429">1429: </a>  v-&gt;ops-&gt;setup            = PetscViewerSetUp_Binary;
+<a name="line1430">1430: </a>  v-&gt;ops-&gt;flush            = NULL;
+<a name="line1431">1431: </a>  vbinary-&gt;fdes_info       = 0;
+<a name="line1432">1432: </a>  vbinary-&gt;fdes            = 0;
+<a name="line1433">1433: </a>  vbinary-&gt;skipinfo        = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1434">1434: </a>  vbinary-&gt;skipoptions     = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1435">1435: </a>  vbinary-&gt;skipheader      = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1436">1436: </a>  vbinary-&gt;setfromoptionscalled = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1437">1437: </a>  v-&gt;ops-&gt;getsingleton     = PetscViewerGetSingleton_Binary;
+<a name="line1438">1438: </a>  v-&gt;ops-&gt;restoresingleton = PetscViewerRestoreSingleton_Binary;
+<a name="line1439">1439: </a>  v-&gt;ops-&gt;read             = <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryRead.html#PetscViewerBinaryRead">PetscViewerBinaryRead</a>;
+<a name="line1440">1440: </a>  vbinary-&gt;btype           = (<a href="../../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">PetscFileMode</a>) -1;
+<a name="line1441">1441: </a>  vbinary-&gt;storecompressed = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1442">1442: </a>  vbinary-&gt;filename        = 0;
+<a name="line1443">1443: </a>  vbinary-&gt;flowcontrol     = 256; <font color="#B22222">/* seems a good number for Cray XT-5 */</font>
+
+<a name="line1445">1445: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinaryGetFlowControl_C"</font>,PetscViewerBinaryGetFlowControl_Binary);
+<a name="line1446">1446: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinarySetFlowControl_C"</font>,PetscViewerBinarySetFlowControl_Binary);
+<a name="line1447">1447: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinarySetSkipHeader_C"</font>,PetscViewerBinarySetSkipHeader_Binary);
+<a name="line1448">1448: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinaryGetSkipHeader_C"</font>,PetscViewerBinaryGetSkipHeader_Binary);
+<a name="line1449">1449: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinaryGetSkipOptions_C"</font>,PetscViewerBinaryGetSkipOptions_Binary);
+<a name="line1450">1450: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinarySetSkipOptions_C"</font>,PetscViewerBinarySetSkipOptions_Binary);
+<a name="line1451">1451: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinaryGetSkipInfo_C"</font>,PetscViewerBinaryGetSkipInfo_Binary);
+<a name="line1452">1452: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinarySetSkipInfo_C"</font>,PetscViewerBinarySetSkipInfo_Binary);
+<a name="line1453">1453: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinaryGetInfoPointer_C"</font>,PetscViewerBinaryGetInfoPointer_Binary);
+<a name="line1454">1454: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerFileSetName_C"</font>,PetscViewerFileSetName_Binary);
+<a name="line1455">1455: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerFileSetMode_C"</font>,PetscViewerFileSetMode_Binary);
+<a name="line1456">1456: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerFileGetMode_C"</font>,PetscViewerFileGetMode_Binary);
+<a name="line1457">1457: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerFileGetName_C"</font>,PetscViewerFileGetName_Binary);
+<a name="line1458">1458: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPIIO)</font>
+<a name="line1459">1459: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinaryGetUseMPIIO_C"</font>,PetscViewerBinaryGetUseMPIIO_Binary);
+<a name="line1460">1460: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,<font color="#666666">"PetscViewerBinarySetUseMPIIO_C"</font>,PetscViewerBinarySetUseMPIIO_Binary);
+<a name="line1461">1461: </a><font color="#A020F0">#endif</font>
+<a name="line1462">1462: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1463">1463: </a>}
+
+<a name="line1465">1465: </a><font color="#B22222">/* ---------------------------------------------------------------------*/</font>
+<a name="line1466">1466: </a><font color="#B22222">/*</font>
+<a name="line1467">1467: </a><font color="#B22222">    The variable Petsc_Viewer_Binary_keyval is used to indicate an MPI attribute that</font>
+<a name="line1468">1468: </a><font color="#B22222">  is attached to a communicator, in this case the attribute is a <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>.</font>
+<a name="line1469">1469: </a><font color="#B22222">*/</font>
+<a name="line1470">1470: </a>static int Petsc_Viewer_Binary_keyval = MPI_KEYVAL_INVALID;
+
+<a name="line1474">1474: </a><font color="#B22222">/*@C</font>
+<a name="line1475">1475: </a><font color="#B22222">     <a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a> - Creates a binary <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> shared by all processors</font>
+<a name="line1476">1476: </a><font color="#B22222">                     in a communicator.</font>
+
+<a name="line1478">1478: </a><font color="#B22222">     Collective on <a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a></font>
+
+<a name="line1480">1480: </a><font color="#B22222">     Input Parameter:</font>
+<a name="line1481">1481: </a><font color="#B22222">.    comm - the MPI communicator to share the binary <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a></font>
+
+<a name="line1483">1483: </a><font color="#B22222">     Level: intermediate</font>
+
+<a name="line1485">1485: </a><font color="#B22222">   Options Database Keys:</font>
+<a name="line1486">1486: </a><font color="#B22222">+    -viewer_binary_filename &lt;name&gt;</font>
+<a name="line1487">1487: </a><font color="#B22222">.    -viewer_binary_skip_info</font>
+<a name="line1488">1488: </a><font color="#B22222">.    -viewer_binary_skip_options</font>
+<a name="line1489">1489: </a><font color="#B22222">.    -viewer_binary_skip_header</font>
+<a name="line1490">1490: </a><font color="#B22222">-    -viewer_binary_mpiio</font>
+
+<a name="line1492">1492: </a><font color="#B22222">   Environmental variables:</font>
+<a name="line1493">1493: </a><font color="#B22222">-   PETSC_VIEWER_BINARY_FILENAME</font>
+
+<a name="line1495">1495: </a><font color="#B22222">     Notes:</font>
+<a name="line1496">1496: </a><font color="#B22222">     Unlike almost all other PETSc routines, <a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a> does not return</font>
+<a name="line1497">1497: </a><font color="#B22222">     an error code.  The binary <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> is usually used in the form</font>
+<a name="line1498">1498: </a><font color="#B22222">$       XXXView(XXX object,<a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>(comm));</font>
+
+<a name="line1500">1500: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_WORLD.html#PETSC_VIEWER_BINARY_WORLD">PETSC_VIEWER_BINARY_WORLD</a>, <a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_SELF.html#PETSC_VIEWER_BINARY_SELF">PETSC_VIEWER_BINARY_SELF</a>, <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>(),</font>
+<a name="line1501">1501: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>()</font>
+<a name="line1502">1502: </a><font color="#B22222">@*/</font>
+<a name="line1503">1503: </a><strong><font color="#4169E1"><a name="PETSC_VIEWER_BINARY_"></a><a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> <a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>(<a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm)</font></strong>
+<a name="line1504">1504: </a>{
+<a name="line1506">1506: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flg;
+<a name="line1507">1507: </a>  <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>    viewer;
+<a name="line1508">1508: </a>  char           fname[PETSC_MAX_PATH_LEN];
+<a name="line1509">1509: </a>  <a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>       ncomm;
+
+<a name="line1512">1512: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscCommDuplicate.html#PetscCommDuplicate">PetscCommDuplicate</a>(comm,&amp;ncomm,NULL);<font color="#4169E1">if</font> (ierr) {<a href="../../../../../../docs/manualpages/Sys/PetscError.html#PetscError">PetscError</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,__LINE__,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>"</font>,__FILE__,PETSC_ERR_PLIB,PETSC_ERROR_INITIAL,<font color="#666666">" "</font>);<font color="#4169E1">return</font>(0);}
+<a name="line1513">1513: </a>  <font color="#4169E1">if</font> (Petsc_Viewer_Binary_keyval == MPI_KEYVAL_INVALID) {
+<a name="line1514">1514: </a>    <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Keyval_create.html#MPI_Keyval_create">MPI_Keyval_create</a>(<a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_NULL_COPY_FN.html#MPI_NULL_COPY_FN">MPI_NULL_COPY_FN</a>,<a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_NULL_DELETE_FN.html#MPI_NULL_DELETE_FN">MPI_NULL_DELETE_FN</a>,&amp;Petsc_Viewer_Binary_keyval,0);
+<a name="line1515">1515: </a>    <font color="#4169E1">if</font> (ierr) {<a href="../../../../../../docs/manualpages/Sys/PetscError.html#PetscError">PetscError</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,__LINE__,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>"</font>,__FILE__,PETSC_ERR_PLIB,PETSC_ERROR_INITIAL,<font color="#666666">" "</font>);<font color="#4169E1">return</font>(0);}
+<a name="line1516">1516: </a>  }
+<a name="line1517">1517: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Attr_get.html#MPI_Attr_get">MPI_Attr_get</a>(ncomm,Petsc_Viewer_Binary_keyval,(void**)&amp;viewer,(int*)&amp;flg);
+<a name="line1518">1518: </a>  <font color="#4169E1">if</font> (ierr) {<a href="../../../../../../docs/manualpages/Sys/PetscError.html#PetscError">PetscError</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,__LINE__,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>"</font>,__FILE__,PETSC_ERR_PLIB,PETSC_ERROR_INITIAL,<font color="#666666">" "</font>);<font color="#4169E1">return</font>(0);}
+<a name="line1519">1519: </a>  <font color="#4169E1">if</font> (!flg) { <font color="#B22222">/* <a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> not yet created */</font>
+<a name="line1520">1520: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscOptionsGetenv.html#PetscOptionsGetenv">PetscOptionsGetenv</a>(ncomm,<font color="#666666">"PETSC_VIEWER_BINARY_FILENAME"</font>,fname,PETSC_MAX_PATH_LEN,&amp;flg);
+<a name="line1521">1521: </a>    <font color="#4169E1">if</font> (ierr) {<a href="../../../../../../docs/manualpages/Sys/PetscError.html#PetscError">PetscError</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,__LINE__,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>"</font>,__FILE__,PETSC_ERR_PLIB,PETSC_ERROR_INITIAL,<font color="#666666">" "</font>);<font color="#4169E1">return</font>(0);}
+<a name="line1522">1522: </a>    <font color="#4169E1">if</font> (!flg) {
+<a name="line1523">1523: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscStrcpy.html#PetscStrcpy">PetscStrcpy</a>(fname,<font color="#666666">"binaryoutput"</font>);
+<a name="line1524">1524: </a>      <font color="#4169E1">if</font> (ierr) {<a href="../../../../../../docs/manualpages/Sys/PetscError.html#PetscError">PetscError</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,__LINE__,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>"</font>,__FILE__,PETSC_ERR_PLIB,PETSC_ERROR_INITIAL,<font color="#666666">" "</font>);<font color="#4169E1">return</font>(0);}
+<a name="line1525">1525: </a>    }
+<a name="line1526">1526: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(ncomm,fname,FILE_MODE_WRITE,&amp;viewer);
+<a name="line1527">1527: </a>    <font color="#4169E1">if</font> (ierr) {<a href="../../../../../../docs/manualpages/Sys/PetscError.html#PetscError">PetscError</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,__LINE__,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>"</font>,__FILE__,PETSC_ERR_PLIB,PETSC_ERROR_INITIAL,<font color="#666666">" "</font>);<font color="#4169E1">return</font>(0);}
+<a name="line1528">1528: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscObjectRegisterDestroy.html#PetscObjectRegisterDestroy">PetscObjectRegisterDestroy</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer);
+<a name="line1529">1529: </a>    <font color="#4169E1">if</font> (ierr) {<a href="../../../../../../docs/manualpages/Sys/PetscError.html#PetscError">PetscError</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,__LINE__,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>"</font>,__FILE__,PETSC_ERR_PLIB,PETSC_ERROR_INITIAL,<font color="#666666">" "</font>);<font color="#4169E1">return</font>(0);}
+<a name="line1530">1530: </a>    <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Attr_put.html#MPI_Attr_put">MPI_Attr_put</a>(ncomm,Petsc_Viewer_Binary_keyval,(void*)viewer);
+<a name="line1531">1531: </a>    <font color="#4169E1">if</font> (ierr) {<a href="../../../../../../docs/manualpages/Sys/PetscError.html#PetscError">PetscError</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,__LINE__,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>"</font>,__FILE__,PETSC_ERR_PLIB,PETSC_ERROR_INITIAL,<font color="#666666">" "</font>);<font color="#4169E1">return</font>(0);}
+<a name="line1532">1532: </a>  }
+<a name="line1533">1533: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscCommDestroy.html#PetscCommDestroy">PetscCommDestroy</a>(&amp;ncomm);
+<a name="line1534">1534: </a>  <font color="#4169E1">if</font> (ierr) {<a href="../../../../../../docs/manualpages/Sys/PetscError.html#PetscError">PetscError</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,__LINE__,<font color="#666666">"<a href="../../../../../../docs/manualpages/Viewer/PETSC_VIEWER_BINARY_.html#PETSC_VIEWER_BINARY_">PETSC_VIEWER_BINARY_</a>"</font>,__FILE__,PETSC_ERR_PLIB,PETSC_ERROR_INITIAL,<font color="#666666">" "</font>);<font color="#4169E1">return</font>(0);}
+<a name="line1535">1535: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFunctionReturn.html#PetscFunctionReturn">PetscFunctionReturn</a>(viewer);
+<a name="line1536">1536: </a>}
+</pre>
+</body>
+
+</html>

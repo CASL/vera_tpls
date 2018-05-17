@@ -1,0 +1,356 @@
+<center><a href="redistribute.c">Actual source code: redistribute.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/pc/impls/redistribute/redistribute.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2016-04-12T16:44:56+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.6.4 2016-04-12</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.6.4 v3.6.4 src/ksp/pc/impls/redistribute/redistribute.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line2">  2: </a><font color="#B22222">/*</font>
+<a name="line3">  3: </a><font color="#B22222">  This file defines a "solve the problem redistributely on each subgroup of processor" preconditioner.</font>
+<a name="line4">  4: </a><font color="#B22222">*/</font>
+<a name="line5">  5: </a><font color="#A020F0">#include &lt;petsc/private/pcimpl.h&gt;     </font><font color="#B22222">/*I "petscksp.h" I*/</font><font color="#A020F0"></font>
+<a name="line6">  6: </a><font color="#A020F0">#include &lt;petscksp.h&gt;</font>
+
+<a name="line8">  8: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line9">  9: </a>  <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>         ksp;
+<a name="line10"> 10: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>         x,b;
+<a name="line11"> 11: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>  scatter;
+<a name="line12"> 12: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>          is;
+<a name="line13"> 13: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    dcnt,*drows;    <font color="#B22222">/* these are the local rows that have only diagonal entry */</font>
+<a name="line14"> 14: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *diag;
+<a name="line15"> 15: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>         work;
+<a name="line16"> 16: </a>} PC_Redistribute;
+
+<a name="line20"> 20: </a><strong><font color="#4169E1"><a name="PCView_Redistribute"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCView_Redistribute(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line21"> 21: </a>{
+<a name="line22"> 22: </a>  PC_Redistribute *red = (PC_Redistribute*)pc-&gt;data;
+<a name="line23"> 23: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line24"> 24: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       iascii,isstring;
+<a name="line25"> 25: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        ncnt,N;
+
+<a name="line28"> 28: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,PETSCVIEWERASCII,&amp;iascii);
+<a name="line29"> 29: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,PETSCVIEWERSTRING,&amp;isstring);
+<a name="line30"> 30: </a>  <font color="#4169E1">if</font> (iascii) {
+<a name="line31"> 31: </a>    <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Allreduce.html#MPI_Allreduce">MPI_Allreduce</a>(&amp;red-&gt;dcnt,&amp;ncnt,1,MPIU_INT,MPI_SUM,<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc));
+<a name="line32"> 32: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetSize.html#MatGetSize">MatGetSize</a>(pc-&gt;pmat,&amp;N,NULL);
+<a name="line33"> 33: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"    Number rows eliminated %D Percentage rows eliminated %g\n"</font>,ncnt,100.0*((<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)ncnt)/((<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)N));
+<a name="line34"> 34: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Redistribute preconditioner: \n"</font>);
+<a name="line35"> 35: </a>    <a href="../../../../../docs/manualpages/KSP/KSPView.html#KSPView">KSPView</a>(red-&gt;ksp,viewer);
+<a name="line36"> 36: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isstring) {
+<a name="line37"> 37: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerStringSPrintf.html#PetscViewerStringSPrintf">PetscViewerStringSPrintf</a>(viewer,<font color="#666666">" Redistribute preconditioner"</font>);
+<a name="line38"> 38: </a>    <a href="../../../../../docs/manualpages/KSP/KSPView.html#KSPView">KSPView</a>(red-&gt;ksp,viewer);
+<a name="line39"> 39: </a>  }
+<a name="line40"> 40: </a>  <font color="#4169E1">return</font>(0);
+<a name="line41"> 41: </a>}
+
+<a name="line45"> 45: </a><strong><font color="#4169E1"><a name="PCSetUp_Redistribute"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUp_Redistribute(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line46"> 46: </a>{
+<a name="line47"> 47: </a>  PC_Redistribute   *red = (PC_Redistribute*)pc-&gt;data;
+<a name="line48"> 48: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line49"> 49: </a>  <a href="../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>          comm;
+<a name="line50"> 50: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          rstart,rend,i,nz,cnt,*rows,ncnt,dcnt,*drows;
+<a name="line51"> 51: </a>  <a href="../../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a>       map,nmap;
+<a name="line52"> 52: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>       size,imdex,tag,n;
+<a name="line53"> 53: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          *source = NULL;
+<a name="line54"> 54: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>       *sizes = NULL,nrecvs;
+<a name="line55"> 55: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          j,nsends;
+<a name="line56"> 56: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          *owner = NULL,*starts = NULL,count,slen;
+<a name="line57"> 57: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          *rvalues,*svalues,recvtotal;
+<a name="line58"> 58: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>       *onodes1,*olengths1;
+<a name="line59"> 59: </a>  MPI_Request       *send_waits = NULL,*recv_waits = NULL;
+<a name="line60"> 60: </a>  MPI_Status        recv_status,*send_status;
+<a name="line61"> 61: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>               tvec,diag;
+<a name="line62"> 62: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>               tmat;
+<a name="line63"> 63: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *d;
+
+<a name="line66"> 66: </a>  <font color="#4169E1">if</font> (pc-&gt;setupcalled) {
+<a name="line67"> 67: </a>    <a href="../../../../../docs/manualpages/KSP/KSPGetOperators.html#KSPGetOperators">KSPGetOperators</a>(red-&gt;ksp,NULL,&amp;tmat);
+<a name="line68"> 68: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetSubMatrix.html#MatGetSubMatrix">MatGetSubMatrix</a>(pc-&gt;pmat,red-&gt;is,red-&gt;is,MAT_REUSE_MATRIX,&amp;tmat);
+<a name="line69"> 69: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(red-&gt;ksp,tmat,tmat);
+<a name="line70"> 70: </a>  } <font color="#4169E1">else</font> {
+<a name="line71"> 71: </a>    <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NN;
+
+<a name="line73"> 73: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,&amp;comm);
+<a name="line74"> 74: </a>    <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm,&amp;size);
+<a name="line75"> 75: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectGetNewTag.html#PetscObjectGetNewTag">PetscObjectGetNewTag</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,&amp;tag);
+
+<a name="line77"> 77: </a>    <font color="#B22222">/* count non-diagonal rows on process */</font>
+<a name="line78"> 78: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(pc-&gt;mat,&amp;rstart,&amp;rend);
+<a name="line79"> 79: </a>    cnt  = 0;
+<a name="line80"> 80: </a>    <font color="#4169E1">for</font> (i=rstart; i&lt;rend; i++) {
+<a name="line81"> 81: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetRow.html#MatGetRow">MatGetRow</a>(pc-&gt;mat,i,&amp;nz,NULL,NULL);
+<a name="line82"> 82: </a>      <font color="#4169E1">if</font> (nz &gt; 1) cnt++;
+<a name="line83"> 83: </a>      <a href="../../../../../docs/manualpages/Mat/MatRestoreRow.html#MatRestoreRow">MatRestoreRow</a>(pc-&gt;mat,i,&amp;nz,NULL,NULL);
+<a name="line84"> 84: </a>    }
+<a name="line85"> 85: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(cnt,&amp;rows);
+<a name="line86"> 86: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(rend - rstart - cnt,&amp;drows);
+
+<a name="line88"> 88: </a>    <font color="#B22222">/* list non-diagonal rows on process */</font>
+<a name="line89"> 89: </a>    cnt = 0; dcnt = 0;
+<a name="line90"> 90: </a>    <font color="#4169E1">for</font> (i=rstart; i&lt;rend; i++) {
+<a name="line91"> 91: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetRow.html#MatGetRow">MatGetRow</a>(pc-&gt;mat,i,&amp;nz,NULL,NULL);
+<a name="line92"> 92: </a>      <font color="#4169E1">if</font> (nz &gt; 1) rows[cnt++] = i;
+<a name="line93"> 93: </a>      <font color="#4169E1">else</font> drows[dcnt++] = i - rstart;
+<a name="line94"> 94: </a>      <a href="../../../../../docs/manualpages/Mat/MatRestoreRow.html#MatRestoreRow">MatRestoreRow</a>(pc-&gt;mat,i,&amp;nz,NULL,NULL);
+<a name="line95"> 95: </a>    }
+
+<a name="line97"> 97: </a>    <font color="#B22222">/* create <a href="../../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a> for non-diagonal rows on each process */</font>
+<a name="line98"> 98: </a>    <a href="../../../../../docs/manualpages/IS/PetscLayoutCreate.html#PetscLayoutCreate">PetscLayoutCreate</a>(comm,&amp;map);
+<a name="line99"> 99: </a>    <a href="../../../../../docs/manualpages/IS/PetscLayoutSetLocalSize.html#PetscLayoutSetLocalSize">PetscLayoutSetLocalSize</a>(map,cnt);
+<a name="line100">100: </a>    <a href="../../../../../docs/manualpages/IS/PetscLayoutSetBlockSize.html#PetscLayoutSetBlockSize">PetscLayoutSetBlockSize</a>(map,1);
+<a name="line101">101: </a>    <a href="../../../../../docs/manualpages/IS/PetscLayoutSetUp.html#PetscLayoutSetUp">PetscLayoutSetUp</a>(map);
+<a name="line102">102: </a>    rstart = map-&gt;rstart;
+<a name="line103">103: </a>    rend   = map-&gt;rend;
+
+<a name="line105">105: </a>    <font color="#B22222">/* create <a href="../../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a> for load-balanced non-diagonal rows on each process */</font>
+<a name="line106">106: </a>    <a href="../../../../../docs/manualpages/IS/PetscLayoutCreate.html#PetscLayoutCreate">PetscLayoutCreate</a>(comm,&amp;nmap);
+<a name="line107">107: </a>    <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Allreduce.html#MPI_Allreduce">MPI_Allreduce</a>(&amp;cnt,&amp;ncnt,1,MPIU_INT,MPI_SUM,comm);
+<a name="line108">108: </a>    <a href="../../../../../docs/manualpages/IS/PetscLayoutSetSize.html#PetscLayoutSetSize">PetscLayoutSetSize</a>(nmap,ncnt);
+<a name="line109">109: </a>    <a href="../../../../../docs/manualpages/IS/PetscLayoutSetBlockSize.html#PetscLayoutSetBlockSize">PetscLayoutSetBlockSize</a>(nmap,1);
+<a name="line110">110: </a>    <a href="../../../../../docs/manualpages/IS/PetscLayoutSetUp.html#PetscLayoutSetUp">PetscLayoutSetUp</a>(nmap);
+
+<a name="line112">112: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetSize.html#MatGetSize">MatGetSize</a>(pc-&gt;pmat,&amp;NN,NULL);
+<a name="line113">113: </a>    PetscInfo2(pc,<font color="#666666">"Number of diagonal rows eliminated %d, percentage eliminated %g\n"</font>,NN-ncnt,((<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)(NN-ncnt))/((<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)(NN)));
+<a name="line114">114: </a>    <font color="#B22222">/*</font>
+<a name="line115">115: </a><font color="#B22222">        this code is taken from VecScatterCreate_PtoS()</font>
+<a name="line116">116: </a><font color="#B22222">        Determines what rows need to be moved where to</font>
+<a name="line117">117: </a><font color="#B22222">        load balance the non-diagonal rows</font>
+<a name="line118">118: </a><font color="#B22222">    */</font>
+<a name="line119">119: </a>    <font color="#B22222">/*  count number of contributors to each processor */</font>
+<a name="line120">120: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(size,&amp;sizes,cnt,&amp;owner);
+<a name="line121">121: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMemzero.html#PetscMemzero">PetscMemzero</a>(sizes,size*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>));
+<a name="line122">122: </a>    j      = 0;
+<a name="line123">123: </a>    nsends = 0;
+<a name="line124">124: </a>    <font color="#4169E1">for</font> (i=rstart; i&lt;rend; i++) {
+<a name="line125">125: </a>      <font color="#4169E1">if</font> (i &lt; nmap-&gt;range[j]) j = 0;
+<a name="line126">126: </a>      <font color="#4169E1">for</font> (; j&lt;size; j++) {
+<a name="line127">127: </a>        <font color="#4169E1">if</font> (i &lt; nmap-&gt;range[j+1]) {
+<a name="line128">128: </a>          <font color="#4169E1">if</font> (!sizes[j]++) nsends++;
+<a name="line129">129: </a>          owner[i-rstart] = j;
+<a name="line130">130: </a>          <font color="#4169E1">break</font>;
+<a name="line131">131: </a>        }
+<a name="line132">132: </a>      }
+<a name="line133">133: </a>    }
+<a name="line134">134: </a>    <font color="#B22222">/* inform other processors of number of messages and max length*/</font>
+<a name="line135">135: </a>    <a href="../../../../../docs/manualpages/Sys/PetscGatherNumberOfMessages.html#PetscGatherNumberOfMessages">PetscGatherNumberOfMessages</a>(comm,NULL,sizes,&amp;nrecvs);
+<a name="line136">136: </a>    <a href="../../../../../docs/manualpages/Sys/PetscGatherMessageLengths.html#PetscGatherMessageLengths">PetscGatherMessageLengths</a>(comm,nsends,nrecvs,sizes,&amp;onodes1,&amp;olengths1);
+<a name="line137">137: </a>    <a href="../../../../../docs/manualpages/Sys/PetscSortMPIIntWithArray.html#PetscSortMPIIntWithArray">PetscSortMPIIntWithArray</a>(nrecvs,onodes1,olengths1);
+<a name="line138">138: </a>    recvtotal = 0; <font color="#4169E1">for</font> (i=0; i&lt;nrecvs; i++) recvtotal += olengths1[i];
+
+<a name="line140">140: </a>    <font color="#B22222">/* post receives:  rvalues - rows I will own; count - nu */</font>
+<a name="line141">141: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc3.html#PetscMalloc3">PetscMalloc3</a>(recvtotal,&amp;rvalues,nrecvs,&amp;source,nrecvs,&amp;recv_waits);
+<a name="line142">142: </a>    count = 0;
+<a name="line143">143: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nrecvs; i++) {
+<a name="line144">144: </a>      <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Irecv.html#MPI_Irecv">MPI_Irecv</a>((rvalues+count),olengths1[i],MPIU_INT,onodes1[i],tag,comm,recv_waits+i);
+<a name="line145">145: </a>      count += olengths1[i];
+<a name="line146">146: </a>    }
+
+<a name="line148">148: </a>    <font color="#B22222">/* do sends:</font>
+<a name="line149">149: </a><font color="#B22222">       1) starts[i] gives the starting index in svalues for stuff going to</font>
+<a name="line150">150: </a><font color="#B22222">       the ith processor</font>
+<a name="line151">151: </a><font color="#B22222">    */</font>
+<a name="line152">152: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc3.html#PetscMalloc3">PetscMalloc3</a>(cnt,&amp;svalues,nsends,&amp;send_waits,size,&amp;starts);
+<a name="line153">153: </a>    starts[0] = 0;
+<a name="line154">154: </a>    <font color="#4169E1">for</font> (i=1; i&lt;size; i++) starts[i] = starts[i-1] + sizes[i-1];
+<a name="line155">155: </a>    <font color="#4169E1">for</font> (i=0; i&lt;cnt; i++)  svalues[starts[owner[i]]++] = rows[i];
+<a name="line156">156: </a>    <font color="#4169E1">for</font> (i=0; i&lt;cnt; i++)  rows[i] = rows[i] - rstart;
+<a name="line157">157: </a>    red-&gt;drows = drows;
+<a name="line158">158: </a>    red-&gt;dcnt  = dcnt;
+<a name="line159">159: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rows);
+
+<a name="line161">161: </a>    starts[0] = 0;
+<a name="line162">162: </a>    <font color="#4169E1">for</font> (i=1; i&lt;size; i++) starts[i] = starts[i-1] + sizes[i-1];
+<a name="line163">163: </a>    count = 0;
+<a name="line164">164: </a>    <font color="#4169E1">for</font> (i=0; i&lt;size; i++) {
+<a name="line165">165: </a>      <font color="#4169E1">if</font> (sizes[i]) {
+<a name="line166">166: </a>        <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Isend.html#MPI_Isend">MPI_Isend</a>(svalues+starts[i],sizes[i],MPIU_INT,i,tag,comm,send_waits+count++);
+<a name="line167">167: </a>      }
+<a name="line168">168: </a>    }
+
+<a name="line170">170: </a>    <font color="#B22222">/*  wait on receives */</font>
+<a name="line171">171: </a>    count = nrecvs;
+<a name="line172">172: </a>    slen  = 0;
+<a name="line173">173: </a>    <font color="#4169E1">while</font> (count) {
+<a name="line174">174: </a>      <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Waitany.html#MPI_Waitany">MPI_Waitany</a>(nrecvs,recv_waits,&amp;imdex,&amp;recv_status);
+<a name="line175">175: </a>      <font color="#B22222">/* unpack receives into our local space */</font>
+<a name="line176">176: </a>      <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Get_count.html#MPI_Get_count">MPI_Get_count</a>(&amp;recv_status,MPIU_INT,&amp;n);
+<a name="line177">177: </a>      slen += n;
+<a name="line178">178: </a>      count--;
+<a name="line179">179: </a>    }
+<a name="line180">180: </a>    <font color="#4169E1">if</font> (slen != recvtotal) <a href="../../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_PLIB,<font color="#666666">"Total message lengths %D not expected %D"</font>,slen,recvtotal);
+
+<a name="line182">182: </a>    <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,slen,rvalues,PETSC_COPY_VALUES,&amp;red-&gt;is);
+
+<a name="line184">184: </a>    <font color="#B22222">/* free up all work space */</font>
+<a name="line185">185: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(olengths1);
+<a name="line186">186: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(onodes1);
+<a name="line187">187: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(rvalues,source,recv_waits);
+<a name="line188">188: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(sizes,owner);
+<a name="line189">189: </a>    <font color="#4169E1">if</font> (nsends) {   <font color="#B22222">/* wait on sends */</font>
+<a name="line190">190: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nsends,&amp;send_status);
+<a name="line191">191: </a>      <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Waitall.html#MPI_Waitall">MPI_Waitall</a>(nsends,send_waits,send_status);
+<a name="line192">192: </a>      <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(send_status);
+<a name="line193">193: </a>    }
+<a name="line194">194: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(svalues,send_waits,starts);
+<a name="line195">195: </a>    <a href="../../../../../docs/manualpages/IS/PetscLayoutDestroy.html#PetscLayoutDestroy">PetscLayoutDestroy</a>(&amp;map);
+<a name="line196">196: </a>    <a href="../../../../../docs/manualpages/IS/PetscLayoutDestroy.html#PetscLayoutDestroy">PetscLayoutDestroy</a>(&amp;nmap);
+
+<a name="line198">198: </a>    <a href="../../../../../docs/manualpages/Vec/VecCreateMPI.html#VecCreateMPI">VecCreateMPI</a>(comm,slen,<a href="../../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>,&amp;red-&gt;b);
+<a name="line199">199: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(red-&gt;b,&amp;red-&gt;x);
+<a name="line200">200: </a>    <a href="../../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(pc-&gt;pmat,&amp;tvec,NULL);
+<a name="line201">201: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(tvec,red-&gt;is,red-&gt;b,NULL,&amp;red-&gt;scatter);
+<a name="line202">202: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;tvec);
+<a name="line203">203: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetSubMatrix.html#MatGetSubMatrix">MatGetSubMatrix</a>(pc-&gt;pmat,red-&gt;is,red-&gt;is,MAT_INITIAL_MATRIX,&amp;tmat);
+<a name="line204">204: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(red-&gt;ksp,tmat,tmat);
+<a name="line205">205: </a>    <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;tmat);
+<a name="line206">206: </a>  }
+
+<a name="line208">208: </a>  <font color="#B22222">/* get diagonal portion of matrix */</font>
+<a name="line209">209: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(red-&gt;diag);
+<a name="line210">210: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(red-&gt;dcnt,&amp;red-&gt;diag);
+<a name="line211">211: </a>  <a href="../../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(pc-&gt;pmat,&amp;diag,NULL);
+<a name="line212">212: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetDiagonal.html#MatGetDiagonal">MatGetDiagonal</a>(pc-&gt;pmat,diag);
+<a name="line213">213: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(diag,&amp;d);
+<a name="line214">214: </a>  <font color="#4169E1">for</font> (i=0; i&lt;red-&gt;dcnt; i++) red-&gt;diag[i] = 1.0/d[red-&gt;drows[i]];
+<a name="line215">215: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(diag,&amp;d);
+<a name="line216">216: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;diag);
+<a name="line217">217: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>(red-&gt;ksp);
+<a name="line218">218: </a>  <font color="#4169E1">return</font>(0);
+<a name="line219">219: </a>}
+
+<a name="line223">223: </a><strong><font color="#4169E1"><a name="PCApply_Redistribute"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApply_Redistribute(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> b,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x)</font></strong>
+<a name="line224">224: </a>{
+<a name="line225">225: </a>  PC_Redistribute   *red = (PC_Redistribute*)pc-&gt;data;
+<a name="line226">226: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line227">227: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          dcnt   = red-&gt;dcnt,i;
+<a name="line228">228: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *drows = red-&gt;drows;
+<a name="line229">229: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *xwork;
+<a name="line230">230: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *bwork,*diag = red-&gt;diag;
+
+<a name="line233">233: </a>  <font color="#4169E1">if</font> (!red-&gt;work) {
+<a name="line234">234: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(b,&amp;red-&gt;work);
+<a name="line235">235: </a>  }
+<a name="line236">236: </a>  <font color="#B22222">/* compute the rows of solution that have diagonal entries only */</font>
+<a name="line237">237: </a>  <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(x,0.0);         <font color="#B22222">/* x = diag(A)^{-1} b */</font>
+<a name="line238">238: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(x,&amp;xwork);
+<a name="line239">239: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(b,&amp;bwork);
+<a name="line240">240: </a>  <font color="#4169E1">for</font> (i=0; i&lt;dcnt; i++) xwork[drows[i]] = diag[i]*bwork[drows[i]];
+<a name="line241">241: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(dcnt);
+<a name="line242">242: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(red-&gt;work,&amp;xwork);
+<a name="line243">243: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(b,&amp;bwork);
+<a name="line244">244: </a>  <font color="#B22222">/* update the right hand side for the reduced system with diagonal rows (and corresponding columns) removed */</font>
+<a name="line245">245: </a>  <a href="../../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a>(pc-&gt;pmat,x,red-&gt;work);
+<a name="line246">246: </a>  <a href="../../../../../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(red-&gt;work,-1.0,b);   <font color="#B22222">/* red-&gt;work = b - A x */</font>
+
+<a name="line248">248: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(red-&gt;scatter,red-&gt;work,red-&gt;b,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line249">249: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(red-&gt;scatter,red-&gt;work,red-&gt;b,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line250">250: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(red-&gt;ksp,red-&gt;b,red-&gt;x);
+<a name="line251">251: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(red-&gt;scatter,red-&gt;x,x,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>);
+<a name="line252">252: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(red-&gt;scatter,red-&gt;x,x,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>);
+<a name="line253">253: </a>  <font color="#4169E1">return</font>(0);
+<a name="line254">254: </a>}
+
+<a name="line258">258: </a><strong><font color="#4169E1"><a name="PCDestroy_Redistribute"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCDestroy_Redistribute(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line259">259: </a>{
+<a name="line260">260: </a>  PC_Redistribute *red = (PC_Redistribute*)pc-&gt;data;
+<a name="line261">261: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line264">264: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;red-&gt;scatter);
+<a name="line265">265: </a>  <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;red-&gt;is);
+<a name="line266">266: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;red-&gt;b);
+<a name="line267">267: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;red-&gt;x);
+<a name="line268">268: </a>  <a href="../../../../../docs/manualpages/KSP/KSPDestroy.html#KSPDestroy">KSPDestroy</a>(&amp;red-&gt;ksp);
+<a name="line269">269: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;red-&gt;work);
+<a name="line270">270: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(red-&gt;drows);
+<a name="line271">271: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(red-&gt;diag);
+<a name="line272">272: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pc-&gt;data);
+<a name="line273">273: </a>  <font color="#4169E1">return</font>(0);
+<a name="line274">274: </a>}
+
+<a name="line278">278: </a><strong><font color="#4169E1"><a name="PCSetFromOptions_Redistribute"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetFromOptions_Redistribute(PetscOptions *PetscOptionsObject,<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line279">279: </a>{
+<a name="line280">280: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line281">281: </a>  PC_Redistribute *red = (PC_Redistribute*)pc-&gt;data;
+
+<a name="line284">284: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(red-&gt;ksp);
+<a name="line285">285: </a>  <font color="#4169E1">return</font>(0);
+<a name="line286">286: </a>}
+
+<a name="line290">290: </a><font color="#B22222">/*@</font>
+<a name="line291">291: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCRedistributeGetKSP.html#PCRedistributeGetKSP">PCRedistributeGetKSP</a> - Gets the <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> created by the <a href="../../../../../docs/manualpages/PC/PCREDISTRIBUTE.html#PCREDISTRIBUTE">PCREDISTRIBUTE</a></font>
+
+<a name="line293">293: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line295">295: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line296">296: </a><font color="#B22222">.  pc - the preconditioner context</font>
+
+<a name="line298">298: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line299">299: </a><font color="#B22222">.  innerksp - the inner <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a></font>
+
+<a name="line301">301: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line303">303: </a><font color="#B22222">.keywords: <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>, redistribute solve</font>
+<a name="line304">304: </a><font color="#B22222">@*/</font>
+<a name="line305">305: </a><strong><font color="#4169E1"><a name="PCRedistributeGetKSP"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../../docs/manualpages/PC/PCRedistributeGetKSP.html#PCRedistributeGetKSP">PCRedistributeGetKSP</a>(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> *innerksp)</font></strong>
+<a name="line306">306: </a>{
+<a name="line307">307: </a>  PC_Redistribute *red = (PC_Redistribute*)pc-&gt;data;
+
+<a name="line312">312: </a>  *innerksp = red-&gt;ksp;
+<a name="line313">313: </a>  <font color="#4169E1">return</font>(0);
+<a name="line314">314: </a>}
+
+<a name="line316">316: </a><font color="#B22222">/* -------------------------------------------------------------------------------------*/</font>
+<a name="line317">317: </a><font color="#B22222">/*MC</font>
+<a name="line318">318: </a><font color="#B22222">     <a href="../../../../../docs/manualpages/PC/PCREDISTRIBUTE.html#PCREDISTRIBUTE">PCREDISTRIBUTE</a> - Redistributes a matrix for load balancing, removing the rows that only have a diagonal entry and then applys a <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> to that new matrix</font>
+
+<a name="line320">320: </a><font color="#B22222">     Options for the redistribute preconditioners can be set with -redistribute_ksp_xxx &lt;values&gt; and -redistribute_pc_xxx &lt;values&gt;</font>
+
+<a name="line322">322: </a><font color="#B22222">     Notes:  Usually run this with -ksp_type preonly</font>
+
+<a name="line324">324: </a><font color="#B22222">     If you have used <a href="../../../../../docs/manualpages/Mat/MatZeroRows.html#MatZeroRows">MatZeroRows</a>() to eliminate (for example, Dirichlet) boundary conditions for a symmetric problem then you can use, for example, -ksp_type preonly</font>
+<a name="line325">325: </a><font color="#B22222">     -pc_type redistribute -redistribute_ksp_type cg -redistribute_pc_type bjacobi -redistribute_sub_pc_type icc to take advantage of the symmetry.</font>
+
+<a name="line327">327: </a><font color="#B22222">     This does NOT call a partitioner to reorder rows to lower communication; the ordering of the rows in the original matrix and redistributed matrix is the same.</font>
+
+<a name="line329">329: </a><font color="#B22222">     Developer Notes: Should add an option to this preconditioner to use a partitioner to redistribute the rows to lower communication.</font>
+
+<a name="line331">331: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line333">333: </a><font color="#B22222">.seealso:  <a href="../../../../../docs/manualpages/PC/PCCreate.html#PCCreate">PCCreate</a>(), <a href="../../../../../docs/manualpages/PC/PCSetType.html#PCSetType">PCSetType</a>(), <a href="../../../../../docs/manualpages/PC/PCType.html#PCType">PCType</a> (for list of available types), <a href="../../../../../docs/manualpages/PC/PCRedistributeGetKSP.html#PCRedistributeGetKSP">PCRedistributeGetKSP</a>()</font>
+<a name="line334">334: </a><font color="#B22222">M*/</font>
+
+<a name="line338">338: </a><strong><font color="#4169E1"><a name="PCCreate_Redistribute"></a>PETSC_EXTERN <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCCreate_Redistribute(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line339">339: </a>{
+<a name="line340">340: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line341">341: </a>  PC_Redistribute *red;
+<a name="line342">342: </a>  const char      *prefix;
+
+<a name="line345">345: </a>  <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(pc,&amp;red);
+<a name="line346">346: </a>  pc-&gt;data = (void*)red;
+
+<a name="line348">348: </a>  pc-&gt;ops-&gt;apply          = PCApply_Redistribute;
+<a name="line349">349: </a>  pc-&gt;ops-&gt;applytranspose = 0;
+<a name="line350">350: </a>  pc-&gt;ops-&gt;setup          = PCSetUp_Redistribute;
+<a name="line351">351: </a>  pc-&gt;ops-&gt;destroy        = PCDestroy_Redistribute;
+<a name="line352">352: </a>  pc-&gt;ops-&gt;setfromoptions = PCSetFromOptions_Redistribute;
+<a name="line353">353: </a>  pc-&gt;ops-&gt;view           = PCView_Redistribute;
+
+<a name="line355">355: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),&amp;red-&gt;ksp);
+<a name="line356">356: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetErrorIfNotConverged.html#KSPSetErrorIfNotConverged">KSPSetErrorIfNotConverged</a>(red-&gt;ksp,pc-&gt;erroriffailure);
+<a name="line357">357: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectIncrementTabLevel.html#PetscObjectIncrementTabLevel">PetscObjectIncrementTabLevel</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)red-&gt;ksp,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,1);
+<a name="line358">358: </a>  PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)red-&gt;ksp);
+<a name="line359">359: </a>  <a href="../../../../../docs/manualpages/PC/PCGetOptionsPrefix.html#PCGetOptionsPrefix">PCGetOptionsPrefix</a>(pc,&amp;prefix);
+<a name="line360">360: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetOptionsPrefix.html#KSPSetOptionsPrefix">KSPSetOptionsPrefix</a>(red-&gt;ksp,prefix);
+<a name="line361">361: </a>  <a href="../../../../../docs/manualpages/KSP/KSPAppendOptionsPrefix.html#KSPAppendOptionsPrefix">KSPAppendOptionsPrefix</a>(red-&gt;ksp,<font color="#666666">"redistribute_"</font>);
+<a name="line362">362: </a>  <font color="#4169E1">return</font>(0);
+<a name="line363">363: </a>}
+</pre>
+</body>
+
+</html>

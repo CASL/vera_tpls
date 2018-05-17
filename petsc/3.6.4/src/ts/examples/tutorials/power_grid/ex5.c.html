@@ -1,0 +1,347 @@
+<center><a href="ex5.c">Actual source code: ex5.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ts/examples/tutorials/power_grid/ex5.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2016-04-12T16:52:49+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.6.4 2016-04-12</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.6.4 v3.6.4 src/ts/examples/tutorials/power_grid/ex5.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line2">  2: </a>static char help[] = <font color="#666666">"Basic equation for an induction generator driven by a wind turbine.\n"</font>;
+
+</pre><script type="text/x-mathjax-config">
+                   MathJax.Hub.Config({
+                       tex2jax: {inlineMath: [['$','$'], ['\\(','\\)']]}
+                   });
+                 </script>
+                 <script type="text/javascript"
+                      src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+                 </script>\begin{eqnarray}<BR>
+
+          T_w\frac{dv_w}{dt} &amp; = &amp; v_w - v_we \\<BR>
+
+          2(H_t+H_m)\frac{ds}{dt} &amp; = &amp; P_w - P_e<BR>
+
+\end{eqnarray}<BR>
+
+<pre width="80"><a name="line10"> 10: </a><font color="#B22222">/*</font>
+<a name="line11"> 11: </a><font color="#B22222"> - Pw is the power extracted from the wind turbine given by</font>
+<a name="line12"> 12: </a><font color="#B22222">           Pw = 0.5*\rho*cp*Ar*vw^3</font>
+
+<a name="line14"> 14: </a><font color="#B22222"> - The wind speed time series is modeled using a Weibull distribution and then</font>
+<a name="line15"> 15: </a><font color="#B22222">   passed through a low pass filter (with time constant T_w).</font>
+<a name="line16"> 16: </a><font color="#B22222"> - v_we is the wind speed data calculated using Weibull distribution while v_w is</font>
+<a name="line17"> 17: </a><font color="#B22222">   the output of the filter.</font>
+<a name="line18"> 18: </a><font color="#B22222"> - P_e is assumed as constant electrical torque</font>
+
+<a name="line20"> 20: </a><font color="#B22222"> - This example does not work with adaptive time stepping!</font>
+
+<a name="line22"> 22: </a><font color="#B22222">Reference:</font>
+<a name="line23"> 23: </a><font color="#B22222">Power System Modeling and Scripting - F. Milano</font>
+<a name="line24"> 24: </a><font color="#B22222">*/</font>
+<a name="line25"> 25: </a><font color="#A020F0">#include &lt;petscts.h&gt;</font>
+
+<a name="line27"> 27: </a><strong><font color="#228B22">#define freq 50</font></strong>
+<a name="line28"> 28: </a><strong><font color="#228B22">#define ws (2*PETSC_PI*freq)</font></strong>
+<a name="line29"> 29: </a><strong><font color="#228B22">#define MVAbase 100</font></strong>
+
+<a name="line31"> 31: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line32"> 32: </a>  <font color="#B22222">/* Parameters for wind speed model */</font>
+<a name="line33"> 33: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  nsamples; <font color="#B22222">/* Number of wind samples */</font>
+<a name="line34"> 34: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> cw;   <font color="#B22222">/* Scale factor for Weibull distribution */</font>
+<a name="line35"> 35: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> kw;   <font color="#B22222">/* Shape factor for Weibull distribution */</font>
+<a name="line36"> 36: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>       wind_data; <font color="#B22222">/* Vector to hold wind speeds */</font>
+<a name="line37"> 37: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>       t_wind; <font color="#B22222">/* Vector to hold wind speed times */</font>
+<a name="line38"> 38: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> Tw;     <font color="#B22222">/* Filter time constant */</font>
+
+<a name="line40"> 40: </a>  <font color="#B22222">/* Wind turbine parameters */</font>
+<a name="line41"> 41: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> Rt; <font color="#B22222">/* Rotor radius */</font>
+<a name="line42"> 42: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> Ar; <font color="#B22222">/* Area swept by rotor (pi*R*R) */</font>
+<a name="line43"> 43: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   nGB; <font color="#B22222">/* Gear box ratio */</font>
+<a name="line44"> 44: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   Ht;  <font color="#B22222">/* Turbine inertia constant */</font>
+<a name="line45"> 45: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   rho; <font color="#B22222">/* Atmospheric pressure */</font>
+
+<a name="line47"> 47: </a>  <font color="#B22222">/* Induction generator parameters */</font>
+<a name="line48"> 48: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    np; <font color="#B22222">/* Number of poles */</font>
+<a name="line49"> 49: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   Xm; <font color="#B22222">/* Magnetizing reactance */</font>
+<a name="line50"> 50: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   Xs; <font color="#B22222">/* Stator Reactance */</font>
+<a name="line51"> 51: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   Xr; <font color="#B22222">/* Rotor reactance */</font>
+<a name="line52"> 52: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   Rs; <font color="#B22222">/* Stator resistance */</font>
+<a name="line53"> 53: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   Rr; <font color="#B22222">/* Rotor resistance */</font>
+<a name="line54"> 54: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   Hm; <font color="#B22222">/* Motor inertia constant */</font>
+<a name="line55"> 55: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   Xp; <font color="#B22222">/* Xs + Xm*Xr/(Xm + Xr) */</font>
+<a name="line56"> 56: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> Te; <font color="#B22222">/* Electrical Torque */</font>
+
+<a name="line58"> 58: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>      Sol;   <font color="#B22222">/* Solution matrix */</font>
+<a name="line59"> 59: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> stepnum;   <font color="#B22222">/* Column number of solution matrix */</font>
+<a name="line60"> 60: </a>} AppCtx;
+
+<a name="line62"> 62: </a><font color="#B22222">/* Initial values computed by Power flow and initialization */</font>
+<a name="line63"> 63: </a><a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> s = -0.00011577790353;
+<a name="line64"> 64: </a><font color="#B22222">/*Pw = 0.011064344110238; %Te*wm */</font>
+<a name="line65"> 65: </a><a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       vwa  = 22.317142184449754;
+<a name="line66"> 66: </a><a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         tmax = 20.0;
+
+<a name="line68"> 68: </a><font color="#B22222">/* Saves the solution at each time to a matrix */</font>
+<a name="line71"> 71: </a><strong><font color="#4169E1"><a name="SaveSolution"></a><a href="../../../.._grid/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> SaveSolution(<a href="../../../.._grid/../docs/manualpages/TS/TS.html#TS">TS</a> ts)</font></strong>
+<a name="line72"> 72: </a>{
+<a name="line73"> 73: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line74"> 74: </a>  AppCtx            *user;
+<a name="line75"> 75: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>               X;
+<a name="line76"> 76: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *mat;
+<a name="line77"> 77: </a>  const <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x;
+<a name="line78"> 78: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          idx;
+<a name="line79"> 79: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         t;
+
+<a name="line82"> 82: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSGetApplicationContext.html#TSGetApplicationContext">TSGetApplicationContext</a>(ts,&amp;user);
+<a name="line83"> 83: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSGetTime.html#TSGetTime">TSGetTime</a>(ts,&amp;t);
+<a name="line84"> 84: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSGetSolution.html#TSGetSolution">TSGetSolution</a>(ts,&amp;X);
+<a name="line85"> 85: </a>  idx      =  3*user-&gt;stepnum;
+<a name="line86"> 86: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDenseGetArray.html#MatDenseGetArray">MatDenseGetArray</a>(user-&gt;Sol,&amp;mat);
+<a name="line87"> 87: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(X,&amp;x);
+<a name="line88"> 88: </a>  mat[idx] = t;
+<a name="line89"> 89: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscMemcpy.html#PetscMemcpy">PetscMemcpy</a>(mat+idx+1,x,2*<font color="#4169E1">sizeof</font>(<a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>));
+<a name="line90"> 90: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDenseRestoreArray.html#MatDenseRestoreArray">MatDenseRestoreArray</a>(user-&gt;Sol,&amp;mat);
+<a name="line91"> 91: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(X,&amp;x);
+<a name="line92"> 92: </a>  user-&gt;stepnum++;
+<a name="line93"> 93: </a>  <font color="#4169E1">return</font>(0);
+<a name="line94"> 94: </a>}
+
+
+<a name="line99"> 99: </a><font color="#B22222">/* Computes the wind speed using Weibull distribution */</font>
+<a name="line100">100: </a><strong><font color="#4169E1"><a name="WindSpeeds"></a><a href="../../../.._grid/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> WindSpeeds(AppCtx *user)</font></strong>
+<a name="line101">101: </a>{
+<a name="line103">103: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *x,*t,avg_dev,sum;
+<a name="line104">104: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i;
+
+<a name="line107">107: </a>  user-&gt;cw       = 5;
+<a name="line108">108: </a>  user-&gt;kw       = 2; <font color="#B22222">/* Rayleigh distribution */</font>
+<a name="line109">109: </a>  user-&gt;nsamples = 2000;
+<a name="line110">110: </a>  user-&gt;Tw       = 0.2;
+<a name="line111">111: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscOptionsBegin.html#PetscOptionsBegin">PetscOptionsBegin</a>(<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,NULL,<font color="#666666">"Wind Speed Options"</font>,<font color="#666666">""</font>);
+<a name="line112">112: </a>  {
+<a name="line113">113: </a>    <a href="../../../.._grid/../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-cw"</font>,<font color="#666666">""</font>,<font color="#666666">""</font>,user-&gt;cw,&amp;user-&gt;cw,NULL);
+<a name="line114">114: </a>    <a href="../../../.._grid/../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-kw"</font>,<font color="#666666">""</font>,<font color="#666666">""</font>,user-&gt;kw,&amp;user-&gt;kw,NULL);
+<a name="line115">115: </a>    <a href="../../../.._grid/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-nsamples"</font>,<font color="#666666">""</font>,<font color="#666666">""</font>,user-&gt;nsamples,&amp;user-&gt;nsamples,NULL);
+<a name="line116">116: </a>    <a href="../../../.._grid/../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-Tw"</font>,<font color="#666666">""</font>,<font color="#666666">""</font>,user-&gt;Tw,&amp;user-&gt;Tw,NULL);
+<a name="line117">117: </a>  }
+<a name="line118">118: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscOptionsEnd.html#PetscOptionsEnd">PetscOptionsEnd</a>();
+<a name="line119">119: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;user-&gt;wind_data);
+<a name="line120">120: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a>(user-&gt;wind_data,<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,user-&gt;nsamples);
+<a name="line121">121: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>(user-&gt;wind_data);
+<a name="line122">122: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(user-&gt;wind_data,&amp;user-&gt;t_wind);
+
+<a name="line124">124: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(user-&gt;t_wind,&amp;t);
+<a name="line125">125: </a>  <font color="#4169E1">for</font> (i=0; i &lt; user-&gt;nsamples; i++) t[i] = (i+1)*tmax/user-&gt;nsamples;
+<a name="line126">126: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(user-&gt;t_wind,&amp;t);
+
+<a name="line128">128: </a>  <font color="#B22222">/* Wind speed deviation = (-log(rand)/cw)^(1/kw) */</font>
+<a name="line129">129: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecSetRandom.html#VecSetRandom">VecSetRandom</a>(user-&gt;wind_data,NULL);
+<a name="line130">130: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecLog.html#VecLog">VecLog</a>(user-&gt;wind_data);
+<a name="line131">131: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecScale.html#VecScale">VecScale</a>(user-&gt;wind_data,-1/user-&gt;cw);
+<a name="line132">132: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(user-&gt;wind_data,&amp;x);
+<a name="line133">133: </a>  <font color="#4169E1">for</font> (i=0;i &lt; user-&gt;nsamples;i++) x[i] = PetscPowScalar(x[i],(1/user-&gt;kw));
+<a name="line134">134: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(user-&gt;wind_data,&amp;x);
+<a name="line135">135: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecSum.html#VecSum">VecSum</a>(user-&gt;wind_data,&amp;sum);
+<a name="line136">136: </a>  avg_dev = sum/user-&gt;nsamples;
+<a name="line137">137: </a>  <font color="#B22222">/* Wind speed (t) = (1 + wind speed deviation(t) - avg_dev)*average wind speed */</font>
+<a name="line138">138: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecShift.html#VecShift">VecShift</a>(user-&gt;wind_data,(1-avg_dev));
+<a name="line139">139: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecScale.html#VecScale">VecScale</a>(user-&gt;wind_data,vwa);
+<a name="line140">140: </a>  <font color="#4169E1">return</font>(0);
+<a name="line141">141: </a>}
+
+<a name="line145">145: </a><font color="#B22222">/* Sets the parameters for wind turbine */</font>
+<a name="line146">146: </a><strong><font color="#4169E1"><a name="SetWindTurbineParams"></a><a href="../../../.._grid/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> SetWindTurbineParams(AppCtx *user)</font></strong>
+<a name="line147">147: </a>{
+<a name="line149">149: </a>  user-&gt;Rt  = 35;
+<a name="line150">150: </a>  user-&gt;Ar  = PETSC_PI*user-&gt;Rt*user-&gt;Rt;
+<a name="line151">151: </a>  user-&gt;nGB = 1.0/89.0;
+<a name="line152">152: </a>  user-&gt;rho = 1.225;
+<a name="line153">153: </a>  user-&gt;Ht  = 1.5;
+<a name="line154">154: </a>  <font color="#4169E1">return</font>(0);
+<a name="line155">155: </a>}
+
+<a name="line159">159: </a><font color="#B22222">/* Sets the parameters for induction generator */</font>
+<a name="line160">160: </a><strong><font color="#4169E1"><a name="SetInductionGeneratorParams"></a><a href="../../../.._grid/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> SetInductionGeneratorParams(AppCtx *user)</font></strong>
+<a name="line161">161: </a>{
+<a name="line163">163: </a>  user-&gt;np = 4;
+<a name="line164">164: </a>  user-&gt;Xm = 3.0;
+<a name="line165">165: </a>  user-&gt;Xs = 0.1;
+<a name="line166">166: </a>  user-&gt;Xr = 0.08;
+<a name="line167">167: </a>  user-&gt;Rs = 0.01;
+<a name="line168">168: </a>  user-&gt;Rr = 0.01;
+<a name="line169">169: </a>  user-&gt;Xp = user-&gt;Xs + user-&gt;Xm*user-&gt;Xr/(user-&gt;Xm + user-&gt;Xr);
+<a name="line170">170: </a>  user-&gt;Hm = 1.0;
+<a name="line171">171: </a>  user-&gt;Te = 0.011063063063251968;
+<a name="line172">172: </a>  <font color="#4169E1">return</font>(0);
+<a name="line173">173: </a>}
+
+<a name="line177">177: </a><font color="#B22222">/* Computes the power extracted from wind */</font>
+<a name="line178">178: </a><strong><font color="#4169E1"><a name="GetWindPower"></a><a href="../../../.._grid/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> GetWindPower(<a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> wm,<a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> vw,<a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *Pw,AppCtx *user)</font></strong>
+<a name="line179">179: </a>{
+<a name="line180">180: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> temp,lambda,lambda_i,cp;
+
+<a name="line183">183: </a>  temp     = user-&gt;nGB*2*user-&gt;Rt*ws/user-&gt;np;
+<a name="line184">184: </a>  lambda   = temp*wm/vw;
+<a name="line185">185: </a>  lambda_i = 1/(1/lambda + 0.002);
+<a name="line186">186: </a>  cp       = 0.44*(125/lambda_i - 6.94)*PetscExpScalar(-16.5/lambda_i);
+<a name="line187">187: </a>  *Pw      = 0.5*user-&gt;rho*cp*user-&gt;Ar*vw*vw*vw/(MVAbase*1e6);
+<a name="line188">188: </a>  <font color="#4169E1">return</font>(0);
+<a name="line189">189: </a>}
+
+<a name="line193">193: </a><font color="#B22222">/*</font>
+<a name="line194">194: </a><font color="#B22222">     Defines the ODE passed to the ODE solver</font>
+<a name="line195">195: </a><font color="#B22222">*/</font>
+<a name="line196">196: </a><strong><font color="#4169E1"><a name="IFunction"></a>static <a href="../../../.._grid/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IFunction(<a href="../../../.._grid/../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../.._grid/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t,<a href="../../../.._grid/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U,<a href="../../../.._grid/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> Udot,<a href="../../../.._grid/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F,AppCtx *user)</font></strong>
+<a name="line197">197: </a>{
+<a name="line198">198: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line199">199: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *f,wm,Pw,*wd;
+<a name="line200">200: </a>  const <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *u,*udot;
+<a name="line201">201: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          stepnum;
+
+<a name="line204">204: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSGetTimeStepNumber.html#TSGetTimeStepNumber">TSGetTimeStepNumber</a>(ts,&amp;stepnum);
+<a name="line205">205: </a>  <font color="#B22222">/*  The next three lines allow us to access the entries of the vectors directly */</font>
+<a name="line206">206: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(U,&amp;u);
+<a name="line207">207: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(Udot,&amp;udot);
+<a name="line208">208: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(F,&amp;f);
+<a name="line209">209: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(user-&gt;wind_data,&amp;wd);
+
+<a name="line211">211: </a>  f[0] = user-&gt;Tw*udot[0] - wd[stepnum] + u[0];
+<a name="line212">212: </a>  wm   = 1-u[1];
+<a name="line213">213: </a>  GetWindPower(wm,u[0],&amp;Pw,user);
+<a name="line214">214: </a>  f[1] = 2.0*(user-&gt;Ht+user-&gt;Hm)*udot[1] - Pw/wm + user-&gt;Te;
+
+<a name="line216">216: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(user-&gt;wind_data,&amp;wd);
+<a name="line217">217: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(U,&amp;u);
+<a name="line218">218: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(Udot,&amp;udot);
+<a name="line219">219: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(F,&amp;f);
+<a name="line220">220: </a>  <font color="#4169E1">return</font>(0);
+<a name="line221">221: </a>}
+
+<a name="line225">225: </a><strong><font color="#4169E1"><a name="main"></a>int main(int argc,char **argv)</font></strong>
+<a name="line226">226: </a>{
+<a name="line227">227: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TS.html#TS">TS</a>             ts;            <font color="#B22222">/* ODE integrator */</font>
+<a name="line228">228: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            U;             <font color="#B22222">/* solution will be stored here */</font>
+<a name="line229">229: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            A;             <font color="#B22222">/* Jacobian matrix */</font>
+<a name="line231">231: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+<a name="line232">232: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       n = 2,idx;
+<a name="line233">233: </a>  AppCtx         user;
+<a name="line234">234: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *u;
+<a name="line235">235: </a>  <a href="../../../.._grid/../docs/manualpages/SNES/SNES.html#SNES">SNES</a>           snes;
+<a name="line236">236: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *mat;
+<a name="line237">237: </a>  const <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x;
+<a name="line238">238: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>         B;
+<a name="line239">239: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *amat;
+<a name="line240">240: </a>  <a href="../../../.._grid/../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer;
+
+
+
+<a name="line244">244: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line245">245: </a><font color="#B22222">     Initialize program</font>
+<a name="line246">246: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line247">247: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(&amp;argc,&amp;argv,(char*)0,help);
+<a name="line248">248: </a>  <a href="http://www.mcs.anl.gov/mpi/www/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;size);
+<a name="line249">249: </a>  <font color="#4169E1">if</font> (size &gt; 1) <a href="../../../.._grid/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,PETSC_ERR_SUP,<font color="#666666">"Only for sequential runs"</font>);
+
+<a name="line251">251: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line252">252: </a><font color="#B22222">    Create necessary matrix and vectors</font>
+<a name="line253">253: </a><font color="#B22222">    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line254">254: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;A);
+<a name="line255">255: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(A,n,n,<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>,<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>);
+<a name="line256">256: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(A);
+<a name="line257">257: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatSetUp.html#MatSetUp">MatSetUp</a>(A);
+
+<a name="line259">259: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(A,&amp;U,NULL);
+
+<a name="line261">261: </a>  <font color="#B22222">/* Create wind speed data using Weibull distribution */</font>
+<a name="line262">262: </a>  WindSpeeds(&amp;user);
+<a name="line263">263: </a>  <font color="#B22222">/* Set parameters for wind turbine and induction generator */</font>
+<a name="line264">264: </a>  SetWindTurbineParams(&amp;user);
+<a name="line265">265: </a>  SetInductionGeneratorParams(&amp;user);
+
+<a name="line267">267: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(U,&amp;u);
+<a name="line268">268: </a>  u[0] = vwa;
+<a name="line269">269: </a>  u[1] = s;
+<a name="line270">270: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(U,&amp;u);
+
+<a name="line272">272: </a>  <font color="#B22222">/* Create matrix to save solutions at each time step */</font>
+<a name="line273">273: </a>  user.stepnum = 0;
+
+<a name="line275">275: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatCreateSeqDense.html#MatCreateSeqDense">MatCreateSeqDense</a>(<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,3,2010,NULL,&amp;user.Sol);
+
+<a name="line277">277: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line278">278: </a><font color="#B22222">     Create timestepping solver context</font>
+<a name="line279">279: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line280">280: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSCreate.html#TSCreate">TSCreate</a>(<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;ts);
+<a name="line281">281: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSSetProblemType.html#TSSetProblemType">TSSetProblemType</a>(ts,TS_NONLINEAR);
+<a name="line282">282: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSSetType.html#TSSetType">TSSetType</a>(ts,<a href="../../../.._grid/../docs/manualpages/TS/TSBEULER.html#TSBEULER">TSBEULER</a>);
+<a name="line283">283: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSSetIFunction.html#TSSetIFunction">TSSetIFunction</a>(ts,NULL,(TSIFunction) IFunction,&amp;user);
+
+<a name="line285">285: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSGetSNES.html#TSGetSNES">TSGetSNES</a>(ts,&amp;snes);
+<a name="line286">286: </a>  <a href="../../../.._grid/../docs/manualpages/SNES/SNESSetJacobian.html#SNESSetJacobian">SNESSetJacobian</a>(snes,A,A,<a href="../../../.._grid/../docs/manualpages/SNES/SNESComputeJacobianDefault.html#SNESComputeJacobianDefault">SNESComputeJacobianDefault</a>,NULL);
+<a name="line287">287: </a>  <font color="#B22222">/*  <a href="../../../.._grid/../docs/manualpages/TS/TSSetIJacobian.html#TSSetIJacobian">TSSetIJacobian</a>(ts,A,A,(TSIJacobian)IJacobian,&amp;user); */</font>
+<a name="line288">288: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSSetApplicationContext.html#TSSetApplicationContext">TSSetApplicationContext</a>(ts,&amp;user);
+
+<a name="line290">290: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line291">291: </a><font color="#B22222">     Set initial conditions</font>
+<a name="line292">292: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line293">293: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSSetSolution.html#TSSetSolution">TSSetSolution</a>(ts,U);
+
+<a name="line295">295: </a>  <font color="#B22222">/* Save initial solution */</font>
+<a name="line296">296: </a>  idx=3*user.stepnum;
+
+<a name="line298">298: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDenseGetArray.html#MatDenseGetArray">MatDenseGetArray</a>(user.Sol,&amp;mat);
+<a name="line299">299: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(U,&amp;x);
+
+<a name="line301">301: </a>  mat[idx] = 0.0;
+
+<a name="line303">303: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscMemcpy.html#PetscMemcpy">PetscMemcpy</a>(mat+idx+1,x,2*<font color="#4169E1">sizeof</font>(<a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>));
+<a name="line304">304: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDenseRestoreArray.html#MatDenseRestoreArray">MatDenseRestoreArray</a>(user.Sol,&amp;mat);
+<a name="line305">305: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(U,&amp;x);
+<a name="line306">306: </a>  user.stepnum++;
+
+
+<a name="line309">309: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line310">310: </a><font color="#B22222">     Set solver options</font>
+<a name="line311">311: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line312">312: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSSetDuration.html#TSSetDuration">TSSetDuration</a>(ts,2000,20.0);
+<a name="line313">313: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSSetInitialTimeStep.html#TSSetInitialTimeStep">TSSetInitialTimeStep</a>(ts,0.0,.01);
+<a name="line314">314: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSSetFromOptions.html#TSSetFromOptions">TSSetFromOptions</a>(ts);
+<a name="line315">315: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSSetPostStep.html#TSSetPostStep">TSSetPostStep</a>(ts,SaveSolution);
+<a name="line316">316: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line317">317: </a><font color="#B22222">     Solve nonlinear system</font>
+<a name="line318">318: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line319">319: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSSolve.html#TSSolve">TSSolve</a>(ts,U);
+
+<a name="line321">321: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatCreateSeqDense.html#MatCreateSeqDense">MatCreateSeqDense</a>(<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,3,user.stepnum,NULL,&amp;B);
+<a name="line322">322: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDenseGetArray.html#MatDenseGetArray">MatDenseGetArray</a>(user.Sol,&amp;mat);
+<a name="line323">323: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDenseGetArray.html#MatDenseGetArray">MatDenseGetArray</a>(B,&amp;amat);
+<a name="line324">324: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscMemcpy.html#PetscMemcpy">PetscMemcpy</a>(amat,mat,user.stepnum*3*<font color="#4169E1">sizeof</font>(<a href="../../../.._grid/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>));
+<a name="line325">325: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDenseRestoreArray.html#MatDenseRestoreArray">MatDenseRestoreArray</a>(B,&amp;amat);
+<a name="line326">326: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDenseRestoreArray.html#MatDenseRestoreArray">MatDenseRestoreArray</a>(user.Sol,&amp;mat);
+
+<a name="line328">328: </a>  <a href="../../../.._grid/../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(<a href="../../../.._grid/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,<font color="#666666">"out.bin"</font>,FILE_MODE_WRITE,&amp;viewer);
+<a name="line329">329: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(B,viewer);
+<a name="line330">330: </a>  <a href="../../../.._grid/../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(&amp;viewer);
+<a name="line331">331: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;user.Sol);
+<a name="line332">332: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;B);
+<a name="line333">333: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line334">334: </a><font color="#B22222">     Free work space.  All PETSc objects should be destroyed when they are no longer needed.</font>
+<a name="line335">335: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line336">336: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;user.wind_data);
+<a name="line337">337: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;user.t_wind);
+<a name="line338">338: </a>  <a href="../../../.._grid/../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;A);
+<a name="line339">339: </a>  <a href="../../../.._grid/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;U);
+<a name="line340">340: </a>  <a href="../../../.._grid/../docs/manualpages/TS/TSDestroy.html#TSDestroy">TSDestroy</a>(&amp;ts);
+
+<a name="line342">342: </a>  <a href="../../../.._grid/../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>();
+<a name="line343">343: </a>  <font color="#4169E1">return</font>(0);
+<a name="line344">344: </a>}
+</pre>
+</body>
+
+</html>

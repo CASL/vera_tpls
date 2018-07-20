@@ -4753,16 +4753,7 @@ db_hdf5_process_file_options(int opts_set_id, int mode)
 
         /* default HDF5 mpi drivers */
         case DB_FILE_OPTS_H5_DEFAULT_MPIP:
-        {
-#ifdef H5_HAVE_PARALLEL
-            h5status |= H5Pset_fapl_mpiposix(retval, MPI_COMM_SELF, TRUE);
-#else
-            H5Pclose(retval);
-            return db_perror("HDF5 MPI VFD", E_NOTENABLEDINBUILD, me);
-#endif
-            break;
-        }
-
+       /* FALLTHROUGH */
         case DB_FILE_OPTS_H5_DEFAULT_MPIO:
         {
 #ifdef H5_HAVE_PARALLEL
@@ -5069,15 +5060,9 @@ db_hdf5_process_file_options(int opts_set_id, int mode)
                     if ((p = DBGetOption(opts, DBOPT_H5_MPIP_NO_GPFS_HINTS)))
                         use_gpfs_hints = FALSE;
 
-                    if (vfd == DB_H5VFD_MPIO)
-                    {
-                        h5status |= H5Pset_fapl_mpio(retval, mpi_comm, mpi_info);
-                        if (created_info) MPI_Info_free(&mpi_info);
-                    }
-                    else
-                    {
-                        h5status |= H5Pset_fapl_mpiposix(retval, mpi_comm, use_gpfs_hints);
-                    }
+                    h5status |= H5Pset_fapl_mpio(retval, mpi_comm, mpi_info);
+                    if (created_info) MPI_Info_free(&mpi_info);
+
 #else 
                     H5Pclose(retval);
                     return db_perror("HDF5 MPI VFD", E_NOTENABLEDINBUILD, me);

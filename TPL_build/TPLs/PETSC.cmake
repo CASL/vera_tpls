@@ -56,9 +56,9 @@ IF ( CMAKE_BUILD_PETSC )
       ${BUILD_OPTS}
       --with-blas-lib=${BLAS_LIBS}
       --with-lapack-lib=${LAPACK_LIBS}
-      "--CFLAGS=-fPIC -fopenmp ${CMAKE_C_FLAGS}" 
-      "--CXXFLAGS=-fPIC -fopenmp ${CMAKE_CXX_FLAGS}" 
-      "--FFLAGS=-fPIC -fopenmp ${CMAKE_Fortran_FLAGS}"
+      "--CFLAGS=-fPIC ${CMAKE_C_FLAGS}" 
+      "--CXXFLAGS=-fPIC ${CMAKE_CXX_FLAGS}" 
+      "--FFLAGS=-fPIC ${CMAKE_Fortran_FLAGS}"
       )
     IF ( ENABLE_SHARED AND ENABLE_STATIC )
         MESSAGE(FATAL_ERROR "Compiling petsc with both static and shared libraries is not yet supported")
@@ -99,12 +99,12 @@ IF ( CMAKE_BUILD_PETSC )
       --with-cxx=mpicxx
       --with-fc=${CMAKE_Fortran_COMPILER}
       CC=${CMAKE_C_COMPILER} CXX=mpicxx FC=${CMAKE_Fortran_COMPILER} F77=${CMAKE_Fortran_COMPILER} F90=${CMAKE_Fortran_COMPILER} 
-      "--CFLAGS=-fPIC -fopenmp ${CMAKE_C_FLAGS}"
-      "--CXXFLAGS=-fPIC -fopenmp ${CMAKE_CXX_FLAGS}"
-      "--FFLAGS=-fPIC -fopenmp ${CMAKE_Fortran_FLAGS}"
-      "--FCFLAGS=-fPIC -fopenmp ${CMAKE_Fortran_FLAGS}"
-      "--F90FLAGS=-fPIC -fopenmp ${CMAKE_Fortran_FLAGS}"
-      "--F77FLAGS=-fPIC -fopenmp ${CMAKE_Fortran_FLAGS}"
+      "--CFLAGS=-fPIC ${CMAKE_C_FLAGS}"
+      "--CXXFLAGS=-fPIC ${CMAKE_CXX_FLAGS}"
+      "--FFLAGS=-fPIC ${CMAKE_Fortran_FLAGS}"
+      "--FCFLAGS=-fPIC ${CMAKE_Fortran_FLAGS}"
+      "--F90FLAGS=-fPIC ${CMAKE_Fortran_FLAGS}"
+      "--F77FLAGS=-fPIC ${CMAKE_Fortran_FLAGS}"
       )
     IF ( ENABLE_SHARED AND ENABLE_STATIC )
         MESSAGE(FATAL_ERROR "Compiling petsc with both static and shared libraries is not yet supported")

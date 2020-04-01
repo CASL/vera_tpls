@@ -1,0 +1,366 @@
+<center><a href="plexmed.c">Actual source code: plexmed.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/dm/impls/plex/plexmed.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:02:31+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/dm/impls/plex/plexmed.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><strong><font color="#228B22">#define PETSCDM_DLL</font></strong>
+<a name="line2">  2: </a> #include <A href="../../../../include/petsc/private/dmpleximpl.h.html">&lt;petsc/private/dmpleximpl.h&gt;</A>
+
+<a name="line4">  4: </a><font color="#A020F0">#if defined(PETSC_HAVE_MED)</font>
+<a name="line5">  5: </a><font color="#A020F0">#include &lt;med.h&gt;</font>
+<a name="line6">  6: </a><font color="#A020F0">#endif</font>
+
+<a name="line8">  8: </a><font color="#B22222">/*@C</font>
+<a name="line9">  9: </a><font color="#B22222">  <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateMedFromFile.html#DMPlexCreateMedFromFile">DMPlexCreateMedFromFile</a> - Create a DMPlex mesh from a (Salome-)Med file.</font>
+
+<a name="line11"> 11: </a><font color="#B22222">+ comm        - The MPI communicator</font>
+<a name="line12"> 12: </a><font color="#B22222">. filename    - Name of the .med file</font>
+<a name="line13"> 13: </a><font color="#B22222">- interpolate - Create faces and edges in the mesh</font>
+
+<a name="line15"> 15: </a><font color="#B22222">  Output Parameter:</font>
+<a name="line16"> 16: </a><font color="#B22222">. dm  - The <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> object representing the mesh</font>
+
+<a name="line18"> 18: </a><font color="#B22222">  Note: https://www.salome-platform.org/user-section/about/med, http://docs.salome-platform.org/latest/MED_index.html</font>
+
+<a name="line20"> 20: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line22"> 22: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateFromFile.html#DMPlexCreateFromFile">DMPlexCreateFromFile</a>(), <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateGmsh.html#DMPlexCreateGmsh">DMPlexCreateGmsh</a>(), <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreate.html#DMPlexCreate">DMPlexCreate</a>()</font>
+<a name="line23"> 23: </a><font color="#B22222">@*/</font>
+<a name="line24"> 24: </a><strong><font color="#4169E1"><a name="DMPlexCreateMedFromFile"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateMedFromFile.html#DMPlexCreateMedFromFile">DMPlexCreateMedFromFile</a>(<a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm, const char filename[], <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> interpolate, <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> *dm)</font></strong>
+<a name="line25"> 25: </a>{
+<a name="line26"> 26: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>     rank, size;
+<a name="line27"> 27: </a><font color="#A020F0">#if defined(PETSC_HAVE_MED)</font>
+<a name="line28"> 28: </a>  med_idt         fileID;
+<a name="line29"> 29: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        i, ngeo, spaceDim, meshDim;
+<a name="line30"> 30: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        numVertices = 0, numCells = 0, c, numCorners, numCellsLocal, numVerticesLocal;
+<a name="line31"> 31: </a>  med_int        *medCellList;
+<a name="line32"> 32: </a>  int            *cellList;
+<a name="line33"> 33: </a>  med_float      *coordinates = NULL;
+<a name="line34"> 34: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      *vertcoords = NULL;
+<a name="line35"> 35: </a>  <a href="../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a>     vLayout, cLayout;
+<a name="line36"> 36: </a>  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *vrange, *crange;
+<a name="line37"> 37: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>         sfVertices;
+<a name="line38"> 38: </a>  char           *axisname, *unitname, meshname[MED_NAME_SIZE+1], geotypename[MED_NAME_SIZE+1];
+<a name="line39"> 39: </a>  char            meshdescription[MED_COMMENT_SIZE+1], dtunit[MED_SNAME_SIZE+1];
+<a name="line40"> 40: </a>  med_sorting_type sortingtype;
+<a name="line41"> 41: </a>  med_mesh_type   meshtype;
+<a name="line42"> 42: </a>  med_axis_type   axistype;
+<a name="line43"> 43: </a>  med_bool        coordinatechangement, geotransformation, hdfok, medok;
+<a name="line44"> 44: </a>  med_geometry_type geotype[2], cellID, facetID;
+<a name="line45"> 45: </a>  med_filter      vfilter = MED_FILTER_INIT;
+<a name="line46"> 46: </a>  med_filter      cfilter = MED_FILTER_INIT;
+<a name="line47"> 47: </a>  med_err         mederr;
+<a name="line48"> 48: </a>  med_int         major, minor, release;
+<a name="line49"> 49: </a><font color="#A020F0">#endif</font>
+<a name="line50"> 50: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line53"> 53: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(comm, &amp;rank);
+<a name="line54"> 54: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm, &amp;size);
+<a name="line55"> 55: </a><font color="#A020F0">#if defined(PETSC_HAVE_MED)</font>
+<a name="line56"> 56: </a>  mederr = MEDfileCompatibility(filename, &amp;hdfok, &amp;medok);
+<a name="line57"> 57: </a>  <font color="#4169E1">if</font> (mederr) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"Cannot determine MED file compatibility: %s"</font>, filename);
+<a name="line58"> 58: </a>  <font color="#4169E1">if</font> (!hdfok) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"Not a compatible HDF format: %s"</font>, filename);
+<a name="line59"> 59: </a>  <font color="#4169E1">if</font> (!medok) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"Not a compatible MED format: %s"</font>, filename);
+
+<a name="line61"> 61: </a>  fileID = MEDfileOpen(filename, MED_ACC_RDONLY);
+<a name="line62"> 62: </a>  <font color="#4169E1">if</font> (fileID &lt; 0) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"Unable to open .med mesh file: %s"</font>, filename);
+<a name="line63"> 63: </a>  mederr = MEDfileNumVersionRd(fileID, &amp;major, &amp;minor, &amp;release);
+<a name="line64"> 64: </a>  <font color="#4169E1">if</font> (MEDnMesh (fileID) &lt; 1) <a href="../../../../docs/manualpages/Sys/SETERRQ4.html#SETERRQ4">SETERRQ4</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"No meshes found in .med v%d.%d.%d mesh file: %s"</font>, major, minor, release, filename);
+<a name="line65"> 65: </a>  spaceDim = MEDmeshnAxis(fileID, 1);
+<a name="line66"> 66: </a>  <font color="#4169E1">if</font> (spaceDim &lt; 1) <a href="../../../../docs/manualpages/Sys/SETERRQ4.html#SETERRQ4">SETERRQ4</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"Mesh of unknown space dimension found in .med v%d.%d.%d mesh file: %s"</font>, major, minor, release, filename);
+<a name="line67"> 67: </a>  <font color="#B22222">/* Read general mesh information */</font>
+<a name="line68"> 68: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(MED_SNAME_SIZE*spaceDim+1, &amp;axisname);
+<a name="line69"> 69: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(MED_SNAME_SIZE*spaceDim+1, &amp;unitname);
+<a name="line70"> 70: </a>  {
+<a name="line71"> 71: </a>    med_int medMeshDim, medNstep;
+<a name="line72"> 72: </a>    med_int medSpaceDim = spaceDim;
+
+<a name="line74"> 74: </a>    MEDmeshInfo(fileID, 1, meshname, &amp;medSpaceDim, &amp;medMeshDim, &amp;meshtype, meshdescription,
+<a name="line75"> 75: </a>                       dtunit, &amp;sortingtype, &amp;medNstep, &amp;axistype, axisname, unitname);
+<a name="line76"> 76: </a>    spaceDim = medSpaceDim;
+<a name="line77"> 77: </a>    meshDim  = medMeshDim;
+<a name="line78"> 78: </a>  }
+<a name="line79"> 79: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(axisname);
+<a name="line80"> 80: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(unitname);
+<a name="line81"> 81: </a>  <font color="#B22222">/* Partition mesh coordinates */</font>
+<a name="line82"> 82: </a>  numVertices = MEDmeshnEntity(fileID, meshname, MED_NO_DT, MED_NO_IT, MED_NODE, MED_NO_GEOTYPE,
+<a name="line83"> 83: </a>                               MED_COORDINATE, MED_NO_CMODE,&amp;coordinatechangement, &amp;geotransformation);
+<a name="line84"> 84: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutCreate.html#PetscLayoutCreate">PetscLayoutCreate</a>(comm, &amp;vLayout);
+<a name="line85"> 85: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutSetSize.html#PetscLayoutSetSize">PetscLayoutSetSize</a>(vLayout, numVertices);
+<a name="line86"> 86: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutSetBlockSize.html#PetscLayoutSetBlockSize">PetscLayoutSetBlockSize</a>(vLayout, 1);
+<a name="line87"> 87: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutSetUp.html#PetscLayoutSetUp">PetscLayoutSetUp</a>(vLayout);
+<a name="line88"> 88: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutGetRanges.html#PetscLayoutGetRanges">PetscLayoutGetRanges</a>(vLayout, &amp;vrange);
+<a name="line89"> 89: </a>  numVerticesLocal = vrange[rank+1]-vrange[rank];
+<a name="line90"> 90: </a>  MEDfilterBlockOfEntityCr(fileID, numVertices, 1, spaceDim, MED_ALL_CONSTITUENT, MED_FULL_INTERLACE, MED_COMPACT_STMODE,
+<a name="line91"> 91: </a>                                  MED_NO_PROFILE, vrange[rank]+1, 1, numVerticesLocal, 1, 1, &amp;vfilter);
+<a name="line92"> 92: </a>  <font color="#B22222">/* Read mesh coordinates */</font>
+<a name="line93"> 93: </a>  <font color="#4169E1">if</font> (numVertices &lt; 0) <a href="../../../../docs/manualpages/Sys/SETERRQ4.html#SETERRQ4">SETERRQ4</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"No nodes found in .med v%d.%d.%d mesh file: %s"</font>, major, minor, release, filename);
+<a name="line94"> 94: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(numVerticesLocal*spaceDim, &amp;coordinates);
+<a name="line95"> 95: </a>  MEDmeshNodeCoordinateAdvancedRd(fileID, meshname, MED_NO_DT, MED_NO_IT, &amp;vfilter, coordinates);
+<a name="line96"> 96: </a>  <font color="#B22222">/* Read the types of entity sets in the mesh */</font>
+<a name="line97"> 97: </a>  ngeo = MEDmeshnEntity(fileID, meshname, MED_NO_DT, MED_NO_IT, MED_CELL,MED_GEO_ALL, MED_CONNECTIVITY,
+<a name="line98"> 98: </a>                        MED_NODAL, &amp;coordinatechangement, &amp;geotransformation);
+<a name="line99"> 99: </a>  <font color="#4169E1">if</font> (ngeo &lt; 1) <a href="../../../../docs/manualpages/Sys/SETERRQ4.html#SETERRQ4">SETERRQ4</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"No cells found in .med v%d.%d.%d mesh file: %s"</font>, major, minor, release, filename);
+<a name="line100">100: </a>  <font color="#4169E1">if</font> (ngeo &gt; 2) <a href="../../../../docs/manualpages/Sys/SETERRQ4.html#SETERRQ4">SETERRQ4</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"Currently no support for hybrid meshes in .med v%d.%d.%d mesh file: %s"</font>, major, minor, release, filename);
+<a name="line101">101: </a>  MEDmeshEntityInfo(fileID, meshname, MED_NO_DT, MED_NO_IT, MED_CELL, 1, geotypename, &amp;(geotype[0]));
+<a name="line102">102: </a>  <font color="#4169E1">if</font> (ngeo &gt; 1) {MEDmeshEntityInfo(fileID, meshname, MED_NO_DT, MED_NO_IT, MED_CELL, 2, geotypename, &amp;(geotype[1]));}
+<a name="line103">103: </a>  <font color="#4169E1">else</font> geotype[1] = 0;
+<a name="line104">104: </a>  <font color="#B22222">/* Determine topological dim and set ID for cells */</font>
+<a name="line105">105: </a>  cellID = geotype[0]/100 &gt; geotype[1]/100 ? 0 : 1;
+<a name="line106">106: </a>  facetID = geotype[0]/100 &gt; geotype[1]/100 ? 1 : 0;
+<a name="line107">107: </a>  meshDim = geotype[cellID] / 100;
+<a name="line108">108: </a>  numCorners = geotype[cellID] % 100;
+<a name="line109">109: </a>  <font color="#B22222">/* Partition cells */</font>
+<a name="line110">110: </a>  numCells = MEDmeshnEntity(fileID, meshname, MED_NO_DT, MED_NO_IT, MED_CELL, geotype[cellID],
+<a name="line111">111: </a>                            MED_CONNECTIVITY, MED_NODAL,&amp;coordinatechangement, &amp;geotransformation);
+<a name="line112">112: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutCreate.html#PetscLayoutCreate">PetscLayoutCreate</a>(comm, &amp;cLayout);
+<a name="line113">113: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutSetSize.html#PetscLayoutSetSize">PetscLayoutSetSize</a>(cLayout, numCells);
+<a name="line114">114: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutSetBlockSize.html#PetscLayoutSetBlockSize">PetscLayoutSetBlockSize</a>(cLayout, 1);
+<a name="line115">115: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutSetUp.html#PetscLayoutSetUp">PetscLayoutSetUp</a>(cLayout);
+<a name="line116">116: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutGetRanges.html#PetscLayoutGetRanges">PetscLayoutGetRanges</a>(cLayout, &amp;crange);
+<a name="line117">117: </a>  numCellsLocal = crange[rank+1]-crange[rank];
+<a name="line118">118: </a>  MEDfilterBlockOfEntityCr(fileID, numCells, 1, numCorners, MED_ALL_CONSTITUENT, MED_FULL_INTERLACE, MED_COMPACT_STMODE,
+<a name="line119">119: </a>                                  MED_NO_PROFILE, crange[rank]+1, 1, numCellsLocal, 1, 1, &amp;cfilter);
+<a name="line120">120: </a>  <font color="#B22222">/* Read cell connectivity */</font>
+<a name="line121">121: </a>  <font color="#4169E1">if</font> (numCells &lt; 0) <a href="../../../../docs/manualpages/Sys/SETERRQ4.html#SETERRQ4">SETERRQ4</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"No cells found in .med v%d.%d.%d mesh file: %s"</font>, major, minor, release, filename);
+<a name="line122">122: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(numCellsLocal*numCorners, &amp;medCellList);
+<a name="line123">123: </a>  MEDmeshElementConnectivityAdvancedRd(fileID, meshname, MED_NO_DT, MED_NO_IT, MED_CELL, geotype[cellID],
+<a name="line124">124: </a>                                              MED_NODAL, &amp;cfilter, medCellList);
+<a name="line125">125: </a>  <font color="#4169E1">if</font> (<font color="#4169E1">sizeof</font>(med_int) == <font color="#4169E1">sizeof</font>(int)) {
+<a name="line126">126: </a>    cellList = (int *) medCellList;
+<a name="line127">127: </a>    medCellList = NULL;
+<a name="line128">128: </a>  } <font color="#4169E1">else</font> {
+<a name="line129">129: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(numCellsLocal*numCorners, &amp;cellList);
+<a name="line130">130: </a>    <font color="#4169E1">for</font> (i = 0; i &lt; numCellsLocal*numCorners; i++) cellList[i] = medCellList[i];
+<a name="line131">131: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(medCellList);
+<a name="line132">132: </a>  }
+<a name="line133">133: </a>  <font color="#4169E1">for</font> (i = 0; i &lt; numCellsLocal*numCorners; i++) cellList[i]--; <font color="#B22222">/* Correct entity counting */</font>
+<a name="line134">134: </a>  <font color="#B22222">/* Generate the <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> */</font>
+<a name="line135">135: </a>  <font color="#4169E1">if</font> (<font color="#4169E1">sizeof</font>(med_float) == <font color="#4169E1">sizeof</font>(<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)) {
+<a name="line136">136: </a>    vertcoords = (<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *) coordinates;
+<a name="line137">137: </a>  } <font color="#4169E1">else</font> {
+<a name="line138">138: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(numVerticesLocal*spaceDim, &amp;vertcoords);
+<a name="line139">139: </a>    <font color="#4169E1">for</font> (i = 0; i &lt; numVerticesLocal*spaceDim; i++) vertcoords[i] = coordinates[i];
+<a name="line140">140: </a>  }
+<a name="line141">141: </a>  <font color="#B22222">/* Account for cell inversion */</font>
+<a name="line142">142: </a>  <font color="#4169E1">for</font> (c = 0; c &lt; numCellsLocal; ++c) {
+<a name="line143">143: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *pcone = &amp;cellList[c*numCorners];
+
+<a name="line145">145: </a>    <font color="#4169E1">if</font> (meshDim == 3) {
+<a name="line146">146: </a>      <font color="#B22222">/* Hexahedra are inverted */</font>
+<a name="line147">147: </a>      <font color="#4169E1">if</font> (numCorners == 8) {
+<a name="line148">148: </a>        <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> tmp = pcone[4+1];
+<a name="line149">149: </a>        pcone[4+1] = pcone[4+3];
+<a name="line150">150: </a>        pcone[4+3] = tmp;
+<a name="line151">151: </a>      }
+<a name="line152">152: </a>    }
+<a name="line153">153: </a>  }
+<a name="line154">154: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateFromCellListParallel.html#DMPlexCreateFromCellListParallel">DMPlexCreateFromCellListParallel</a>(comm, meshDim, numCellsLocal, numVerticesLocal, numCorners, interpolate, cellList, spaceDim, coordinates, &amp;sfVertices, dm);
+<a name="line155">155: </a>  <font color="#4169E1">if</font> (<font color="#4169E1">sizeof</font>(med_float) == <font color="#4169E1">sizeof</font>(<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)) {
+<a name="line156">156: </a>    vertcoords = NULL;
+<a name="line157">157: </a>  } <font color="#4169E1">else</font> {
+<a name="line158">158: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vertcoords);
+<a name="line159">159: </a>  }
+
+<a name="line161">161: </a>  <font color="#4169E1">if</font> (ngeo &gt; 1) {
+<a name="line162">162: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        numFacets = 0, numFacetsLocal, numFacetCorners, numFacetsRendezvous;
+<a name="line163">163: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        c, f, v, vStart, joinSize, vertices[8];
+<a name="line164">164: </a>    med_int        *medFacetList;
+<a name="line165">165: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *facetList, *facetListRendezvous, *facetIDs, *facetIDsRendezvous, *facetListRemote, *facetIDsRemote;
+<a name="line166">166: </a>    const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *frange, *join;
+<a name="line167">167: </a>    <a href="../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a>     fLayout;
+<a name="line168">168: </a>    med_filter      ffilter = MED_FILTER_INIT, fidfilter = MED_FILTER_INIT;
+<a name="line169">169: </a>    <a href="../../../../docs/manualpages/PetscSection/PetscSection.html#PetscSection">PetscSection</a> facetSectionRemote, facetSectionIDsRemote;
+<a name="line170">170: </a>    <font color="#B22222">/* Partition facets */</font>
+<a name="line171">171: </a>    numFacets = MEDmeshnEntity(fileID, meshname, MED_NO_DT, MED_NO_IT, MED_CELL, geotype[facetID],
+<a name="line172">172: </a>                               MED_CONNECTIVITY, MED_NODAL,&amp;coordinatechangement, &amp;geotransformation);
+<a name="line173">173: </a>    numFacetCorners = geotype[facetID] % 100;
+<a name="line174">174: </a>    <a href="../../../../docs/manualpages/IS/PetscLayoutCreate.html#PetscLayoutCreate">PetscLayoutCreate</a>(comm, &amp;fLayout);
+<a name="line175">175: </a>    <a href="../../../../docs/manualpages/IS/PetscLayoutSetSize.html#PetscLayoutSetSize">PetscLayoutSetSize</a>(fLayout, numFacets);
+<a name="line176">176: </a>    <a href="../../../../docs/manualpages/IS/PetscLayoutSetBlockSize.html#PetscLayoutSetBlockSize">PetscLayoutSetBlockSize</a>(fLayout, 1);
+<a name="line177">177: </a>    <a href="../../../../docs/manualpages/IS/PetscLayoutSetUp.html#PetscLayoutSetUp">PetscLayoutSetUp</a>(fLayout);
+<a name="line178">178: </a>    <a href="../../../../docs/manualpages/IS/PetscLayoutGetRanges.html#PetscLayoutGetRanges">PetscLayoutGetRanges</a>(fLayout, &amp;frange);
+<a name="line179">179: </a>    numFacetsLocal = frange[rank+1]-frange[rank];
+<a name="line180">180: </a>    MEDfilterBlockOfEntityCr(fileID, numFacets, 1, numFacetCorners, MED_ALL_CONSTITUENT, MED_FULL_INTERLACE, MED_COMPACT_STMODE,
+<a name="line181">181: </a>                                    MED_NO_PROFILE, frange[rank]+1, 1, numFacetsLocal, 1, 1, &amp;ffilter);
+<a name="line182">182: </a>    MEDfilterBlockOfEntityCr(fileID, numFacets, 1, 1, MED_ALL_CONSTITUENT, MED_FULL_INTERLACE, MED_COMPACT_STMODE,
+<a name="line183">183: </a>                                    MED_NO_PROFILE, frange[rank]+1, 1, numFacetsLocal, 1, 1, &amp;fidfilter);
+<a name="line184">184: </a>    <font color="#B22222">/* Read facet connectivity */</font>
+<a name="line185">185: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetDepthStratum.html#DMPlexGetDepthStratum">DMPlexGetDepthStratum</a>(*dm, 0, &amp;vStart, NULL);
+<a name="line186">186: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(numFacetsLocal*numFacetCorners, &amp;medFacetList);
+<a name="line187">187: </a>    <a href="../../../../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(numFacetsLocal, &amp;facetIDs);
+<a name="line188">188: </a>    MEDmeshElementConnectivityAdvancedRd(fileID, meshname, MED_NO_DT, MED_NO_IT, MED_CELL, geotype[facetID],
+<a name="line189">189: </a>                                                MED_NODAL, &amp;ffilter, medFacetList);
+<a name="line190">190: </a>    <font color="#4169E1">if</font> (<font color="#4169E1">sizeof</font>(med_int) == <font color="#4169E1">sizeof</font>(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)) {
+<a name="line191">191: </a>      facetList = (<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *) medFacetList;
+<a name="line192">192: </a>      medFacetList = NULL;
+<a name="line193">193: </a>    } <font color="#4169E1">else</font> {
+<a name="line194">194: </a>      <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(numFacetsLocal*numFacetCorners, &amp;facetList);
+<a name="line195">195: </a>      <font color="#4169E1">for</font> (i = 0; i &lt; numFacetsLocal*numFacetCorners; i++) facetList[i] = medFacetList[i];
+<a name="line196">196: </a>      <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(medFacetList);
+<a name="line197">197: </a>    }
+<a name="line198">198: </a>    <font color="#4169E1">for</font> (i = 0; i &lt; numFacetsLocal*numFacetCorners; i++) facetList[i]--; <font color="#B22222">/* Correct entity counting */</font>
+<a name="line199">199: </a>    <font color="#B22222">/* Read facet IDs */</font>
+<a name="line200">200: </a>    MEDmeshEntityAttributeAdvancedRd(fileID, meshname, MED_FAMILY_NUMBER, MED_NO_DT, MED_NO_IT, MED_CELL,
+<a name="line201">201: </a>                                            geotype[facetID], &amp;fidfilter, facetIDs);
+<a name="line202">202: </a>    {
+<a name="line203">203: </a>      <font color="#B22222">/* Send facets and IDs to a rendezvous partition that is based on the initial vertex partitioning. */</font>
+<a name="line204">204: </a>      <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           r;
+<a name="line205">205: </a>      <a href="../../../../docs/manualpages/DM/DMLabel.html#DMLabel">DMLabel</a>            lblFacetRendezvous, lblFacetMigration;
+<a name="line206">206: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSection.html#PetscSection">PetscSection</a>       facetSection, facetSectionRendezvous;
+<a name="line207">207: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>            sfProcess, sfFacetMigration;
+<a name="line208">208: </a>      const <a href="../../../../docs/manualpages/PetscSF/PetscSFNode.html#PetscSFNode">PetscSFNode</a> *remoteVertices;
+<a name="line209">209: </a>      <a href="../../../../docs/manualpages/DMLABEL/DMLabelCreate.html#DMLabelCreate">DMLabelCreate</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, <font color="#666666">"Facet Rendezvous"</font>, &amp;lblFacetRendezvous);
+<a name="line210">210: </a>      <a href="../../../../docs/manualpages/DMLABEL/DMLabelCreate.html#DMLabelCreate">DMLabelCreate</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, <font color="#666666">"Facet Migration"</font>, &amp;lblFacetMigration);
+<a name="line211">211: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSFGetGraph.html#PetscSFGetGraph">PetscSFGetGraph</a>(sfVertices, NULL, NULL, NULL, &amp;remoteVertices);
+<a name="line212">212: </a>      <font color="#4169E1">for</font> (f = 0; f &lt; numFacetsLocal; f++) {
+<a name="line213">213: </a>        <font color="#4169E1">for</font> (v = 0; v &lt; numFacetCorners; v++) {
+<a name="line214">214: </a>          <font color="#B22222">/* Find vertex owner on rendezvous partition and mark in label */</font>
+<a name="line215">215: </a>          const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vertex = facetList[f*numFacetCorners+v];
+<a name="line216">216: </a>          r = rank; <font color="#4169E1">while</font> (vrange[r] &gt; vertex) r--; <font color="#4169E1">while</font> (vrange[r + 1] &lt; vertex) r++;
+<a name="line217">217: </a>          <a href="../../../../docs/manualpages/DMLABEL/DMLabelSetValue.html#DMLabelSetValue">DMLabelSetValue</a>(lblFacetRendezvous, f, r);
+<a name="line218">218: </a>        }
+<a name="line219">219: </a>      }
+<a name="line220">220: </a>      <font color="#B22222">/* Build a global process SF */</font>
+<a name="line221">221: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSFCreate.html#PetscSFCreate">PetscSFCreate</a>(comm,&amp;sfProcess);
+<a name="line222">222: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSFSetGraphWithPattern.html#PetscSFSetGraphWithPattern">PetscSFSetGraphWithPattern</a>(sfProcess,NULL,<a href="../../../../docs/manualpages/PetscSF/PetscSFPattern.html#PetscSFPattern">PETSCSF_PATTERN_ALLTOALL</a>);
+<a name="line223">223: </a>      <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) sfProcess, <font color="#666666">"Process SF"</font>);
+<a name="line224">224: </a>      <font color="#B22222">/* Convert facet rendezvous label into SF for migration */</font>
+<a name="line225">225: </a>      <a href="../../../../docs/manualpages/DMPLEX/DMPlexPartitionLabelInvert.html#DMPlexPartitionLabelInvert">DMPlexPartitionLabelInvert</a>(*dm, lblFacetRendezvous, sfProcess, lblFacetMigration);
+<a name="line226">226: </a>      <a href="../../../../docs/manualpages/DMPLEX/DMPlexPartitionLabelCreateSF.html#DMPlexPartitionLabelCreateSF">DMPlexPartitionLabelCreateSF</a>(*dm, lblFacetMigration, &amp;sfFacetMigration);
+<a name="line227">227: </a>      <font color="#B22222">/* Migrate facet connectivity data */</font>
+<a name="line228">228: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionCreate.html#PetscSectionCreate">PetscSectionCreate</a>(comm, &amp;facetSection);
+<a name="line229">229: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetChart.html#PetscSectionSetChart">PetscSectionSetChart</a>(facetSection, 0, numFacetsLocal);
+<a name="line230">230: </a>      <font color="#4169E1">for</font> (f = 0; f &lt; numFacetsLocal; f++) {<a href="../../../../docs/manualpages/PetscSection/PetscSectionSetDof.html#PetscSectionSetDof">PetscSectionSetDof</a>(facetSection, f, numFacetCorners);}
+<a name="line231">231: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetUp.html#PetscSectionSetUp">PetscSectionSetUp</a>(facetSection);
+<a name="line232">232: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionCreate.html#PetscSectionCreate">PetscSectionCreate</a>(comm, &amp;facetSectionRendezvous);
+<a name="line233">233: </a>      <a href="../../../../docs/manualpages/DMPLEX/DMPlexDistributeData.html#DMPlexDistributeData">DMPlexDistributeData</a>(*dm, sfFacetMigration, facetSection, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, facetList, facetSectionRendezvous, (void**) &amp;facetListRendezvous);
+<a name="line234">234: </a>      <font color="#B22222">/* Migrate facet IDs */</font>
+<a name="line235">235: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSFGetGraph.html#PetscSFGetGraph">PetscSFGetGraph</a>(sfFacetMigration, NULL, &amp;numFacetsRendezvous, NULL, NULL);
+<a name="line236">236: </a>      <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(numFacetsRendezvous, &amp;facetIDsRendezvous);
+<a name="line237">237: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSFBcastBegin.html#PetscSFBcastBegin">PetscSFBcastBegin</a>(sfFacetMigration, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, facetIDs, facetIDsRendezvous);
+<a name="line238">238: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSFBcastEnd.html#PetscSFBcastEnd">PetscSFBcastEnd</a>(sfFacetMigration, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, facetIDs, facetIDsRendezvous);
+<a name="line239">239: </a>      <font color="#B22222">/* Clean up */</font>
+<a name="line240">240: </a>      <a href="../../../../docs/manualpages/DMLABEL/DMLabelDestroy.html#DMLabelDestroy">DMLabelDestroy</a>(&amp;lblFacetRendezvous);
+<a name="line241">241: </a>      <a href="../../../../docs/manualpages/DMLABEL/DMLabelDestroy.html#DMLabelDestroy">DMLabelDestroy</a>(&amp;lblFacetMigration);
+<a name="line242">242: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSFDestroy.html#PetscSFDestroy">PetscSFDestroy</a>(&amp;sfProcess);
+<a name="line243">243: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSFDestroy.html#PetscSFDestroy">PetscSFDestroy</a>(&amp;sfFacetMigration);
+<a name="line244">244: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionDestroy.html#PetscSectionDestroy">PetscSectionDestroy</a>(&amp;facetSection);
+<a name="line245">245: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionDestroy.html#PetscSectionDestroy">PetscSectionDestroy</a>(&amp;facetSectionRendezvous);
+<a name="line246">246: </a>    }
+<a name="line247">247: </a>    {
+<a name="line248">248: </a>      <font color="#B22222">/* On the rendevouz partition we build a vertex-wise section/array of facets and IDs. */</font>
+<a name="line249">249: </a>      <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               sizeVertexFacets, offset, sizeFacetIDsRemote;
+<a name="line250">250: </a>      <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>              *vertexFacets, *vertexIdx, *vertexFacetIDs;
+<a name="line251">251: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSection.html#PetscSection">PetscSection</a>           facetSectionVertices, facetSectionIDs;
+<a name="line252">252: </a>      <a href="../../../../docs/manualpages/IS/ISLocalToGlobalMapping.html#ISLocalToGlobalMapping">ISLocalToGlobalMapping</a> ltogVertexNumbering;
+<a name="line253">253: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionCreate.html#PetscSectionCreate">PetscSectionCreate</a>(comm, &amp;facetSectionVertices);
+<a name="line254">254: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetChart.html#PetscSectionSetChart">PetscSectionSetChart</a>(facetSectionVertices, 0, numVerticesLocal);
+<a name="line255">255: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionCreate.html#PetscSectionCreate">PetscSectionCreate</a>(comm, &amp;facetSectionIDs);
+<a name="line256">256: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetChart.html#PetscSectionSetChart">PetscSectionSetChart</a>(facetSectionIDs, 0, numVerticesLocal);
+<a name="line257">257: </a>      <font color="#4169E1">for</font> (f = 0; f &lt; numFacetsRendezvous*numFacetCorners; f++) {
+<a name="line258">258: </a>        const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vertex = facetListRendezvous[f];
+<a name="line259">259: </a>        <font color="#4169E1">if</font> (vrange[rank] &lt;= vertex &amp;&amp; vertex &lt; vrange[rank+1]) {
+<a name="line260">260: </a>          <a href="../../../../docs/manualpages/PetscSection/PetscSectionAddDof.html#PetscSectionAddDof">PetscSectionAddDof</a>(facetSectionIDs, vertex-vrange[rank], 1);
+<a name="line261">261: </a>          <a href="../../../../docs/manualpages/PetscSection/PetscSectionAddDof.html#PetscSectionAddDof">PetscSectionAddDof</a>(facetSectionVertices, vertex-vrange[rank], numFacetCorners);
+<a name="line262">262: </a>        }
+<a name="line263">263: </a>      }
+<a name="line264">264: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetUp.html#PetscSectionSetUp">PetscSectionSetUp</a>(facetSectionVertices);
+<a name="line265">265: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetUp.html#PetscSectionSetUp">PetscSectionSetUp</a>(facetSectionIDs);
+<a name="line266">266: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionGetStorageSize.html#PetscSectionGetStorageSize">PetscSectionGetStorageSize</a>(facetSectionVertices, &amp;sizeVertexFacets);
+<a name="line267">267: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionGetStorageSize.html#PetscSectionGetStorageSize">PetscSectionGetStorageSize</a>(facetSectionVertices, &amp;sizeFacetIDsRemote);
+<a name="line268">268: </a>      <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(sizeVertexFacets, &amp;vertexFacets);
+<a name="line269">269: </a>      <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(sizeFacetIDsRemote, &amp;vertexFacetIDs);
+<a name="line270">270: </a>      <a href="../../../../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(numVerticesLocal, &amp;vertexIdx);
+<a name="line271">271: </a>      <font color="#4169E1">for</font> (f = 0; f &lt; numFacetsRendezvous; f++) {
+<a name="line272">272: </a>        <font color="#4169E1">for</font> (c = 0; c &lt; numFacetCorners; c++) {
+<a name="line273">273: </a>          const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vertex = facetListRendezvous[f*numFacetCorners+c];
+<a name="line274">274: </a>          <font color="#4169E1">if</font> (vrange[rank] &lt;= vertex &amp;&amp; vertex &lt; vrange[rank+1]) {
+<a name="line275">275: </a>            <font color="#B22222">/* Flip facet connectivities and IDs to a vertex-wise layout */</font>
+<a name="line276">276: </a>            <a href="../../../../docs/manualpages/PetscSection/PetscSectionGetOffset.html#PetscSectionGetOffset">PetscSectionGetOffset</a>(facetSectionVertices, vertex-vrange[rank], &amp;offset);
+<a name="line277">277: </a>            offset += vertexIdx[vertex-vrange[rank]] * numFacetCorners;
+<a name="line278">278: </a>            <a href="../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(&amp;(vertexFacets[offset]), &amp;(facetListRendezvous[f*numFacetCorners]), numFacetCorners);
+<a name="line279">279: </a>            <a href="../../../../docs/manualpages/PetscSection/PetscSectionGetOffset.html#PetscSectionGetOffset">PetscSectionGetOffset</a>(facetSectionIDs, vertex-vrange[rank], &amp;offset);
+<a name="line280">280: </a>            offset += vertexIdx[vertex-vrange[rank]];
+<a name="line281">281: </a>            vertexFacetIDs[offset] = facetIDsRendezvous[f];
+<a name="line282">282: </a>            vertexIdx[vertex-vrange[rank]]++;
+<a name="line283">283: </a>          }
+<a name="line284">284: </a>        }
+<a name="line285">285: </a>      }
+<a name="line286">286: </a>      <font color="#B22222">/* Distribute the vertex-wise facet connectivities over the vertexSF */</font>
+<a name="line287">287: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionCreate.html#PetscSectionCreate">PetscSectionCreate</a>(comm, &amp;facetSectionRemote);
+<a name="line288">288: </a>      <a href="../../../../docs/manualpages/DMPLEX/DMPlexDistributeData.html#DMPlexDistributeData">DMPlexDistributeData</a>(*dm, sfVertices, facetSectionVertices, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, vertexFacets, facetSectionRemote, (void**) &amp;facetListRemote);
+<a name="line289">289: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionCreate.html#PetscSectionCreate">PetscSectionCreate</a>(comm, &amp;facetSectionIDsRemote);
+<a name="line290">290: </a>      <a href="../../../../docs/manualpages/DMPLEX/DMPlexDistributeData.html#DMPlexDistributeData">DMPlexDistributeData</a>(*dm, sfVertices, facetSectionIDs, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, vertexFacetIDs, facetSectionIDsRemote, (void**) &amp;facetIDsRemote);
+<a name="line291">291: </a>      <font color="#B22222">/* Convert facet connectivities to local vertex numbering */</font>
+<a name="line292">292: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionGetStorageSize.html#PetscSectionGetStorageSize">PetscSectionGetStorageSize</a>(facetSectionRemote, &amp;sizeVertexFacets);
+<a name="line293">293: </a>      <a href="../../../../docs/manualpages/IS/ISLocalToGlobalMappingCreateSF.html#ISLocalToGlobalMappingCreateSF">ISLocalToGlobalMappingCreateSF</a>(sfVertices, vrange[rank], &amp;ltogVertexNumbering);
+<a name="line294">294: </a>      <a href="../../../../docs/manualpages/IS/ISGlobalToLocalMappingApplyBlock.html#ISGlobalToLocalMappingApplyBlock">ISGlobalToLocalMappingApplyBlock</a>(ltogVertexNumbering, <a href="../../../../docs/manualpages/IS/ISGlobalToLocalMappingMode.html#ISGlobalToLocalMappingMode">IS_GTOLM_MASK</a>, sizeVertexFacets, facetListRemote, NULL, facetListRemote);
+<a name="line295">295: </a>      <font color="#B22222">/* Clean up */</font>
+<a name="line296">296: </a>      <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vertexFacets);
+<a name="line297">297: </a>      <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vertexIdx);
+<a name="line298">298: </a>      <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vertexFacetIDs);
+<a name="line299">299: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionDestroy.html#PetscSectionDestroy">PetscSectionDestroy</a>(&amp;facetSectionVertices);
+<a name="line300">300: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionDestroy.html#PetscSectionDestroy">PetscSectionDestroy</a>(&amp;facetSectionIDs);
+<a name="line301">301: </a>      <a href="../../../../docs/manualpages/IS/ISLocalToGlobalMappingDestroy.html#ISLocalToGlobalMappingDestroy">ISLocalToGlobalMappingDestroy</a>(&amp;ltogVertexNumbering);
+<a name="line302">302: </a>    }
+<a name="line303">303: </a>    {
+<a name="line304">304: </a>      <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> offset, dof;
+<a name="line305">305: </a>      <a href="../../../../docs/manualpages/DM/DMLabel.html#DMLabel">DMLabel</a> lblFaceSets;
+<a name="line306">306: </a>      <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> verticesLocal;
+<a name="line307">307: </a>      <font color="#B22222">/* Identify and mark facets locally with facet joins */</font>
+<a name="line308">308: </a>      <a href="../../../../docs/manualpages/DM/DMCreateLabel.html#DMCreateLabel">DMCreateLabel</a>(*dm, <font color="#666666">"Face Sets"</font>);
+<a name="line309">309: </a>      <a href="../../../../docs/manualpages/DM/DMGetLabel.html#DMGetLabel">DMGetLabel</a>(*dm, <font color="#666666">"Face Sets"</font>, &amp;lblFaceSets);
+<a name="line310">310: </a>      <font color="#B22222">/* We need to set a new default value here, since -1 is a legitimate facet ID */</font>
+<a name="line311">311: </a>      <a href="../../../../docs/manualpages/DMLABEL/DMLabelSetDefaultValue.html#DMLabelSetDefaultValue">DMLabelSetDefaultValue</a>(lblFaceSets, -666666666);
+<a name="line312">312: </a>      <font color="#4169E1">for</font> (v = 0; v &lt; numVerticesLocal; v++) {
+<a name="line313">313: </a>        <a href="../../../../docs/manualpages/PetscSection/PetscSectionGetOffset.html#PetscSectionGetOffset">PetscSectionGetOffset</a>(facetSectionRemote, v, &amp;offset);
+<a name="line314">314: </a>        <a href="../../../../docs/manualpages/PetscSection/PetscSectionGetDof.html#PetscSectionGetDof">PetscSectionGetDof</a>(facetSectionRemote, v, &amp;dof);
+<a name="line315">315: </a>        <font color="#4169E1">for</font> (f = 0; f &lt; dof; f += numFacetCorners) {
+<a name="line316">316: </a>          <font color="#4169E1">for</font> (verticesLocal = <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>, c = 0; c &lt; numFacetCorners; ++c) {
+<a name="line317">317: </a>            <font color="#4169E1">if</font> (facetListRemote[offset+f+c] &lt; 0) {verticesLocal = <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>; <font color="#4169E1">break</font>;}
+<a name="line318">318: </a>            vertices[c] = vStart + facetListRemote[offset+f+c];
+<a name="line319">319: </a>          }
+<a name="line320">320: </a>          <font color="#4169E1">if</font> (verticesLocal) {
+<a name="line321">321: </a>            <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetFullJoin.html#DMPlexGetFullJoin">DMPlexGetFullJoin</a>(*dm, numFacetCorners, (const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*)vertices, &amp;joinSize, &amp;join);
+<a name="line322">322: </a>            <font color="#4169E1">if</font> (joinSize == 1) {
+<a name="line323">323: </a>              <a href="../../../../docs/manualpages/DMLABEL/DMLabelSetValue.html#DMLabelSetValue">DMLabelSetValue</a>(lblFaceSets, join[0], facetIDsRemote[(offset+f) / numFacetCorners]);
+<a name="line324">324: </a>            }
+<a name="line325">325: </a>            <a href="../../../../docs/manualpages/DMPLEX/DMPlexRestoreJoin.html#DMPlexRestoreJoin">DMPlexRestoreJoin</a>(*dm, numFacetCorners, (const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*)vertices, &amp;joinSize, &amp;join);
+<a name="line326">326: </a>          }
+<a name="line327">327: </a>        }
+<a name="line328">328: </a>      }
+<a name="line329">329: </a>    }
+<a name="line330">330: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(facetList);
+<a name="line331">331: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(facetListRendezvous);
+<a name="line332">332: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(facetListRemote);
+<a name="line333">333: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(facetIDs);
+<a name="line334">334: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(facetIDsRendezvous);
+<a name="line335">335: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(facetIDsRemote);
+<a name="line336">336: </a>    <a href="../../../../docs/manualpages/IS/PetscLayoutDestroy.html#PetscLayoutDestroy">PetscLayoutDestroy</a>(&amp;fLayout);
+<a name="line337">337: </a>    <a href="../../../../docs/manualpages/PetscSection/PetscSectionDestroy.html#PetscSectionDestroy">PetscSectionDestroy</a>(&amp;facetSectionRemote);
+<a name="line338">338: </a>    <a href="../../../../docs/manualpages/PetscSection/PetscSectionDestroy.html#PetscSectionDestroy">PetscSectionDestroy</a>(&amp;facetSectionIDsRemote);
+<a name="line339">339: </a>  }
+<a name="line340">340: </a>  MEDfileClose(fileID);
+<a name="line341">341: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(coordinates);
+<a name="line342">342: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(cellList);
+<a name="line343">343: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutDestroy.html#PetscLayoutDestroy">PetscLayoutDestroy</a>(&amp;vLayout);
+<a name="line344">344: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutDestroy.html#PetscLayoutDestroy">PetscLayoutDestroy</a>(&amp;cLayout);
+<a name="line345">345: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFDestroy.html#PetscSFDestroy">PetscSFDestroy</a>(&amp;sfVertices);
+<a name="line346">346: </a><font color="#A020F0">#else</font>
+<a name="line347">347: </a>  <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(comm, PETSC_ERR_SUP, <font color="#666666">"This method requires Med mesh reader support. Reconfigure using --download-med"</font>);
+<a name="line348">348: </a><font color="#A020F0">#endif</font>
+<a name="line349">349: </a>  <font color="#4169E1">return</font>(0);
+<a name="line350">350: </a>}
+</pre>
+</body>
+
+</html>

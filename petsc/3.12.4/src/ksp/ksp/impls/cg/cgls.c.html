@@ -1,0 +1,151 @@
+<center><a href="cgls.c">Actual source code: cgls.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/ksp/impls/cg/cgls.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:16:20+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/ksp/impls/cg/cgls.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><font color="#B22222">/*</font>
+<a name="line2">  2: </a><font color="#B22222">    This file implements CGLS, the Conjugate Gradient method for Least-Squares problems.</font>
+<a name="line3">  3: </a><font color="#B22222">*/</font>
+<a name="line4">  4: </a> #include <A href="../../../../../include/petsc/private/kspimpl.h.html">&lt;petsc/private/kspimpl.h&gt;</A>
+
+<a name="line6">  6: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line7">  7: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  nwork_n,nwork_m;
+<a name="line8">  8: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>       *vwork_m;   <font color="#B22222">/* work vectors of length m, where the system is size m x n */</font>
+<a name="line9">  9: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>       *vwork_n;   <font color="#B22222">/* work vectors of length n */</font>
+<a name="line10"> 10: </a>} KSP_CGLS;
+
+<a name="line12"> 12: </a><strong><font color="#4169E1"><a name="KSPSetUp_CGLS"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPSetUp_CGLS(<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp)</font></strong>
+<a name="line13"> 13: </a>{
+<a name="line15"> 15: </a>  KSP_CGLS       *cgls = (KSP_CGLS*)ksp-&gt;data;
+
+<a name="line18"> 18: </a>  cgls-&gt;nwork_m = 2;
+<a name="line19"> 19: </a>  <font color="#4169E1">if</font> (cgls-&gt;vwork_m) {
+<a name="line20"> 20: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(cgls-&gt;nwork_m,&amp;cgls-&gt;vwork_m);
+<a name="line21"> 21: </a>  }
+<a name="line22"> 22: </a>
+<a name="line23"> 23: </a>  cgls-&gt;nwork_n = 2;
+<a name="line24"> 24: </a>  <font color="#4169E1">if</font> (cgls-&gt;vwork_n) {
+<a name="line25"> 25: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(cgls-&gt;nwork_n,&amp;cgls-&gt;vwork_n);
+<a name="line26"> 26: </a>  }
+<a name="line27"> 27: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCreateVecs.html#KSPCreateVecs">KSPCreateVecs</a>(ksp,cgls-&gt;nwork_n,&amp;cgls-&gt;vwork_n,cgls-&gt;nwork_m,&amp;cgls-&gt;vwork_m);
+<a name="line28"> 28: </a>  <font color="#4169E1">return</font>(0);
+<a name="line29"> 29: </a>}
+
+<a name="line31"> 31: </a><strong><font color="#4169E1"><a name="KSPSolve_CGLS"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPSolve_CGLS(<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp)</font></strong>
+<a name="line32"> 32: </a>{
+<a name="line34"> 34: </a>  KSP_CGLS       *cgls = (KSP_CGLS*)ksp-&gt;data;
+<a name="line35"> 35: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            A;
+<a name="line36"> 36: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            x,b,r,p,q,ss;
+<a name="line37"> 37: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    beta;
+<a name="line38"> 38: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      alpha,gamma,oldgamma;
+<a name="line39"> 39: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       maxiter_ls = 15;
+<a name="line40"> 40: </a>
+<a name="line42"> 42: </a>  <a href="../../../../../docs/manualpages/KSP/KSPGetOperators.html#KSPGetOperators">KSPGetOperators</a>(ksp,&amp;A,NULL); <font color="#B22222">/* Matrix of the system */</font>
+<a name="line43"> 43: </a>
+<a name="line44"> 44: </a>  <font color="#B22222">/* vectors of length n, where system size is mxn */</font>
+<a name="line45"> 45: </a>  x  = ksp-&gt;vec_sol; <font color="#B22222">/* Solution vector */</font>
+<a name="line46"> 46: </a>  p  = cgls-&gt;vwork_n[0];
+<a name="line47"> 47: </a>  ss  = cgls-&gt;vwork_n[1];
+<a name="line48"> 48: </a>
+<a name="line49"> 49: </a>  <font color="#B22222">/* vectors of length m, where system size is mxn */</font>
+<a name="line50"> 50: </a>  b  = ksp-&gt;vec_rhs; <font color="#B22222">/* Right-hand side vector */</font>
+<a name="line51"> 51: </a>  r  = cgls-&gt;vwork_m[0];
+<a name="line52"> 52: </a>  q  = cgls-&gt;vwork_m[1];
+<a name="line53"> 53: </a>
+<a name="line54"> 54: </a>  <font color="#B22222">/* Minimization with the CGLS method */</font>
+<a name="line55"> 55: </a>  ksp-&gt;its = 0;
+<a name="line56"> 56: </a>  <a href="../../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a>(A,x,r);
+<a name="line57"> 57: </a>  <a href="../../../../../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(r,-1,b);         <font color="#B22222">/* r_0 = b - A * x_0  */</font>
+<a name="line58"> 58: </a>  <a href="../../../../../docs/manualpages/Mat/MatMultTranspose.html#MatMultTranspose">MatMultTranspose</a>(A,r,p); <font color="#B22222">/* p_0 = A^T * r_0    */</font>
+<a name="line59"> 59: </a>  <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(p,ss);           <font color="#B22222">/* s_0 = p_0          */</font>
+<a name="line60"> 60: </a>  <a href="../../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(ss,<a href="../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,&amp;gamma);
+<a name="line61"> 61: </a>  <a href="../../../../../docs/manualpages/Sys/KSPCheckNorm.html#KSPCheckNorm">KSPCheckNorm</a>(ksp,gamma);
+<a name="line62"> 62: </a>  ksp-&gt;rnorm = gamma;
+<a name="line63"> 63: </a>  (*ksp-&gt;converged)(ksp,ksp-&gt;its,ksp-&gt;rnorm,&amp;ksp-&gt;reason,ksp-&gt;cnvP);
+<a name="line64"> 64: </a>  gamma = gamma*gamma;                          <font color="#B22222">/* gamma = norm2(s)^2 */</font>
+
+<a name="line66"> 66: </a>  <font color="#4169E1">do</font> {
+<a name="line67"> 67: </a>    <a href="../../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a>(A,p,q);           <font color="#B22222">/* q = A * p               */</font>
+<a name="line68"> 68: </a>    <a href="../../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(q,<a href="../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,&amp;alpha);
+<a name="line69"> 69: </a>    <a href="../../../../../docs/manualpages/Sys/KSPCheckNorm.html#KSPCheckNorm">KSPCheckNorm</a>(ksp,alpha);
+<a name="line70"> 70: </a>    alpha = alpha*alpha;                           <font color="#B22222">/* alpha = norm2(q)^2      */</font>
+<a name="line71"> 71: </a>    alpha = gamma / alpha;                         <font color="#B22222">/* alpha = gamma / alpha   */</font>
+<a name="line72"> 72: </a>    <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(x,alpha,p);       <font color="#B22222">/* x += alpha * p          */</font>
+<a name="line73"> 73: </a>    <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(r,-alpha,q);      <font color="#B22222">/* r -= alpha * q          */</font>
+<a name="line74"> 74: </a>    <a href="../../../../../docs/manualpages/Mat/MatMultTranspose.html#MatMultTranspose">MatMultTranspose</a>(A,r,ss); <font color="#B22222">/* ss = A^T * r            */</font>
+<a name="line75"> 75: </a>    oldgamma = gamma;                              <font color="#B22222">/* oldgamma = gamma        */</font>
+<a name="line76"> 76: </a>    <a href="../../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(ss,<a href="../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,&amp;gamma);
+<a name="line77"> 77: </a>    <a href="../../../../../docs/manualpages/Sys/KSPCheckNorm.html#KSPCheckNorm">KSPCheckNorm</a>(ksp,gamma);
+<a name="line78"> 78: </a>    ksp-&gt;its++;
+<a name="line79"> 79: </a>    ksp-&gt;rnorm = gamma;
+<a name="line80"> 80: </a>    <a href="../../../../../docs/manualpages/KSP/KSPMonitor.html#KSPMonitor">KSPMonitor</a>(ksp,ksp-&gt;its,ksp-&gt;rnorm);
+<a name="line81"> 81: </a>    (*ksp-&gt;converged)(ksp,ksp-&gt;its,ksp-&gt;rnorm,&amp;ksp-&gt;reason,ksp-&gt;cnvP);
+<a name="line82"> 82: </a>    gamma = gamma*gamma;                           <font color="#B22222">/* gamma = norm2(s)^2      */</font>
+<a name="line83"> 83: </a>    beta = gamma/oldgamma;                         <font color="#B22222">/* beta = gamma / oldgamma */</font>
+<a name="line84"> 84: </a>    <a href="../../../../../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(p,beta,ss);       <font color="#B22222">/* p = s + beta * p        */</font>
+<a name="line85"> 85: </a>  } <font color="#4169E1">while</font> (ksp-&gt;its&lt;ksp-&gt;max_it &amp;&amp; !ksp-&gt;reason);
+<a name="line86"> 86: </a>
+<a name="line87"> 87: </a>  <font color="#4169E1">if</font> (ksp-&gt;its&gt;=maxiter_ls &amp;&amp; !ksp-&gt;reason) ksp-&gt;reason = <a href="../../../../../docs/manualpages/KSP/KSP_DIVERGED_ITS.html#KSP_DIVERGED_ITS">KSP_DIVERGED_ITS</a>;
+<a name="line88"> 88: </a>  <font color="#4169E1">return</font>(0);
+<a name="line89"> 89: </a>}
+
+<a name="line91"> 91: </a><strong><font color="#4169E1"><a name="KSPDestroy_CGLS"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPDestroy_CGLS(<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp)</font></strong>
+<a name="line92"> 92: </a>{
+<a name="line93"> 93: </a>  KSP_CGLS       *cgls = (KSP_CGLS*)ksp-&gt;data;
+
+<a name="line97"> 97: </a>  <font color="#B22222">/* Free work vectors */</font>
+<a name="line98"> 98: </a>  <font color="#4169E1">if</font> (cgls-&gt;vwork_n) {
+<a name="line99"> 99: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(cgls-&gt;nwork_n,&amp;cgls-&gt;vwork_n);
+<a name="line100">100: </a>  }
+<a name="line101">101: </a>  <font color="#4169E1">if</font> (cgls-&gt;vwork_m) {
+<a name="line102">102: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(cgls-&gt;nwork_m,&amp;cgls-&gt;vwork_m);
+<a name="line103">103: </a>  }
+<a name="line104">104: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(ksp-&gt;data);
+<a name="line105">105: </a>  <font color="#4169E1">return</font>(0);
+<a name="line106">106: </a>}
+
+<a name="line108">108: </a><font color="#B22222">/*MC</font>
+<a name="line109">109: </a><font color="#B22222">     <a href="../../../../../docs/manualpages/KSP/KSPCGLS.html#KSPCGLS">KSPCGLS</a> - Conjugate Gradient method for Least-Squares problems</font>
+
+<a name="line111">111: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line113">113: </a><font color="#B22222">   Supports non-square (rectangular) matrices.</font>
+
+<a name="line115">115: </a><font color="#B22222">   Notes:</font>
+<a name="line116">116: </a><font color="#B22222">    This does not use the preconditioner, so one should probably use <a href="../../../../../docs/manualpages/KSP/KSPLSQR.html#KSPLSQR">KSPLSQR</a> instead.</font>
+
+<a name="line118">118: </a><font color="#B22222">.seealso:  <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(), <a href="../../../../../docs/manualpages/KSP/KSPSetType.html#KSPSetType">KSPSetType</a>(), <a href="../../../../../docs/manualpages/KSP/KSPType.html#KSPType">KSPType</a> (for list of available types), <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>,</font>
+<a name="line119">119: </a><font color="#B22222">           <a href="../../../../../docs/manualpages/KSP/KSPCGSetType.html#KSPCGSetType">KSPCGSetType</a>(), <a href="../../../../../docs/manualpages/KSP/KSPCGUseSingleReduction.html#KSPCGUseSingleReduction">KSPCGUseSingleReduction</a>(), <a href="../../../../../docs/manualpages/KSP/KSPPIPECG.html#KSPPIPECG">KSPPIPECG</a>, <a href="../../../../../docs/manualpages/KSP/KSPGROPPCG.html#KSPGROPPCG">KSPGROPPCG</a></font>
+
+<a name="line121">121: </a><font color="#B22222">M*/</font>
+<a name="line122">122: </a><strong><font color="#4169E1"><a name="KSPCreate_CGLS"></a>PETSC_EXTERN <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPCreate_CGLS(<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp)</font></strong>
+<a name="line123">123: </a>{
+<a name="line125">125: </a>  KSP_CGLS       *cgls;
+<a name="line126">126: </a>
+<a name="line128">128: </a>  <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(ksp,&amp;cgls);
+<a name="line129">129: </a>  ksp-&gt;data                = (void*)cgls;
+<a name="line130">130: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetSupportedNorm.html#KSPSetSupportedNorm">KSPSetSupportedNorm</a>(ksp,<a href="../../../../../docs/manualpages/KSP/KSP_NORM_UNPRECONDITIONED.html#KSP_NORM_UNPRECONDITIONED">KSP_NORM_UNPRECONDITIONED</a>,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>,3);
+<a name="line131">131: </a>  ksp-&gt;ops-&gt;setup          = KSPSetUp_CGLS;
+<a name="line132">132: </a>  ksp-&gt;ops-&gt;solve          = KSPSolve_CGLS;
+<a name="line133">133: </a>  ksp-&gt;ops-&gt;destroy        = KSPDestroy_CGLS;
+<a name="line134">134: </a>  ksp-&gt;ops-&gt;buildsolution  = KSPBuildSolutionDefault;
+<a name="line135">135: </a>  ksp-&gt;ops-&gt;buildresidual  = KSPBuildResidualDefault;
+<a name="line136">136: </a>  ksp-&gt;ops-&gt;setfromoptions = 0;
+<a name="line137">137: </a>  ksp-&gt;ops-&gt;view           = 0;
+<a name="line138">138: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line139">139: </a>  <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp),PETSC_ERR_SUP,<font color="#666666">"This is not supported for complex numbers"</font>);
+<a name="line140">140: </a><font color="#A020F0">#endif</font>
+<a name="line141">141: </a>  <font color="#4169E1">return</font>(0);
+<a name="line142">142: </a>}
+</pre>
+</body>
+
+</html>

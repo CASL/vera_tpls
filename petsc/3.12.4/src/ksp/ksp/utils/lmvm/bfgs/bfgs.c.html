@@ -1,0 +1,560 @@
+<center><a href="bfgs.c">Actual source code: bfgs.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/ksp/utils/lmvm/bfgs/bfgs.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:21:08+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/ksp/utils/lmvm/bfgs/bfgs.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a> #include <A href="../../../../../../include/../src/ksp/ksp/utils/lmvm/symbrdn/symbrdn.h.html">&lt;../src/ksp/ksp/utils/lmvm/symbrdn/symbrdn.h&gt;</A>
+<a name="line2">  2: </a> #include <A href="../../../../../../include/../src/ksp/ksp/utils/lmvm/diagbrdn/diagbrdn.h.html">&lt;../src/ksp/ksp/utils/lmvm/diagbrdn/diagbrdn.h&gt;</A>
+
+<a name="line4">  4: </a><font color="#B22222">/*</font>
+<a name="line5">  5: </a><font color="#B22222">  Limited-memory Broyden-Fletcher-Goldfarb-Shano method for approximating both </font>
+<a name="line6">  6: </a><font color="#B22222">  the forward product and inverse application of a Jacobian.</font>
+<a name="line7">  7: </a><font color="#B22222">*/</font>
+
+<a name="line9">  9: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line11"> 11: </a><font color="#B22222">/*</font>
+<a name="line12"> 12: </a><font color="#B22222">  The solution method (approximate inverse Jacobian application) is adapted </font>
+<a name="line13"> 13: </a><font color="#B22222">   from Algorithm 7.4 on page 178 of Nocedal and Wright "Numerical Optimization" </font>
+<a name="line14"> 14: </a><font color="#B22222">   2nd edition (https://doi.org/10.1007/978-0-387-40065-5). The initial inverse </font>
+<a name="line15"> 15: </a><font color="#B22222">   Jacobian application falls back onto the gamma scaling recommended in equation </font>
+<a name="line16"> 16: </a><font color="#B22222">   (7.20) if the user has not provided any estimation of the initial Jacobian or </font>
+<a name="line17"> 17: </a><font color="#B22222">   its inverse.</font>
+
+<a name="line19"> 19: </a><font color="#B22222">   work &lt;- F</font>
+
+<a name="line21"> 21: </a><font color="#B22222">   for i = k,k-1,k-2,...,0</font>
+<a name="line22"> 22: </a><font color="#B22222">     rho[i] = 1 / (Y[i]^T S[i])</font>
+<a name="line23"> 23: </a><font color="#B22222">     alpha[i] = rho[i] * (S[i]^T work)</font>
+<a name="line24"> 24: </a><font color="#B22222">     Fwork &lt;- work - (alpha[i] * Y[i])</font>
+<a name="line25"> 25: </a><font color="#B22222">   end</font>
+
+<a name="line27"> 27: </a><font color="#B22222">   dX &lt;- J0^{-1} * work</font>
+
+<a name="line29"> 29: </a><font color="#B22222">   for i = 0,1,2,...,k</font>
+<a name="line30"> 30: </a><font color="#B22222">     beta = rho[i] * (Y[i]^T dX)</font>
+<a name="line31"> 31: </a><font color="#B22222">     dX &lt;- dX + ((alpha[i] - beta) * S[i])</font>
+<a name="line32"> 32: </a><font color="#B22222">   end</font>
+<a name="line33"> 33: </a><font color="#B22222">*/</font>
+<a name="line34"> 34: </a><strong><font color="#4169E1"><a name="MatSolve_LMVMBFGS"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSolve_LMVMBFGS(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> dX)</font></strong>
+<a name="line35"> 35: </a>{
+<a name="line36"> 36: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line37"> 37: </a>  Mat_SymBrdn       *lbfgs = (Mat_SymBrdn*)lmvm-&gt;ctx;
+<a name="line38"> 38: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line39"> 39: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i;
+<a name="line40"> 40: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         *alpha, beta;
+<a name="line41"> 41: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       stf, ytx;
+<a name="line42"> 42: </a>
+<a name="line44"> 44: </a>  VecCheckSameSize(F, 2, dX, 3);
+<a name="line45"> 45: </a>  VecCheckMatCompatible(B, dX, 3, F, 2);
+<a name="line46"> 46: </a>
+<a name="line47"> 47: </a>  <font color="#B22222">/* Copy the function into the work vector for the first loop */</font>
+<a name="line48"> 48: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(F, lbfgs-&gt;work);
+<a name="line49"> 49: </a>
+<a name="line50"> 50: </a>  <font color="#B22222">/* Start the first loop */</font>
+<a name="line51"> 51: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(lmvm-&gt;k+1, &amp;alpha);
+<a name="line52"> 52: </a>  <font color="#4169E1">for</font> (i = lmvm-&gt;k; i &gt;= 0; --i) {
+<a name="line53"> 53: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(lmvm-&gt;S[i], lbfgs-&gt;work, &amp;stf);
+<a name="line54"> 54: </a>    alpha[i] = <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(stf)/lbfgs-&gt;yts[i];
+<a name="line55"> 55: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(lbfgs-&gt;work, -alpha[i], lmvm-&gt;Y[i]);
+<a name="line56"> 56: </a>  }
+<a name="line57"> 57: </a>
+<a name="line58"> 58: </a>  <font color="#B22222">/* Invert the initial Jacobian onto the work vector (or apply scaling) */</font>
+<a name="line59"> 59: </a>  MatSymBrdnApplyJ0Inv(B, lbfgs-&gt;work, dX);
+<a name="line60"> 60: </a>
+<a name="line61"> 61: </a>  <font color="#B22222">/* Start the second loop */</font>
+<a name="line62"> 62: </a>  <font color="#4169E1">for</font> (i = 0; i &lt;= lmvm-&gt;k; ++i) {
+<a name="line63"> 63: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(lmvm-&gt;Y[i], dX, &amp;ytx);
+<a name="line64"> 64: </a>    beta = <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(ytx)/lbfgs-&gt;yts[i];
+<a name="line65"> 65: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(dX, alpha[i]-beta, lmvm-&gt;S[i]);
+<a name="line66"> 66: </a>  }
+<a name="line67"> 67: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(alpha);
+<a name="line68"> 68: </a>  <font color="#4169E1">return</font>(0);
+<a name="line69"> 69: </a>}
+
+<a name="line71"> 71: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line73"> 73: </a><font color="#B22222">/*</font>
+<a name="line74"> 74: </a><font color="#B22222">  The forward product for the approximate Jacobian is the matrix-free </font>
+<a name="line75"> 75: </a><font color="#B22222">  implementation of Equation (6.19) in Nocedal and Wright "Numerical </font>
+<a name="line76"> 76: </a><font color="#B22222">  Optimization" 2nd Edition, pg 140.</font>
+<a name="line77"> 77: </a><font color="#B22222">  </font>
+<a name="line78"> 78: </a><font color="#B22222">  This forward product has the same structure as the inverse Jacobian </font>
+<a name="line79"> 79: </a><font color="#B22222">  application in the DFP formulation, except with S and Y exchanging </font>
+<a name="line80"> 80: </a><font color="#B22222">  roles.</font>
+<a name="line81"> 81: </a><font color="#B22222">  </font>
+<a name="line82"> 82: </a><font color="#B22222">  Note: P[i] = (B_i)*S[i] terms are computed ahead of time whenever </font>
+<a name="line83"> 83: </a><font color="#B22222">  the matrix is updated with a new (S[i], Y[i]) pair. This allows </font>
+<a name="line84"> 84: </a><font color="#B22222">  repeated calls of <a href="../../../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a> inside <a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> solvers without unnecessarily </font>
+<a name="line85"> 85: </a><font color="#B22222">  recomputing P[i] terms in expensive nested-loops.</font>
+
+<a name="line87"> 87: </a><font color="#B22222">  Z &lt;- J0 * X</font>
+
+<a name="line89"> 89: </a><font color="#B22222">  for i = 0,1,2,...,k</font>
+<a name="line90"> 90: </a><font color="#B22222">    P[i] &lt;- J0 * S[i]</font>
+<a name="line91"> 91: </a><font color="#B22222">    for j = 0,1,2,...,(i-1)</font>
+<a name="line92"> 92: </a><font color="#B22222">      gamma = (Y[j]^T S[i]) / (Y[j]^T S[j])</font>
+<a name="line93"> 93: </a><font color="#B22222">      zeta = (S[j]^ P[i]) / (S[j]^T P[j])</font>
+<a name="line94"> 94: </a><font color="#B22222">      P[i] &lt;- P[i] - (zeta * P[j]) + (gamma * Y[j])</font>
+<a name="line95"> 95: </a><font color="#B22222">    end</font>
+<a name="line96"> 96: </a><font color="#B22222">    gamma = (Y[i]^T X) / (Y[i]^T S[i])</font>
+<a name="line97"> 97: </a><font color="#B22222">    zeta = (S[i]^T Z) / (S[i]^T P[i])</font>
+<a name="line98"> 98: </a><font color="#B22222">    Z &lt;- Z - (zeta * P[i]) + (gamma * Y[i])</font>
+<a name="line99"> 99: </a><font color="#B22222">  end</font>
+<a name="line100">100: </a><font color="#B22222">*/</font>
+<a name="line101">101: </a><strong><font color="#4169E1"><a name="MatMult_LMVMBFGS"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatMult_LMVMBFGS(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> Z)</font></strong>
+<a name="line102">102: </a>{
+<a name="line103">103: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line104">104: </a>  Mat_SymBrdn       *lbfgs = (Mat_SymBrdn*)lmvm-&gt;ctx;
+<a name="line105">105: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line106">106: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i, j;
+<a name="line107">107: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       sjtpi, yjtsi, ytx, stz, stp;
+<a name="line108">108: </a>
+<a name="line110">110: </a>  VecCheckSameSize(X, 2, Z, 3);
+<a name="line111">111: </a>  VecCheckMatCompatible(B, X, 2, Z, 3);
+<a name="line112">112: </a>
+<a name="line113">113: </a>  <font color="#4169E1">if</font> (lbfgs-&gt;needP) {
+<a name="line114">114: </a>    <font color="#B22222">/* Pre-compute (P[i] = B_i * S[i]) */</font>
+<a name="line115">115: </a>    <font color="#4169E1">for</font> (i = 0; i &lt;= lmvm-&gt;k; ++i) {
+<a name="line116">116: </a>      MatSymBrdnApplyJ0Fwd(B, lmvm-&gt;S[i], lbfgs-&gt;P[i]);
+<a name="line117">117: </a>      <font color="#4169E1">for</font> (j = 0; j &lt;= i-1; ++j) {
+<a name="line118">118: </a>        <font color="#B22222">/* Compute the necessary dot products */</font>
+<a name="line119">119: </a>        <a href="../../../../../../docs/manualpages/Vec/VecDotBegin.html#VecDotBegin">VecDotBegin</a>(lmvm-&gt;S[j], lbfgs-&gt;P[i], &amp;sjtpi);
+<a name="line120">120: </a>        <a href="../../../../../../docs/manualpages/Vec/VecDotBegin.html#VecDotBegin">VecDotBegin</a>(lmvm-&gt;Y[j], lmvm-&gt;S[i], &amp;yjtsi);
+<a name="line121">121: </a>        <a href="../../../../../../docs/manualpages/Vec/VecDotEnd.html#VecDotEnd">VecDotEnd</a>(lmvm-&gt;S[j], lbfgs-&gt;P[i], &amp;sjtpi);
+<a name="line122">122: </a>        <a href="../../../../../../docs/manualpages/Vec/VecDotEnd.html#VecDotEnd">VecDotEnd</a>(lmvm-&gt;Y[j], lmvm-&gt;S[i], &amp;yjtsi);
+<a name="line123">123: </a>        <font color="#B22222">/* Compute the pure BFGS component of the forward product */</font>
+<a name="line124">124: </a>        <a href="../../../../../../docs/manualpages/Vec/VecAXPBYPCZ.html#VecAXPBYPCZ">VecAXPBYPCZ</a>(lbfgs-&gt;P[i], -<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(sjtpi)/lbfgs-&gt;stp[j], <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(yjtsi)/lbfgs-&gt;yts[j], 1.0, lbfgs-&gt;P[j], lmvm-&gt;Y[j]);
+<a name="line125">125: </a>      }
+<a name="line126">126: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(lmvm-&gt;S[i], lbfgs-&gt;P[i], &amp;stp);
+<a name="line127">127: </a>      lbfgs-&gt;stp[i] = <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(stp);
+<a name="line128">128: </a>    }
+<a name="line129">129: </a>    lbfgs-&gt;needP = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line130">130: </a>  }
+<a name="line131">131: </a>
+<a name="line132">132: </a>  <font color="#B22222">/* Start the outer loop (i) for the recursive formula */</font>
+<a name="line133">133: </a>  MatSymBrdnApplyJ0Fwd(B, X, Z);
+<a name="line134">134: </a>  <font color="#4169E1">for</font> (i = 0; i &lt;= lmvm-&gt;k; ++i) {
+<a name="line135">135: </a>    <font color="#B22222">/* Get all the dot products we need */</font>
+<a name="line136">136: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotBegin.html#VecDotBegin">VecDotBegin</a>(lmvm-&gt;S[i], Z, &amp;stz);
+<a name="line137">137: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotBegin.html#VecDotBegin">VecDotBegin</a>(lmvm-&gt;Y[i], X, &amp;ytx);
+<a name="line138">138: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotEnd.html#VecDotEnd">VecDotEnd</a>(lmvm-&gt;S[i], Z, &amp;stz);
+<a name="line139">139: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotEnd.html#VecDotEnd">VecDotEnd</a>(lmvm-&gt;Y[i], X, &amp;ytx);
+<a name="line140">140: </a>    <font color="#B22222">/* Update Z_{i+1} = B_{i+1} * X */</font>
+<a name="line141">141: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAXPBYPCZ.html#VecAXPBYPCZ">VecAXPBYPCZ</a>(Z, -<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(stz)/lbfgs-&gt;stp[i], <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(ytx)/lbfgs-&gt;yts[i], 1.0, lbfgs-&gt;P[i], lmvm-&gt;Y[i]);
+<a name="line142">142: </a>  }
+<a name="line143">143: </a>  <font color="#4169E1">return</font>(0);
+<a name="line144">144: </a>}
+
+<a name="line146">146: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line148">148: </a><strong><font color="#4169E1"><a name="MatUpdate_LMVMBFGS"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatUpdate_LMVMBFGS(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F)</font></strong>
+<a name="line149">149: </a>{
+<a name="line150">150: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line151">151: </a>  Mat_SymBrdn       *lbfgs = (Mat_SymBrdn*)lmvm-&gt;ctx;
+<a name="line152">152: </a>  Mat_LMVM          *dbase;
+<a name="line153">153: </a>  Mat_DiagBrdn      *dctx;
+<a name="line154">154: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line155">155: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          old_k, i;
+<a name="line156">156: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         curvtol;
+<a name="line157">157: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       curvature, ytytmp, ststmp;
+
+<a name="line160">160: </a>  <font color="#4169E1">if</font> (!lmvm-&gt;m) <font color="#4169E1">return</font>(0);
+<a name="line161">161: </a>  <font color="#4169E1">if</font> (lmvm-&gt;prev_set) {
+<a name="line162">162: </a>    <font color="#B22222">/* Compute the new (S = X - Xprev) and (Y = F - Fprev) vectors */</font>
+<a name="line163">163: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(lmvm-&gt;Xprev, -1.0, X);
+<a name="line164">164: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(lmvm-&gt;Fprev, -1.0, F);
+<a name="line165">165: </a>    <font color="#B22222">/* Test if the updates can be accepted */</font>
+<a name="line166">166: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotBegin.html#VecDotBegin">VecDotBegin</a>(lmvm-&gt;Xprev, lmvm-&gt;Fprev, &amp;curvature);
+<a name="line167">167: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotBegin.html#VecDotBegin">VecDotBegin</a>(lmvm-&gt;Xprev, lmvm-&gt;Xprev, &amp;ststmp);
+<a name="line168">168: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotEnd.html#VecDotEnd">VecDotEnd</a>(lmvm-&gt;Xprev, lmvm-&gt;Fprev, &amp;curvature);
+<a name="line169">169: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotEnd.html#VecDotEnd">VecDotEnd</a>(lmvm-&gt;Xprev, lmvm-&gt;Xprev, &amp;ststmp);
+<a name="line170">170: </a>    <font color="#4169E1">if</font> (<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(ststmp) &lt; lmvm-&gt;eps) {
+<a name="line171">171: </a>      curvtol = 0.0;
+<a name="line172">172: </a>    } <font color="#4169E1">else</font> {
+<a name="line173">173: </a>      curvtol = lmvm-&gt;eps * <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(ststmp);
+<a name="line174">174: </a>    }
+<a name="line175">175: </a>    <font color="#4169E1">if</font> (<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(curvature) &gt; curvtol) {
+<a name="line176">176: </a>      <font color="#B22222">/* Update is good, accept it */</font>
+<a name="line177">177: </a>      lbfgs-&gt;watchdog = 0;
+<a name="line178">178: </a>      lbfgs-&gt;needP = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line179">179: </a>      old_k = lmvm-&gt;k;
+<a name="line180">180: </a>      MatUpdateKernel_LMVM(B, lmvm-&gt;Xprev, lmvm-&gt;Fprev);
+<a name="line181">181: </a>      <font color="#B22222">/* If we hit the memory limit, shift the yts, yty and sts arrays */</font>
+<a name="line182">182: </a>      <font color="#4169E1">if</font> (old_k == lmvm-&gt;k) {
+<a name="line183">183: </a>        <font color="#4169E1">for</font> (i = 0; i &lt;= lmvm-&gt;k-1; ++i) {
+<a name="line184">184: </a>          lbfgs-&gt;yts[i] = lbfgs-&gt;yts[i+1];
+<a name="line185">185: </a>          lbfgs-&gt;yty[i] = lbfgs-&gt;yty[i+1];
+<a name="line186">186: </a>          lbfgs-&gt;sts[i] = lbfgs-&gt;sts[i+1];
+<a name="line187">187: </a>        }
+<a name="line188">188: </a>      }
+<a name="line189">189: </a>      <font color="#B22222">/* Update history of useful scalars */</font>
+<a name="line190">190: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(lmvm-&gt;Y[lmvm-&gt;k], lmvm-&gt;Y[lmvm-&gt;k], &amp;ytytmp);
+<a name="line191">191: </a>      lbfgs-&gt;yts[lmvm-&gt;k] = <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(curvature);
+<a name="line192">192: </a>      lbfgs-&gt;yty[lmvm-&gt;k] = <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(ytytmp);
+<a name="line193">193: </a>      lbfgs-&gt;sts[lmvm-&gt;k] = <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(ststmp);
+<a name="line194">194: </a>      <font color="#B22222">/* Compute the scalar scale if necessary */</font>
+<a name="line195">195: </a>      <font color="#4169E1">if</font> (lbfgs-&gt;scale_type == SYMBRDN_SCALE_SCALAR) {
+<a name="line196">196: </a>        MatSymBrdnComputeJ0Scalar(B);
+<a name="line197">197: </a>      }
+<a name="line198">198: </a>    } <font color="#4169E1">else</font> {
+<a name="line199">199: </a>      <font color="#B22222">/* Update is bad, skip it */</font>
+<a name="line200">200: </a>      ++lmvm-&gt;nrejects;
+<a name="line201">201: </a>      ++lbfgs-&gt;watchdog;
+<a name="line202">202: </a>    }
+<a name="line203">203: </a>  } <font color="#4169E1">else</font> {
+<a name="line204">204: </a>    <font color="#4169E1">switch</font> (lbfgs-&gt;scale_type) {
+<a name="line205">205: </a>    <font color="#4169E1">case</font> SYMBRDN_SCALE_DIAG:
+<a name="line206">206: </a>      dbase = (Mat_LMVM*)lbfgs-&gt;D-&gt;data;
+<a name="line207">207: </a>      dctx = (Mat_DiagBrdn*)dbase-&gt;ctx;
+<a name="line208">208: </a>      <a href="../../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(dctx-&gt;invD, lbfgs-&gt;delta);
+<a name="line209">209: </a>      <font color="#4169E1">break</font>;
+<a name="line210">210: </a>    <font color="#4169E1">case</font> SYMBRDN_SCALE_SCALAR:
+<a name="line211">211: </a>      lbfgs-&gt;sigma = lbfgs-&gt;delta;
+<a name="line212">212: </a>      <font color="#4169E1">break</font>;
+<a name="line213">213: </a>    <font color="#4169E1">case</font> SYMBRDN_SCALE_NONE:
+<a name="line214">214: </a>      lbfgs-&gt;sigma = 1.0;
+<a name="line215">215: </a>      <font color="#4169E1">break</font>;
+<a name="line216">216: </a><strong><font color="#FF0000">    default:</font></strong>
+<a name="line217">217: </a>      <font color="#4169E1">break</font>;
+<a name="line218">218: </a>    }
+<a name="line219">219: </a>  }
+<a name="line220">220: </a>
+<a name="line221">221: </a>  <font color="#B22222">/* Update the scaling */</font>
+<a name="line222">222: </a>  <font color="#4169E1">if</font> (lbfgs-&gt;scale_type == SYMBRDN_SCALE_DIAG) {
+<a name="line223">223: </a>    <a href="../../../../../../docs/manualpages/KSP/MatLMVMUpdate.html#MatLMVMUpdate">MatLMVMUpdate</a>(lbfgs-&gt;D, X, F);
+<a name="line224">224: </a>  }
+<a name="line225">225: </a>
+<a name="line226">226: </a>  <font color="#4169E1">if</font> (lbfgs-&gt;watchdog &gt; lbfgs-&gt;max_seq_rejects) {
+<a name="line227">227: </a>    <a href="../../../../../../docs/manualpages/KSP/MatLMVMReset.html#MatLMVMReset">MatLMVMReset</a>(B, <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line228">228: </a>    <font color="#4169E1">if</font> (lbfgs-&gt;scale_type == SYMBRDN_SCALE_DIAG) {
+<a name="line229">229: </a>      <a href="../../../../../../docs/manualpages/KSP/MatLMVMReset.html#MatLMVMReset">MatLMVMReset</a>(lbfgs-&gt;D, <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line230">230: </a>    }
+<a name="line231">231: </a>  }
+
+<a name="line233">233: </a>  <font color="#B22222">/* Save the solution and function to be used in the next update */</font>
+<a name="line234">234: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(X, lmvm-&gt;Xprev);
+<a name="line235">235: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(F, lmvm-&gt;Fprev);
+<a name="line236">236: </a>  lmvm-&gt;prev_set = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line237">237: </a>  <font color="#4169E1">return</font>(0);
+<a name="line238">238: </a>}
+
+<a name="line240">240: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line242">242: </a><strong><font color="#4169E1"><a name="MatCopy_LMVMBFGS"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatCopy_LMVMBFGS(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> M, <a href="../../../../../../docs/manualpages/Mat/MatStructure.html#MatStructure">MatStructure</a> str)</font></strong>
+<a name="line243">243: </a>{
+<a name="line244">244: </a>  Mat_LMVM          *bdata = (Mat_LMVM*)B-&gt;data;
+<a name="line245">245: </a>  Mat_SymBrdn       *bctx = (Mat_SymBrdn*)bdata-&gt;ctx;
+<a name="line246">246: </a>  Mat_LMVM          *mdata = (Mat_LMVM*)M-&gt;data;
+<a name="line247">247: </a>  Mat_SymBrdn       *mctx = (Mat_SymBrdn*)mdata-&gt;ctx;
+<a name="line248">248: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line249">249: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i;
+
+<a name="line252">252: </a>  mctx-&gt;needP = bctx-&gt;needP;
+<a name="line253">253: </a>  <font color="#4169E1">for</font> (i=0; i&lt;=bdata-&gt;k; ++i) {
+<a name="line254">254: </a>    mctx-&gt;stp[i] = bctx-&gt;stp[i];
+<a name="line255">255: </a>    mctx-&gt;yts[i] = bctx-&gt;yts[i];
+<a name="line256">256: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(bctx-&gt;P[i], mctx-&gt;P[i]);
+<a name="line257">257: </a>  }
+<a name="line258">258: </a>  mctx-&gt;scale_type      = bctx-&gt;scale_type;
+<a name="line259">259: </a>  mctx-&gt;alpha           = bctx-&gt;alpha;
+<a name="line260">260: </a>  mctx-&gt;beta            = bctx-&gt;beta;
+<a name="line261">261: </a>  mctx-&gt;rho             = bctx-&gt;rho;
+<a name="line262">262: </a>  mctx-&gt;delta           = bctx-&gt;delta;
+<a name="line263">263: </a>  mctx-&gt;sigma_hist      = bctx-&gt;sigma_hist;
+<a name="line264">264: </a>  mctx-&gt;watchdog        = bctx-&gt;watchdog;
+<a name="line265">265: </a>  mctx-&gt;max_seq_rejects = bctx-&gt;max_seq_rejects;
+<a name="line266">266: </a>  <font color="#4169E1">switch</font> (bctx-&gt;scale_type) {
+<a name="line267">267: </a>  <font color="#4169E1">case</font> SYMBRDN_SCALE_SCALAR:
+<a name="line268">268: </a>    mctx-&gt;sigma = bctx-&gt;sigma;
+<a name="line269">269: </a>    <font color="#4169E1">break</font>;
+<a name="line270">270: </a>  <font color="#4169E1">case</font> SYMBRDN_SCALE_DIAG:
+<a name="line271">271: </a>    <a href="../../../../../../docs/manualpages/Mat/MatCopy.html#MatCopy">MatCopy</a>(bctx-&gt;D, mctx-&gt;D, <a href="../../../../../../docs/manualpages/Mat/MatStructure.html#MatStructure">SAME_NONZERO_PATTERN</a>);
+<a name="line272">272: </a>    <font color="#4169E1">break</font>;
+<a name="line273">273: </a>  <font color="#4169E1">case</font> SYMBRDN_SCALE_NONE:
+<a name="line274">274: </a>    mctx-&gt;sigma = 1.0;
+<a name="line275">275: </a>    <font color="#4169E1">break</font>;
+<a name="line276">276: </a><strong><font color="#FF0000">  default:</font></strong>
+<a name="line277">277: </a>    <font color="#4169E1">break</font>;
+<a name="line278">278: </a>  }
+<a name="line279">279: </a>  <font color="#4169E1">return</font>(0);
+<a name="line280">280: </a>}
+
+<a name="line282">282: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line284">284: </a><strong><font color="#4169E1"><a name="MatReset_LMVMBFGS"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatReset_LMVMBFGS(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> destructive)</font></strong>
+<a name="line285">285: </a>{
+<a name="line286">286: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line287">287: </a>  Mat_SymBrdn       *lbfgs = (Mat_SymBrdn*)lmvm-&gt;ctx;
+<a name="line288">288: </a>  Mat_LMVM          *dbase;
+<a name="line289">289: </a>  Mat_DiagBrdn      *dctx;
+<a name="line290">290: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line291">291: </a>
+<a name="line293">293: </a>  lbfgs-&gt;watchdog = 0;
+<a name="line294">294: </a>  lbfgs-&gt;needP = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line295">295: </a>  <font color="#4169E1">if</font> (lbfgs-&gt;allocated) {
+<a name="line296">296: </a>    <font color="#4169E1">if</font> (destructive) {
+<a name="line297">297: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;lbfgs-&gt;work);
+<a name="line298">298: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(lbfgs-&gt;stp, lbfgs-&gt;yts, lbfgs-&gt;yty, lbfgs-&gt;sts);
+<a name="line299">299: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(lmvm-&gt;m, &amp;lbfgs-&gt;P);
+<a name="line300">300: </a>      <font color="#4169E1">switch</font> (lbfgs-&gt;scale_type) {
+<a name="line301">301: </a>      <font color="#4169E1">case</font> SYMBRDN_SCALE_DIAG:
+<a name="line302">302: </a>        <a href="../../../../../../docs/manualpages/KSP/MatLMVMReset.html#MatLMVMReset">MatLMVMReset</a>(lbfgs-&gt;D, <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line303">303: </a>        <font color="#4169E1">break</font>;
+<a name="line304">304: </a><strong><font color="#FF0000">      default:</font></strong>
+<a name="line305">305: </a>        <font color="#4169E1">break</font>;
+<a name="line306">306: </a>      }
+<a name="line307">307: </a>      lbfgs-&gt;allocated = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line308">308: </a>    } <font color="#4169E1">else</font> {
+<a name="line309">309: </a>      <font color="#4169E1">switch</font> (lbfgs-&gt;scale_type) {
+<a name="line310">310: </a>      <font color="#4169E1">case</font> SYMBRDN_SCALE_SCALAR:
+<a name="line311">311: </a>        lbfgs-&gt;sigma = lbfgs-&gt;delta;
+<a name="line312">312: </a>        <font color="#4169E1">break</font>;
+<a name="line313">313: </a>      <font color="#4169E1">case</font> SYMBRDN_SCALE_DIAG:
+<a name="line314">314: </a>        <a href="../../../../../../docs/manualpages/KSP/MatLMVMReset.html#MatLMVMReset">MatLMVMReset</a>(lbfgs-&gt;D, <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line315">315: </a>        dbase = (Mat_LMVM*)lbfgs-&gt;D-&gt;data;
+<a name="line316">316: </a>        dctx = (Mat_DiagBrdn*)dbase-&gt;ctx;
+<a name="line317">317: </a>        <a href="../../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(dctx-&gt;invD, lbfgs-&gt;delta);
+<a name="line318">318: </a>        <font color="#4169E1">break</font>;
+<a name="line319">319: </a>      <font color="#4169E1">case</font> SYMBRDN_SCALE_NONE:
+<a name="line320">320: </a>        lbfgs-&gt;sigma = 1.0;
+<a name="line321">321: </a>        <font color="#4169E1">break</font>;
+<a name="line322">322: </a><strong><font color="#FF0000">      default:</font></strong>
+<a name="line323">323: </a>        <font color="#4169E1">break</font>;
+<a name="line324">324: </a>      }
+<a name="line325">325: </a>    }
+<a name="line326">326: </a>  }
+<a name="line327">327: </a>  MatReset_LMVM(B, destructive);
+<a name="line328">328: </a>  <font color="#4169E1">return</font>(0);
+<a name="line329">329: </a>}
+
+<a name="line331">331: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line333">333: </a><strong><font color="#4169E1"><a name="MatAllocate_LMVMBFGS"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatAllocate_LMVMBFGS(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F)</font></strong>
+<a name="line334">334: </a>{
+<a name="line335">335: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line336">336: </a>  Mat_SymBrdn       *lbfgs = (Mat_SymBrdn*)lmvm-&gt;ctx;
+<a name="line337">337: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line338">338: </a>
+<a name="line340">340: </a>  MatAllocate_LMVM(B, X, F);
+<a name="line341">341: </a>  <font color="#4169E1">if</font> (!lbfgs-&gt;allocated) {
+<a name="line342">342: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(X, &amp;lbfgs-&gt;work);
+<a name="line343">343: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(lmvm-&gt;m, &amp;lbfgs-&gt;stp, lmvm-&gt;m, &amp;lbfgs-&gt;yts, lmvm-&gt;m, &amp;lbfgs-&gt;yty, lmvm-&gt;m, &amp;lbfgs-&gt;sts);
+<a name="line344">344: </a>    <font color="#4169E1">if</font> (lmvm-&gt;m &gt; 0) {
+<a name="line345">345: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(X, lmvm-&gt;m, &amp;lbfgs-&gt;P);
+<a name="line346">346: </a>    }
+<a name="line347">347: </a>    <font color="#4169E1">switch</font> (lbfgs-&gt;scale_type) {
+<a name="line348">348: </a>    <font color="#4169E1">case</font> SYMBRDN_SCALE_DIAG:
+<a name="line349">349: </a>      <a href="../../../../../../docs/manualpages/KSP/MatLMVMAllocate.html#MatLMVMAllocate">MatLMVMAllocate</a>(lbfgs-&gt;D, X, F);
+<a name="line350">350: </a>      <font color="#4169E1">break</font>;
+<a name="line351">351: </a><strong><font color="#FF0000">    default:</font></strong>
+<a name="line352">352: </a>      <font color="#4169E1">break</font>;
+<a name="line353">353: </a>    }
+<a name="line354">354: </a>    lbfgs-&gt;allocated = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line355">355: </a>  }
+<a name="line356">356: </a>  <font color="#4169E1">return</font>(0);
+<a name="line357">357: </a>}
+
+<a name="line359">359: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line361">361: </a><strong><font color="#4169E1"><a name="MatDestroy_LMVMBFGS"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatDestroy_LMVMBFGS(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B)</font></strong>
+<a name="line362">362: </a>{
+<a name="line363">363: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line364">364: </a>  Mat_SymBrdn       *lbfgs = (Mat_SymBrdn*)lmvm-&gt;ctx;
+<a name="line365">365: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+<a name="line368">368: </a>  <font color="#4169E1">if</font> (lbfgs-&gt;allocated) {
+<a name="line369">369: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;lbfgs-&gt;work);
+<a name="line370">370: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(lbfgs-&gt;stp, lbfgs-&gt;yts, lbfgs-&gt;yty, lbfgs-&gt;sts);
+<a name="line371">371: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(lmvm-&gt;m, &amp;lbfgs-&gt;P);
+<a name="line372">372: </a>    lbfgs-&gt;allocated = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line373">373: </a>  }
+<a name="line374">374: </a>  <a href="../../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;lbfgs-&gt;D);
+<a name="line375">375: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(lmvm-&gt;ctx);
+<a name="line376">376: </a>  MatDestroy_LMVM(B);
+<a name="line377">377: </a>  <font color="#4169E1">return</font>(0);
+<a name="line378">378: </a>}
+
+<a name="line380">380: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line382">382: </a><strong><font color="#4169E1"><a name="MatSetUp_LMVMBFGS"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSetUp_LMVMBFGS(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B)</font></strong>
+<a name="line383">383: </a>{
+<a name="line384">384: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line385">385: </a>  Mat_SymBrdn       *lbfgs = (Mat_SymBrdn*)lmvm-&gt;ctx;
+<a name="line386">386: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line387">387: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          n, N;
+<a name="line388">388: </a>
+<a name="line390">390: </a>  MatSetUp_LMVM(B);
+<a name="line391">391: </a>  <font color="#4169E1">if</font> (!lbfgs-&gt;allocated) {
+<a name="line392">392: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(lmvm-&gt;Xprev, &amp;lbfgs-&gt;work);
+<a name="line393">393: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(lmvm-&gt;m, &amp;lbfgs-&gt;stp, lmvm-&gt;m, &amp;lbfgs-&gt;yts, lmvm-&gt;m, &amp;lbfgs-&gt;yty, lmvm-&gt;m, &amp;lbfgs-&gt;sts);
+<a name="line394">394: </a>    <font color="#4169E1">if</font> (lmvm-&gt;m &gt; 0) {
+<a name="line395">395: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(lmvm-&gt;Xprev, lmvm-&gt;m, &amp;lbfgs-&gt;P);
+<a name="line396">396: </a>    }
+<a name="line397">397: </a>    <font color="#4169E1">switch</font> (lbfgs-&gt;scale_type) {
+<a name="line398">398: </a>    <font color="#4169E1">case</font> SYMBRDN_SCALE_DIAG:
+<a name="line399">399: </a>      <a href="../../../../../../docs/manualpages/Mat/MatGetLocalSize.html#MatGetLocalSize">MatGetLocalSize</a>(B, &amp;n, &amp;n);
+<a name="line400">400: </a>      <a href="../../../../../../docs/manualpages/Mat/MatGetSize.html#MatGetSize">MatGetSize</a>(B, &amp;N, &amp;N);
+<a name="line401">401: </a>      <a href="../../../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(lbfgs-&gt;D, n, n, N, N);
+<a name="line402">402: </a>      <a href="../../../../../../docs/manualpages/Mat/MatSetUp.html#MatSetUp">MatSetUp</a>(lbfgs-&gt;D);
+<a name="line403">403: </a>      <font color="#4169E1">break</font>;
+<a name="line404">404: </a><strong><font color="#FF0000">    default:</font></strong>
+<a name="line405">405: </a>      <font color="#4169E1">break</font>;
+<a name="line406">406: </a>    }
+<a name="line407">407: </a>    lbfgs-&gt;allocated = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line408">408: </a>  }
+<a name="line409">409: </a>  <font color="#4169E1">return</font>(0);
+<a name="line410">410: </a>}
+
+<a name="line412">412: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line414">414: </a><strong><font color="#4169E1"><a name="MatSetFromOptions_LMVMBFGS"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSetFromOptions_LMVMBFGS(PetscOptionItems *PetscOptionsObject, <a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B)</font></strong>
+<a name="line415">415: </a>{
+<a name="line416">416: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line417">417: </a>  Mat_SymBrdn       *lbfgs = (Mat_SymBrdn*)lmvm-&gt;ctx;
+<a name="line418">418: </a>  Mat_LMVM          *dbase;
+<a name="line419">419: </a>  Mat_DiagBrdn      *dctx;
+<a name="line420">420: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+<a name="line423">423: </a>  MatSetFromOptions_LMVM(PetscOptionsObject, B);
+<a name="line424">424: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsHead.html#PetscOptionsHead">PetscOptionsHead</a>(PetscOptionsObject,<font color="#666666">"Restricted Broyden method for approximating SPD Jacobian actions (MATLMVMSYMBRDN)"</font>);
+<a name="line425">425: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsEList.html#PetscOptionsEList">PetscOptionsEList</a>(<font color="#666666">"-mat_lmvm_scale_type"</font>, <font color="#666666">"(developer) scaling type applied to J0"</font>, <font color="#666666">""</font>, Scale_Table, SYMBRDN_SCALE_SIZE, Scale_Table[lbfgs-&gt;scale_type], &amp;lbfgs-&gt;scale_type,NULL);
+<a name="line426">426: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-mat_lmvm_theta"</font>,<font color="#666666">"(developer) convex ratio between BFGS and DFP components of the diagonal J0 scaling"</font>,<font color="#666666">""</font>,lbfgs-&gt;theta,&amp;lbfgs-&gt;theta,NULL);
+<a name="line427">427: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-mat_lmvm_rho"</font>,<font color="#666666">"(developer) update limiter in the J0 scaling"</font>,<font color="#666666">""</font>,lbfgs-&gt;rho,&amp;lbfgs-&gt;rho,NULL);
+<a name="line428">428: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-mat_lmvm_alpha"</font>,<font color="#666666">"(developer) convex ratio in the J0 scaling"</font>,<font color="#666666">""</font>,lbfgs-&gt;alpha,&amp;lbfgs-&gt;alpha,NULL);
+<a name="line429">429: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-mat_lmvm_beta"</font>,<font color="#666666">"(developer) exponential factor in the diagonal J0 scaling"</font>,<font color="#666666">""</font>,lbfgs-&gt;beta,&amp;lbfgs-&gt;beta,NULL);
+<a name="line430">430: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_lmvm_sigma_hist"</font>,<font color="#666666">"(developer) number of past updates to use in the default J0 scalar"</font>,<font color="#666666">""</font>,lbfgs-&gt;sigma_hist,&amp;lbfgs-&gt;sigma_hist,NULL);
+<a name="line431">431: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsTail.html#PetscOptionsTail">PetscOptionsTail</a>();
+<a name="line432">432: </a>  <font color="#4169E1">if</font> ((lbfgs-&gt;theta &lt; 0.0) || (lbfgs-&gt;theta &gt; 1.0)) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B), PETSC_ERR_ARG_OUTOFRANGE, <font color="#666666">"convex ratio for the diagonal J0 scale cannot be outside the range of [0, 1]"</font>);
+<a name="line433">433: </a>  <font color="#4169E1">if</font> ((lbfgs-&gt;alpha &lt; 0.0) || (lbfgs-&gt;alpha &gt; 1.0)) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B), PETSC_ERR_ARG_OUTOFRANGE, <font color="#666666">"convex ratio in the J0 scaling cannot be outside the range of [0, 1]"</font>);
+<a name="line434">434: </a>  <font color="#4169E1">if</font> ((lbfgs-&gt;rho &lt; 0.0) || (lbfgs-&gt;rho &gt; 1.0)) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B), PETSC_ERR_ARG_OUTOFRANGE, <font color="#666666">"update limiter in the J0 scaling cannot be outside the range of [0, 1]"</font>);
+<a name="line435">435: </a>  <font color="#4169E1">if</font> (lbfgs-&gt;sigma_hist &lt; 0) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B), PETSC_ERR_ARG_OUTOFRANGE, <font color="#666666">"J0 scaling history length cannot be negative"</font>);
+<a name="line436">436: </a>  <font color="#4169E1">if</font> (lbfgs-&gt;scale_type == SYMBRDN_SCALE_DIAG) {
+<a name="line437">437: </a>    <a href="../../../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(lbfgs-&gt;D);
+<a name="line438">438: </a>    dbase = (Mat_LMVM*)lbfgs-&gt;D-&gt;data;
+<a name="line439">439: </a>    dctx = (Mat_DiagBrdn*)dbase-&gt;ctx;
+<a name="line440">440: </a>    dctx-&gt;delta_min  = lbfgs-&gt;delta_min;
+<a name="line441">441: </a>    dctx-&gt;delta_max  = lbfgs-&gt;delta_max;
+<a name="line442">442: </a>    dctx-&gt;theta      = lbfgs-&gt;theta;
+<a name="line443">443: </a>    dctx-&gt;rho        = lbfgs-&gt;rho;
+<a name="line444">444: </a>    dctx-&gt;alpha      = lbfgs-&gt;alpha;
+<a name="line445">445: </a>    dctx-&gt;beta       = lbfgs-&gt;beta;
+<a name="line446">446: </a>    dctx-&gt;sigma_hist = lbfgs-&gt;sigma_hist;
+<a name="line447">447: </a>  }
+<a name="line448">448: </a>  <font color="#4169E1">return</font>(0);
+<a name="line449">449: </a>}
+
+<a name="line451">451: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line453">453: </a><strong><font color="#4169E1"><a name="MatCreate_LMVMBFGS"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatCreate_LMVMBFGS(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B)</font></strong>
+<a name="line454">454: </a>{
+<a name="line455">455: </a>  Mat_LMVM          *lmvm;
+<a name="line456">456: </a>  Mat_SymBrdn       *lbfgs;
+<a name="line457">457: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+<a name="line460">460: </a>  MatCreate_LMVM(B);
+<a name="line461">461: </a>  PetscObjectChangeTypeName((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B, MATLMVMBFGS);
+<a name="line462">462: </a>  <a href="../../../../../../docs/manualpages/Mat/MatSetOption.html#MatSetOption">MatSetOption</a>(B, <a href="../../../../../../docs/manualpages/Mat/MatOption.html#MatOption">MAT_SPD</a>, <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line463">463: </a>  B-&gt;ops-&gt;view = MatView_LMVMSymBrdn;
+<a name="line464">464: </a>  B-&gt;ops-&gt;setup = MatSetUp_LMVMBFGS;
+<a name="line465">465: </a>  B-&gt;ops-&gt;destroy = MatDestroy_LMVMBFGS;
+<a name="line466">466: </a>  B-&gt;ops-&gt;setfromoptions = MatSetFromOptions_LMVMBFGS;
+<a name="line467">467: </a>  B-&gt;ops-&gt;solve = MatSolve_LMVMBFGS;
+
+<a name="line469">469: </a>  lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line470">470: </a>  lmvm-&gt;square = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line471">471: </a>  lmvm-&gt;ops-&gt;allocate = MatAllocate_LMVMBFGS;
+<a name="line472">472: </a>  lmvm-&gt;ops-&gt;reset = MatReset_LMVMBFGS;
+<a name="line473">473: </a>  lmvm-&gt;ops-&gt;update = MatUpdate_LMVMBFGS;
+<a name="line474">474: </a>  lmvm-&gt;ops-&gt;mult = MatMult_LMVMBFGS;
+<a name="line475">475: </a>  lmvm-&gt;ops-&gt;copy = MatCopy_LMVMBFGS;
+
+<a name="line477">477: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(B, &amp;lbfgs);
+<a name="line478">478: </a>  lmvm-&gt;ctx = (void*)lbfgs;
+<a name="line479">479: </a>  lbfgs-&gt;allocated       = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line480">480: </a>  lbfgs-&gt;needP           = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line481">481: </a>  lbfgs-&gt;phi             = 0.0;
+<a name="line482">482: </a>  lbfgs-&gt;theta           = 0.125;
+<a name="line483">483: </a>  lbfgs-&gt;alpha           = 1.0;
+<a name="line484">484: </a>  lbfgs-&gt;rho             = 1.0;
+<a name="line485">485: </a>  lbfgs-&gt;beta            = 0.5;
+<a name="line486">486: </a>  lbfgs-&gt;sigma           = 1.0;
+<a name="line487">487: </a>  lbfgs-&gt;delta           = 1.0;
+<a name="line488">488: </a>  lbfgs-&gt;delta_min       = 1e-7;
+<a name="line489">489: </a>  lbfgs-&gt;delta_max       = 100.0;
+<a name="line490">490: </a>  lbfgs-&gt;sigma_hist      = 1;
+<a name="line491">491: </a>  lbfgs-&gt;scale_type      = SYMBRDN_SCALE_DIAG;
+<a name="line492">492: </a>  lbfgs-&gt;watchdog        = 0;
+<a name="line493">493: </a>  lbfgs-&gt;max_seq_rejects = lmvm-&gt;m/2;
+<a name="line494">494: </a>
+<a name="line495">495: </a>  <a href="../../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B), &amp;lbfgs-&gt;D);
+<a name="line496">496: </a>  <a href="../../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(lbfgs-&gt;D, MATLMVMDIAGBRDN);
+<a name="line497">497: </a>  <a href="../../../../../../docs/manualpages/Mat/MatSetOptionsPrefix.html#MatSetOptionsPrefix">MatSetOptionsPrefix</a>(lbfgs-&gt;D, <font color="#666666">"J0_"</font>);
+<a name="line498">498: </a>  <font color="#4169E1">return</font>(0);
+<a name="line499">499: </a>}
+
+<a name="line501">501: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line503">503: </a><font color="#B22222">/*@</font>
+<a name="line504">504: </a><font color="#B22222">   <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMBFGS.html#MatCreateLMVMBFGS">MatCreateLMVMBFGS</a> - Creates a limited-memory Broyden-Fletcher-Goldfarb-Shano (BFGS)</font>
+<a name="line505">505: </a><font color="#B22222">   matrix used for approximating Jacobians. L-BFGS is symmetric positive-definite by </font>
+<a name="line506">506: </a><font color="#B22222">   construction, and is commonly used to approximate Hessians in optimization </font>
+<a name="line507">507: </a><font color="#B22222">   problems.</font>
+<a name="line508">508: </a><font color="#B22222">   </font>
+<a name="line509">509: </a><font color="#B22222">   The provided local and global sizes must match the solution and function vectors </font>
+<a name="line510">510: </a><font color="#B22222">   used with <a href="../../../../../../docs/manualpages/KSP/MatLMVMUpdate.html#MatLMVMUpdate">MatLMVMUpdate</a>() and <a href="../../../../../../docs/manualpages/Mat/MatSolve.html#MatSolve">MatSolve</a>(). The resulting L-BFGS matrix will have </font>
+<a name="line511">511: </a><font color="#B22222">   storage vectors allocated with <a href="../../../../../../docs/manualpages/Vec/VecCreateSeq.html#VecCreateSeq">VecCreateSeq</a>() in serial and <a href="../../../../../../docs/manualpages/Vec/VecCreateMPI.html#VecCreateMPI">VecCreateMPI</a>() in </font>
+<a name="line512">512: </a><font color="#B22222">   parallel. To use the L-BFGS matrix with other vector types, the matrix must be </font>
+<a name="line513">513: </a><font color="#B22222">   created using <a href="../../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>() and <a href="../../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(), followed by <a href="../../../../../../docs/manualpages/KSP/MatLMVMAllocate.html#MatLMVMAllocate">MatLMVMAllocate</a>(). </font>
+<a name="line514">514: </a><font color="#B22222">   This ensures that the internal storage and work vectors are duplicated from the </font>
+<a name="line515">515: </a><font color="#B22222">   correct type of vector.</font>
+
+<a name="line517">517: </a><font color="#B22222">   Collective</font>
+
+<a name="line519">519: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line520">520: </a><font color="#B22222">+  comm - MPI communicator, set to <a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a></font>
+<a name="line521">521: </a><font color="#B22222">.  n - number of local rows for storage vectors</font>
+<a name="line522">522: </a><font color="#B22222">-  N - global size of the storage vectors</font>
+
+<a name="line524">524: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line525">525: </a><font color="#B22222">.  B - the matrix</font>
+
+<a name="line527">527: </a><font color="#B22222">   It is recommended that one use the <a href="../../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(), <a href="../../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>() and/or <a href="../../../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>()</font>
+<a name="line528">528: </a><font color="#B22222">   paradigm instead of this routine directly.</font>
+
+<a name="line530">530: </a><font color="#B22222">   Options Database Keys:</font>
+<a name="line531">531: </a><font color="#B22222">+   -mat_lmvm_num_vecs - maximum number of correction vectors (i.e.: updates) stored</font>
+<a name="line532">532: </a><font color="#B22222">.   -mat_lmvm_scale_type - (developer) type of scaling applied to J0 (none, scalar, diagonal)</font>
+<a name="line533">533: </a><font color="#B22222">.   -mat_lmvm_theta - (developer) convex ratio between BFGS and DFP components of the diagonal J0 scaling</font>
+<a name="line534">534: </a><font color="#B22222">.   -mat_lmvm_rho - (developer) update limiter for the J0 scaling</font>
+<a name="line535">535: </a><font color="#B22222">.   -mat_lmvm_alpha - (developer) coefficient factor for the quadratic subproblem in J0 scaling</font>
+<a name="line536">536: </a><font color="#B22222">.   -mat_lmvm_beta - (developer) exponential factor for the diagonal J0 scaling</font>
+<a name="line537">537: </a><font color="#B22222">-   -mat_lmvm_sigma_hist - (developer) number of past updates to use in J0 scaling</font>
+
+<a name="line539">539: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line541">541: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(), MATLMVM, MATLMVMBFGS, <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMDFP.html#MatCreateLMVMDFP">MatCreateLMVMDFP</a>(), <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMSR1.html#MatCreateLMVMSR1">MatCreateLMVMSR1</a>(), </font>
+<a name="line542">542: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMBrdn.html#MatCreateLMVMBrdn">MatCreateLMVMBrdn</a>(), <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMBadBrdn.html#MatCreateLMVMBadBrdn">MatCreateLMVMBadBrdn</a>(), <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMSymBrdn.html#MatCreateLMVMSymBrdn">MatCreateLMVMSymBrdn</a>()</font>
+<a name="line543">543: </a><font color="#B22222">@*/</font>
+<a name="line544">544: </a><strong><font color="#4169E1"><a name="MatCreateLMVMBFGS"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMBFGS.html#MatCreateLMVMBFGS">MatCreateLMVMBFGS</a>(<a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> N, <a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *B)</font></strong>
+<a name="line545">545: </a>{
+<a name="line546">546: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line547">547: </a>
+<a name="line549">549: </a>  <a href="../../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(comm, B);
+<a name="line550">550: </a>  <a href="../../../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(*B, n, n, N, N);
+<a name="line551">551: </a>  <a href="../../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(*B, MATLMVMBFGS);
+<a name="line552">552: </a>  <a href="../../../../../../docs/manualpages/Mat/MatSetUp.html#MatSetUp">MatSetUp</a>(*B);
+<a name="line553">553: </a>  <font color="#4169E1">return</font>(0);
+<a name="line554">554: </a>}
+</pre>
+</body>
+
+</html>

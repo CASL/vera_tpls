@@ -1,0 +1,529 @@
+<center><a href="mrk.c">Actual source code: mrk.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ts/impls/explicit/rk/mrk.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:27:40+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ts/impls/explicit/rk/mrk.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><font color="#B22222">/*</font>
+<a name="line2">  2: </a><font color="#B22222">  Code for time stepping with the multi-rate Runge-Kutta method</font>
+
+<a name="line4">  4: </a><font color="#B22222">  Notes:</font>
+<a name="line5">  5: </a><font color="#B22222">  1) The general system is written as</font>
+<a name="line6">  6: </a><font color="#B22222">     Udot = F(t,U) for the nonsplit version of multi-rate RK,</font>
+<a name="line7">  7: </a><font color="#B22222">     user should give the indexes for both slow and fast components;</font>
+<a name="line8">  8: </a><font color="#B22222">  2) The general system is written as</font>
+<a name="line9">  9: </a><font color="#B22222">     Usdot = Fs(t,Us,Uf)</font>
+<a name="line10"> 10: </a><font color="#B22222">     Ufdot = Ff(t,Us,Uf) for multi-rate RK with RHS splits,</font>
+<a name="line11"> 11: </a><font color="#B22222">     user should partioned RHS by themselves and also provide the indexes for both slow and fast components.</font>
+<a name="line12"> 12: </a><font color="#B22222">*/</font>
+
+<a name="line14"> 14: </a> #include <A href="../../../../../include/petsc/private/tsimpl.h.html">&lt;petsc/private/tsimpl.h&gt;</A>
+<a name="line15"> 15: </a> #include <A href="../../../../../include/petscdm.h.html">&lt;petscdm.h&gt;</A>
+<a name="line16"> 16: </a> #include <A href="../../../../../include/../src/ts/impls/explicit/rk/rk.h.html">&lt;../src/ts/impls/explicit/rk/rk.h&gt;</A>
+<a name="line17"> 17: </a> #include <A href="../../../../../include/../src/ts/impls/explicit/rk/mrk.h.html">&lt;../src/ts/impls/explicit/rk/mrk.h&gt;</A>
+
+<a name="line19"> 19: </a><strong><font color="#4169E1"><a name="TSReset_RK_MultirateNonsplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSReset_RK_MultirateNonsplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts)</font></strong>
+<a name="line20"> 20: </a>{
+<a name="line21"> 21: </a>  TS_RK          *rk = (TS_RK*)ts-&gt;data;
+<a name="line22"> 22: </a>  RKTableau      tab = rk-&gt;tableau;
+
+<a name="line26"> 26: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;rk-&gt;X0);
+<a name="line27"> 27: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(tab-&gt;s,&amp;rk-&gt;YdotRHS_slow);
+<a name="line28"> 28: </a>  <font color="#4169E1">return</font>(0);
+<a name="line29"> 29: </a>}
+
+<a name="line31"> 31: </a><strong><font color="#4169E1"><a name="TSInterpolate_RK_MultirateNonsplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSInterpolate_RK_MultirateNonsplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> itime,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X)</font></strong>
+<a name="line32"> 32: </a>{
+<a name="line33"> 33: </a>  TS_RK            *rk = (TS_RK*)ts-&gt;data;
+<a name="line34"> 34: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>         s = rk-&gt;tableau-&gt;s,p = rk-&gt;tableau-&gt;p,i,j;
+<a name="line35"> 35: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>        h = ts-&gt;time_step;
+<a name="line36"> 36: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>        tt,t;
+<a name="line37"> 37: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>      *b;
+<a name="line38"> 38: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>  *B = rk-&gt;tableau-&gt;binterp;
+<a name="line39"> 39: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>   ierr;
+
+<a name="line42"> 42: </a>  <font color="#4169E1">if</font> (!B) <a href="../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts),PETSC_ERR_SUP,<font color="#666666">"<a href="../../../../../docs/manualpages/TS/TSRK.html#TSRK">TSRK</a> %s does not have an interpolation formula"</font>,rk-&gt;tableau-&gt;name);
+<a name="line43"> 43: </a>  t = (itime - rk-&gt;ptime)/h;
+<a name="line44"> 44: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(s,&amp;b);
+<a name="line45"> 45: </a>  <font color="#4169E1">for</font> (i=0; i&lt;s; i++) b[i] = 0;
+<a name="line46"> 46: </a>  <font color="#4169E1">for</font> (j=0,tt=t; j&lt;p; j++,tt*=t) {
+<a name="line47"> 47: </a>    <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line48"> 48: </a>      b[i]  += h * B[i*p+j] * tt;
+<a name="line49"> 49: </a>    }
+<a name="line50"> 50: </a>  }
+<a name="line51"> 51: </a>  <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(rk-&gt;X0,X);
+<a name="line52"> 52: </a>  <a href="../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(X,s,b,rk-&gt;YdotRHS_slow);
+<a name="line53"> 53: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(b);
+<a name="line54"> 54: </a>  <font color="#4169E1">return</font>(0);
+<a name="line55"> 55: </a>}
+
+<a name="line57"> 57: </a><strong><font color="#4169E1"><a name="TSStepRefine_RK_MultirateNonsplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSStepRefine_RK_MultirateNonsplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts)</font></strong>
+<a name="line58"> 58: </a>{
+<a name="line59"> 59: </a>  <a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a>              previousts,subts;
+<a name="line60"> 60: </a>  TS_RK           *rk = (TS_RK*)ts-&gt;data;
+<a name="line61"> 61: </a>  RKTableau       tab = rk-&gt;tableau;
+<a name="line62"> 62: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             *Y = rk-&gt;Y,*YdotRHS = rk-&gt;YdotRHS;
+<a name="line63"> 63: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             vec_fast,subvec_fast;
+<a name="line64"> 64: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  s = tab-&gt;s;
+<a name="line65"> 65: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *A = tab-&gt;A,*c = tab-&gt;c;
+<a name="line66"> 66: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>     *w = rk-&gt;work;
+<a name="line67"> 67: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        i,j,k;
+<a name="line68"> 68: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>       t = ts-&gt;ptime,h = ts-&gt;time_step;
+<a name="line69"> 69: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line71"> 71: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ts-&gt;vec_sol,&amp;vec_fast);
+<a name="line72"> 72: </a>  previousts = rk-&gt;subts_current;
+<a name="line73"> 73: </a>  <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetSubTS.html#TSRHSSplitGetSubTS">TSRHSSplitGetSubTS</a>(rk-&gt;subts_current,<font color="#666666">"fast"</font>,&amp;subts);
+<a name="line74"> 74: </a>  <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetSubTS.html#TSRHSSplitGetSubTS">TSRHSSplitGetSubTS</a>(subts,<font color="#666666">"fast"</font>,&amp;subts);
+<a name="line75"> 75: </a>  <font color="#4169E1">for</font> (k=0; k&lt;rk-&gt;dtratio; k++) {
+<a name="line76"> 76: </a>    <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line77"> 77: </a>      TSInterpolate_RK_MultirateNonsplit(ts,t+k*h/rk-&gt;dtratio+h/rk-&gt;dtratio*c[i],Y[i]);
+<a name="line78"> 78: </a>      <font color="#4169E1">for</font> (j=0; j&lt;i; j++) w[j] = h/rk-&gt;dtratio*A[i*s+j];
+<a name="line79"> 79: </a>      <font color="#B22222">/* update the fast components in the stage value, the slow components will be ignored, so we do not care the slow part in vec_fast */</font>
+<a name="line80"> 80: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ts-&gt;vec_sol,vec_fast);
+<a name="line81"> 81: </a>      <a href="../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(vec_fast,i,w,YdotRHS);
+<a name="line82"> 82: </a>      <font color="#B22222">/* update the fast components in the stage value */</font>
+<a name="line83"> 83: </a>      <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(vec_fast,rk-&gt;is_fast,&amp;subvec_fast);
+<a name="line84"> 84: </a>      <a href="../../../../../docs/manualpages/Vec/VecISCopy.html#VecISCopy">VecISCopy</a>(Y[i],rk-&gt;is_fast,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>,subvec_fast);
+<a name="line85"> 85: </a>      <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(vec_fast,rk-&gt;is_fast,&amp;subvec_fast);
+<a name="line86"> 86: </a>      <font color="#B22222">/* compute the stage RHS */</font>
+<a name="line87"> 87: </a>      <a href="../../../../../docs/manualpages/TS/TSComputeRHSFunction.html#TSComputeRHSFunction">TSComputeRHSFunction</a>(ts,t+k*h/rk-&gt;dtratio+h/rk-&gt;dtratio*c[i],Y[i],YdotRHS[i]);
+<a name="line88"> 88: </a>    }
+<a name="line89"> 89: </a>    <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ts-&gt;vec_sol,vec_fast);
+<a name="line90"> 90: </a>    <a href="../../../../../docs/manualpages/TS/TSEvaluateStep.html#TSEvaluateStep">TSEvaluateStep</a>(ts,tab-&gt;order,vec_fast,NULL);
+<a name="line91"> 91: </a>    <font color="#B22222">/* update the fast components in the solution */</font>
+<a name="line92"> 92: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(vec_fast,rk-&gt;is_fast,&amp;subvec_fast);
+<a name="line93"> 93: </a>    <a href="../../../../../docs/manualpages/Vec/VecISCopy.html#VecISCopy">VecISCopy</a>(ts-&gt;vec_sol,rk-&gt;is_fast,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>,subvec_fast);
+<a name="line94"> 94: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(vec_fast,rk-&gt;is_fast,&amp;subvec_fast);
+
+<a name="line96"> 96: </a>    <font color="#4169E1">if</font> (subts) {
+<a name="line97"> 97: </a>      <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *YdotRHS_copy;
+<a name="line98"> 98: </a>      <a href="../../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(ts-&gt;vec_sol,s,&amp;YdotRHS_copy);
+<a name="line99"> 99: </a>      rk-&gt;subts_current = rk-&gt;subts_fast;
+<a name="line100">100: </a>      ts-&gt;ptime = t+k*h/rk-&gt;dtratio;
+<a name="line101">101: </a>      ts-&gt;time_step = h/rk-&gt;dtratio;
+<a name="line102">102: </a>      <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetIS.html#TSRHSSplitGetIS">TSRHSSplitGetIS</a>(rk-&gt;subts_current,<font color="#666666">"fast"</font>,&amp;rk-&gt;is_fast);
+<a name="line103">103: </a>      <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line104">104: </a>        <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(rk-&gt;YdotRHS_slow[i],YdotRHS_copy[i]);
+<a name="line105">105: </a>        <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(YdotRHS[i],rk-&gt;YdotRHS_slow[i]);
+<a name="line106">106: </a>      }
+
+<a name="line108">108: </a>      TSStepRefine_RK_MultirateNonsplit(ts);
+
+<a name="line110">110: </a>      rk-&gt;subts_current = previousts;
+<a name="line111">111: </a>      ts-&gt;ptime = t;
+<a name="line112">112: </a>      ts-&gt;time_step = h;
+<a name="line113">113: </a>      <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetIS.html#TSRHSSplitGetIS">TSRHSSplitGetIS</a>(previousts,<font color="#666666">"fast"</font>,&amp;rk-&gt;is_fast);
+<a name="line114">114: </a>      <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line115">115: </a>        <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(YdotRHS_copy[i],rk-&gt;YdotRHS_slow[i]);
+<a name="line116">116: </a>      }
+<a name="line117">117: </a>      <a href="../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(s,&amp;YdotRHS_copy);
+<a name="line118">118: </a>    }
+<a name="line119">119: </a>  }
+<a name="line120">120: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;vec_fast);
+<a name="line121">121: </a>  <font color="#4169E1">return</font>(0);
+<a name="line122">122: </a>}
+
+<a name="line124">124: </a><strong><font color="#4169E1"><a name="TSStep_RK_MultirateNonsplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSStep_RK_MultirateNonsplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts)</font></strong>
+<a name="line125">125: </a>{
+<a name="line126">126: </a>  TS_RK           *rk = (TS_RK*)ts-&gt;data;
+<a name="line127">127: </a>  RKTableau       tab = rk-&gt;tableau;
+<a name="line128">128: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             *Y = rk-&gt;Y,*YdotRHS = rk-&gt;YdotRHS,*YdotRHS_slow = rk-&gt;YdotRHS_slow;
+<a name="line129">129: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             stage_slow,sol_slow; <font color="#B22222">/* vectors store the slow components */</font>
+<a name="line130">130: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             subvec_slow; <font color="#B22222">/* sub vector to store the slow components */</font>
+<a name="line131">131: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>              is_slow = rk-&gt;is_slow;
+<a name="line132">132: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  s = tab-&gt;s;
+<a name="line133">133: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *A = tab-&gt;A,*c = tab-&gt;c;
+<a name="line134">134: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>     *w = rk-&gt;work;
+<a name="line135">135: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        i,j,dtratio = rk-&gt;dtratio;
+<a name="line136">136: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>       next_time_step = ts-&gt;time_step,t = ts-&gt;ptime,h = ts-&gt;time_step;
+<a name="line137">137: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line140">140: </a>  rk-&gt;status = TS_STEP_INCOMPLETE;
+<a name="line141">141: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ts-&gt;vec_sol,&amp;stage_slow);
+<a name="line142">142: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ts-&gt;vec_sol,&amp;sol_slow);
+<a name="line143">143: </a>  <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ts-&gt;vec_sol,rk-&gt;X0);
+<a name="line144">144: </a>  <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line145">145: </a>    rk-&gt;stage_time = t + h*c[i];
+<a name="line146">146: </a>    <a href="../../../../../docs/manualpages/TS/TSPreStage.html#TSPreStage">TSPreStage</a>(ts,rk-&gt;stage_time);
+<a name="line147">147: </a>    <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ts-&gt;vec_sol,Y[i]);
+<a name="line148">148: </a>    <font color="#4169E1">for</font> (j=0; j&lt;i; j++) w[j] = h*A[i*s+j];
+<a name="line149">149: </a>    <a href="../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(Y[i],i,w,YdotRHS_slow);
+<a name="line150">150: </a>    <a href="../../../../../docs/manualpages/TS/TSPostStage.html#TSPostStage">TSPostStage</a>(ts,rk-&gt;stage_time,i,Y);
+<a name="line151">151: </a>    <font color="#B22222">/* compute the stage RHS */</font>
+<a name="line152">152: </a>    <a href="../../../../../docs/manualpages/TS/TSComputeRHSFunction.html#TSComputeRHSFunction">TSComputeRHSFunction</a>(ts,t+h*c[i],Y[i],YdotRHS_slow[i]);
+<a name="line153">153: </a>  }
+<a name="line154">154: </a>  <font color="#B22222">/* update the slow components in the solution */</font>
+<a name="line155">155: </a>  rk-&gt;YdotRHS = YdotRHS_slow;
+<a name="line156">156: </a>  rk-&gt;dtratio = 1;
+<a name="line157">157: </a>  <a href="../../../../../docs/manualpages/TS/TSEvaluateStep.html#TSEvaluateStep">TSEvaluateStep</a>(ts,tab-&gt;order,sol_slow,NULL);
+<a name="line158">158: </a>  rk-&gt;dtratio = dtratio;
+<a name="line159">159: </a>  rk-&gt;YdotRHS = YdotRHS;
+<a name="line160">160: </a>  <font color="#B22222">/* update the slow components in the solution */</font>
+<a name="line161">161: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(sol_slow,is_slow,&amp;subvec_slow);
+<a name="line162">162: </a>  <a href="../../../../../docs/manualpages/Vec/VecISCopy.html#VecISCopy">VecISCopy</a>(ts-&gt;vec_sol,is_slow,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>,subvec_slow);
+<a name="line163">163: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(sol_slow,is_slow,&amp;subvec_slow);
+
+<a name="line165">165: </a>  rk-&gt;subts_current = ts;
+<a name="line166">166: </a>  rk-&gt;ptime = t;
+<a name="line167">167: </a>  rk-&gt;time_step = h;
+<a name="line168">168: </a>  TSStepRefine_RK_MultirateNonsplit(ts);
+
+<a name="line170">170: </a>  ts-&gt;ptime = t + ts-&gt;time_step;
+<a name="line171">171: </a>  ts-&gt;time_step = next_time_step;
+<a name="line172">172: </a>  rk-&gt;status = TS_STEP_COMPLETE;
+
+<a name="line174">174: </a>  <font color="#B22222">/* free memory of work vectors */</font>
+<a name="line175">175: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;stage_slow);
+<a name="line176">176: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;sol_slow);
+<a name="line177">177: </a>  <font color="#4169E1">return</font>(0);
+<a name="line178">178: </a>}
+
+<a name="line180">180: </a><strong><font color="#4169E1"><a name="TSSetUp_RK_MultirateNonsplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSSetUp_RK_MultirateNonsplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts)</font></strong>
+<a name="line181">181: </a>{
+<a name="line182">182: </a>  TS_RK          *rk = (TS_RK*)ts-&gt;data;
+<a name="line183">183: </a>  RKTableau      tab = rk-&gt;tableau;
+
+<a name="line187">187: </a>  <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetIS.html#TSRHSSplitGetIS">TSRHSSplitGetIS</a>(ts,<font color="#666666">"slow"</font>,&amp;rk-&gt;is_slow);
+<a name="line188">188: </a>  <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetIS.html#TSRHSSplitGetIS">TSRHSSplitGetIS</a>(ts,<font color="#666666">"fast"</font>,&amp;rk-&gt;is_fast);
+<a name="line189">189: </a>  <font color="#4169E1">if</font> (!rk-&gt;is_slow || !rk-&gt;is_fast) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts),PETSC_ERR_USER,<font color="#666666">"Must set up RHSSplits with <a href="../../../../../docs/manualpages/TS/TSRHSSplitSetIS.html#TSRHSSplitSetIS">TSRHSSplitSetIS</a>() using split names 'slow' and 'fast' respectively in order to use multirate RK"</font>);
+<a name="line190">190: </a>  <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetSubTS.html#TSRHSSplitGetSubTS">TSRHSSplitGetSubTS</a>(ts,<font color="#666666">"slow"</font>,&amp;rk-&gt;subts_slow);
+<a name="line191">191: </a>  <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetSubTS.html#TSRHSSplitGetSubTS">TSRHSSplitGetSubTS</a>(ts,<font color="#666666">"fast"</font>,&amp;rk-&gt;subts_fast);
+<a name="line192">192: </a>  <font color="#4169E1">if</font> (!rk-&gt;subts_slow || !rk-&gt;subts_fast) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts),PETSC_ERR_USER,<font color="#666666">"Must set up the RHSFunctions for 'slow' and 'fast' components using <a href="../../../../../docs/manualpages/TS/TSRHSSplitSetRHSFunction.html#TSRHSSplitSetRHSFunction">TSRHSSplitSetRHSFunction</a>() or calling <a href="../../../../../docs/manualpages/TS/TSSetRHSFunction.html#TSSetRHSFunction">TSSetRHSFunction</a>() for each sub-<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a>"</font>);
+<a name="line193">193: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ts-&gt;vec_sol,&amp;rk-&gt;X0);
+<a name="line194">194: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(ts-&gt;vec_sol,tab-&gt;s,&amp;rk-&gt;YdotRHS_slow);
+<a name="line195">195: </a>  rk-&gt;subts_current = rk-&gt;subts_fast;
+
+<a name="line197">197: </a>  ts-&gt;ops-&gt;step        = TSStep_RK_MultirateNonsplit;
+<a name="line198">198: </a>  ts-&gt;ops-&gt;interpolate = TSInterpolate_RK_MultirateNonsplit;
+<a name="line199">199: </a>  <font color="#4169E1">return</font>(0);
+<a name="line200">200: </a>}
+
+<a name="line202">202: </a><font color="#B22222">/*</font>
+<a name="line203">203: </a><font color="#B22222">  Copy <a href="../../../../../docs/manualpages/DM/DM.html#DM">DM</a> from tssrc to tsdest, while keeping the original DMTS and DMSNES in tsdest.</font>
+<a name="line204">204: </a><font color="#B22222">*/</font>
+<a name="line205">205: </a><strong><font color="#4169E1"><a name="TSCopyDM"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSCopyDM(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> tssrc,<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> tsdest)</font></strong>
+<a name="line206">206: </a>{
+<a name="line207">207: </a>  <a href="../../../../../docs/manualpages/DM/DM.html#DM">DM</a>             newdm,dmsrc,dmdest;
+
+<a name="line211">211: </a>  <a href="../../../../../docs/manualpages/TS/TSGetDM.html#TSGetDM">TSGetDM</a>(tssrc,&amp;dmsrc);
+<a name="line212">212: </a>  <a href="../../../../../docs/manualpages/DM/DMClone.html#DMClone">DMClone</a>(dmsrc,&amp;newdm);
+<a name="line213">213: </a>  <a href="../../../../../docs/manualpages/TS/TSGetDM.html#TSGetDM">TSGetDM</a>(tsdest,&amp;dmdest);
+<a name="line214">214: </a>  <a href="../../../../../docs/manualpages/TS/DMCopyDMTS.html#DMCopyDMTS">DMCopyDMTS</a>(dmdest,newdm);
+<a name="line215">215: </a>  <a href="../../../../../docs/manualpages/SNES/DMCopyDMSNES.html#DMCopyDMSNES">DMCopyDMSNES</a>(dmdest,newdm);
+<a name="line216">216: </a>  <a href="../../../../../docs/manualpages/TS/TSSetDM.html#TSSetDM">TSSetDM</a>(tsdest,newdm);
+<a name="line217">217: </a>  <a href="../../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(&amp;newdm);
+<a name="line218">218: </a>  <font color="#4169E1">return</font>(0);
+<a name="line219">219: </a>}
+
+<a name="line221">221: </a><strong><font color="#4169E1"><a name="TSReset_RK_MultirateSplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSReset_RK_MultirateSplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts)</font></strong>
+<a name="line222">222: </a>{
+<a name="line223">223: </a>  TS_RK          *rk = (TS_RK*)ts-&gt;data;
+
+<a name="line227">227: </a>  <font color="#4169E1">if</font> (rk-&gt;subts_slow) {
+<a name="line228">228: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rk-&gt;subts_slow-&gt;data);
+<a name="line229">229: </a>    rk-&gt;subts_slow = NULL;
+<a name="line230">230: </a>  }
+<a name="line231">231: </a>  <font color="#4169E1">if</font> (rk-&gt;subts_fast) {
+<a name="line232">232: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rk-&gt;YdotRHS_fast);
+<a name="line233">233: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rk-&gt;YdotRHS_slow);
+<a name="line234">234: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;rk-&gt;X0);
+<a name="line235">235: </a>    TSReset_RK_MultirateSplit(rk-&gt;subts_fast);
+<a name="line236">236: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rk-&gt;subts_fast-&gt;data);
+<a name="line237">237: </a>    rk-&gt;subts_fast = NULL;
+<a name="line238">238: </a>  }
+<a name="line239">239: </a>  <font color="#4169E1">return</font>(0);
+<a name="line240">240: </a>}
+
+<a name="line242">242: </a><strong><font color="#4169E1"><a name="TSInterpolate_RK_MultirateSplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSInterpolate_RK_MultirateSplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> itime,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X)</font></strong>
+<a name="line243">243: </a>{
+<a name="line244">244: </a>  TS_RK           *rk = (TS_RK*)ts-&gt;data;
+<a name="line245">245: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             Xslow;
+<a name="line246">246: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        s = rk-&gt;tableau-&gt;s,p = rk-&gt;tableau-&gt;p,i,j;
+<a name="line247">247: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>       h;
+<a name="line248">248: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>       tt,t;
+<a name="line249">249: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>     *b;
+<a name="line250">250: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *B = rk-&gt;tableau-&gt;binterp;
+<a name="line251">251: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line254">254: </a>  <font color="#4169E1">if</font> (!B) <a href="../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts),PETSC_ERR_SUP,<font color="#666666">"<a href="../../../../../docs/manualpages/TS/TSRK.html#TSRK">TSRK</a> %s does not have an interpolation formula"</font>,rk-&gt;tableau-&gt;name);
+
+<a name="line256">256: </a>  <font color="#4169E1">switch</font> (rk-&gt;status) {
+<a name="line257">257: </a>    <font color="#4169E1">case</font> TS_STEP_INCOMPLETE:
+<a name="line258">258: </a>    <font color="#4169E1">case</font> TS_STEP_PENDING:
+<a name="line259">259: </a>      h = ts-&gt;time_step;
+<a name="line260">260: </a>      t = (itime - ts-&gt;ptime)/h;
+<a name="line261">261: </a>      <font color="#4169E1">break</font>;
+<a name="line262">262: </a>    <font color="#4169E1">case</font> TS_STEP_COMPLETE:
+<a name="line263">263: </a>      h = ts-&gt;ptime - ts-&gt;ptime_prev;
+<a name="line264">264: </a>      t = (itime - ts-&gt;ptime)/h + 1; <font color="#B22222">/* In the interval [0,1] */</font>
+<a name="line265">265: </a>      <font color="#4169E1">break</font>;
+<a name="line266">266: </a><strong><font color="#FF0000">    default:</font></strong> <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts),PETSC_ERR_PLIB,<font color="#666666">"Invalid TSStepStatus"</font>);
+<a name="line267">267: </a>  }
+<a name="line268">268: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(s,&amp;b);
+<a name="line269">269: </a>  <font color="#4169E1">for</font> (i=0; i&lt;s; i++) b[i] = 0;
+<a name="line270">270: </a>  <font color="#4169E1">for</font> (j=0,tt=t; j&lt;p; j++,tt*=t) {
+<a name="line271">271: </a>    <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line272">272: </a>      b[i]  += h * B[i*p+j] * tt;
+<a name="line273">273: </a>    }
+<a name="line274">274: </a>  }
+<a name="line275">275: </a>  <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line276">276: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(rk-&gt;YdotRHS[i],rk-&gt;is_slow,&amp;rk-&gt;YdotRHS_slow[i]);
+<a name="line277">277: </a>  }
+<a name="line278">278: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(X,rk-&gt;is_slow,&amp;Xslow);
+<a name="line279">279: </a>  <a href="../../../../../docs/manualpages/Vec/VecISCopy.html#VecISCopy">VecISCopy</a>(rk-&gt;X0,rk-&gt;is_slow,<a href="../../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>,Xslow);
+<a name="line280">280: </a>  <a href="../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(Xslow,s,b,rk-&gt;YdotRHS_slow);
+<a name="line281">281: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(X,rk-&gt;is_slow,&amp;Xslow);
+<a name="line282">282: </a>  <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line283">283: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(rk-&gt;YdotRHS[i],rk-&gt;is_slow,&amp;rk-&gt;YdotRHS_slow[i]);
+<a name="line284">284: </a>  }
+<a name="line285">285: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(b);
+<a name="line286">286: </a>  <font color="#4169E1">return</font>(0);
+<a name="line287">287: </a>}
+
+<a name="line289">289: </a><font color="#B22222">/*</font>
+<a name="line290">290: </a><font color="#B22222"> This is for partitioned RHS multirate RK method</font>
+<a name="line291">291: </a><font color="#B22222"> The step completion formula is</font>
+
+<a name="line293">293: </a><font color="#B22222"> <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> = <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x0</a> + h b^T YdotRHS</font>
+
+<a name="line295">295: </a><font color="#B22222">*/</font>
+<a name="line296">296: </a><strong><font color="#4169E1"><a name="TSEvaluateStep_RK_MultirateSplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSEvaluateStep_RK_MultirateSplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> order,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X,<a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *done)</font></strong>
+<a name="line297">297: </a>{
+<a name="line298">298: </a>  TS_RK          *rk = (TS_RK*)ts-&gt;data;
+<a name="line299">299: </a>  RKTableau      tab = rk-&gt;tableau;
+<a name="line300">300: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            Xslow,Xfast;                  <font color="#B22222">/* subvectors of X which store slow components and fast components respectively */</font>
+<a name="line301">301: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *w = rk-&gt;work;
+<a name="line302">302: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      h = ts-&gt;time_step;
+<a name="line303">303: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       s = tab-&gt;s,j;
+
+<a name="line307">307: </a>  <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ts-&gt;vec_sol,X);
+<a name="line308">308: </a>  <font color="#4169E1">if</font> (rk-&gt;slow) {
+<a name="line309">309: </a>    <font color="#4169E1">for</font> (j=0; j&lt;s; j++) w[j] = h*tab-&gt;b[j];
+<a name="line310">310: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(ts-&gt;vec_sol,rk-&gt;is_slow,&amp;Xslow);
+<a name="line311">311: </a>    <a href="../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(Xslow,s,w,rk-&gt;YdotRHS_slow);
+<a name="line312">312: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(ts-&gt;vec_sol,rk-&gt;is_slow,&amp;Xslow);
+<a name="line313">313: </a>  } <font color="#4169E1">else</font> {
+<a name="line314">314: </a>    <font color="#4169E1">for</font> (j=0; j&lt;s; j++) w[j] = h/rk-&gt;dtratio*tab-&gt;b[j];
+<a name="line315">315: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(X,rk-&gt;is_fast,&amp;Xfast);
+<a name="line316">316: </a>    <a href="../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(Xfast,s,w,rk-&gt;YdotRHS_fast);
+<a name="line317">317: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(X,rk-&gt;is_fast,&amp;Xfast);
+<a name="line318">318: </a>  }
+<a name="line319">319: </a>  <font color="#4169E1">return</font>(0);
+<a name="line320">320: </a>}
+
+<a name="line322">322: </a><strong><font color="#4169E1"><a name="TSStepRefine_RK_MultirateSplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSStepRefine_RK_MultirateSplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts)</font></strong>
+<a name="line323">323: </a>{
+<a name="line324">324: </a>  TS_RK           *rk = (TS_RK*)ts-&gt;data;
+<a name="line325">325: </a>  <a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a>              subts_fast = rk-&gt;subts_fast,currentlevelts;
+<a name="line326">326: </a>  TS_RK           *subrk_fast = (TS_RK*)subts_fast-&gt;data;
+<a name="line327">327: </a>  RKTableau       tab = rk-&gt;tableau;
+<a name="line328">328: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             *Y = rk-&gt;Y;
+<a name="line329">329: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             *YdotRHS = rk-&gt;YdotRHS,*YdotRHS_fast = rk-&gt;YdotRHS_fast;
+<a name="line330">330: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             Yfast,Xfast;
+<a name="line331">331: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  s = tab-&gt;s;
+<a name="line332">332: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *A = tab-&gt;A,*c = tab-&gt;c;
+<a name="line333">333: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>     *w = rk-&gt;work;
+<a name="line334">334: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        i,j,k;
+<a name="line335">335: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>       t = ts-&gt;ptime,h = ts-&gt;time_step;
+<a name="line336">336: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line338">338: </a>  <font color="#4169E1">for</font> (k=0; k&lt;rk-&gt;dtratio; k++) {
+<a name="line339">339: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(ts-&gt;vec_sol,rk-&gt;is_fast,&amp;Xfast);
+<a name="line340">340: </a>    <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line341">341: </a>      <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(YdotRHS[i],rk-&gt;is_fast,&amp;YdotRHS_fast[i]);
+<a name="line342">342: </a>    }
+<a name="line343">343: </a>    <font color="#B22222">/* propogate fast component using small time steps */</font>
+<a name="line344">344: </a>    <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line345">345: </a>      <font color="#B22222">/* stage value for slow components */</font>
+<a name="line346">346: </a>      TSInterpolate_RK_MultirateSplit(rk-&gt;ts_root,t+k*h/rk-&gt;dtratio+h/rk-&gt;dtratio*c[i],Y[i]);
+<a name="line347">347: </a>      currentlevelts = rk-&gt;ts_root;
+<a name="line348">348: </a>      <font color="#4169E1">while</font> (currentlevelts != ts) { <font color="#B22222">/* all the slow parts need to be interpolated separated */</font>
+<a name="line349">349: </a>        currentlevelts = ((TS_RK*)currentlevelts-&gt;data)-&gt;subts_fast;
+<a name="line350">350: </a>        TSInterpolate_RK_MultirateSplit(currentlevelts,t+k*h/rk-&gt;dtratio+h/rk-&gt;dtratio*c[i],Y[i]);
+<a name="line351">351: </a>      }
+<a name="line352">352: </a>      <font color="#4169E1">for</font> (j=0; j&lt;i; j++) w[j] = h/rk-&gt;dtratio*A[i*s+j];
+<a name="line353">353: </a>      subrk_fast-&gt;stage_time = t + h/rk-&gt;dtratio*c[i];
+<a name="line354">354: </a>      <a href="../../../../../docs/manualpages/TS/TSPreStage.html#TSPreStage">TSPreStage</a>(subts_fast,subrk_fast-&gt;stage_time);
+<a name="line355">355: </a>      <font color="#B22222">/* stage value for fast components */</font>
+<a name="line356">356: </a>      <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(Y[i],rk-&gt;is_fast,&amp;Yfast);
+<a name="line357">357: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(Xfast,Yfast);
+<a name="line358">358: </a>      <a href="../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(Yfast,i,w,YdotRHS_fast);
+<a name="line359">359: </a>      <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(Y[i],rk-&gt;is_fast,&amp;Yfast);
+<a name="line360">360: </a>      <a href="../../../../../docs/manualpages/TS/TSPostStage.html#TSPostStage">TSPostStage</a>(subts_fast,subrk_fast-&gt;stage_time,i,Y);
+<a name="line361">361: </a>      <font color="#B22222">/* compute the stage RHS for fast components */</font>
+<a name="line362">362: </a>      <a href="../../../../../docs/manualpages/TS/TSComputeRHSFunction.html#TSComputeRHSFunction">TSComputeRHSFunction</a>(subts_fast,t+k*h*rk-&gt;dtratio+h/rk-&gt;dtratio*c[i],Y[i],YdotRHS_fast[i]);
+<a name="line363">363: </a>    }
+<a name="line364">364: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(ts-&gt;vec_sol,rk-&gt;is_fast,&amp;Xfast);
+<a name="line365">365: </a>    <font color="#B22222">/* update the value of fast components using fast time step */</font>
+<a name="line366">366: </a>    rk-&gt;slow = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line367">367: </a>    TSEvaluateStep_RK_MultirateSplit(ts,tab-&gt;order,ts-&gt;vec_sol,NULL);
+<a name="line368">368: </a>    <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line369">369: </a>      <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(YdotRHS[i],rk-&gt;is_fast,&amp;YdotRHS_fast[i]);
+<a name="line370">370: </a>    }
+
+<a name="line372">372: </a>    <font color="#4169E1">if</font> (subrk_fast-&gt;subts_fast) {
+<a name="line373">373: </a>      subts_fast-&gt;ptime = t+k*h/rk-&gt;dtratio;
+<a name="line374">374: </a>      subts_fast-&gt;time_step = h/rk-&gt;dtratio;
+<a name="line375">375: </a>      TSStepRefine_RK_MultirateSplit(subts_fast);
+<a name="line376">376: </a>    }
+<a name="line377">377: </a>    <font color="#B22222">/* update the fast components of the solution */</font>
+<a name="line378">378: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(ts-&gt;vec_sol,rk-&gt;is_fast,&amp;Xfast);
+<a name="line379">379: </a>    <a href="../../../../../docs/manualpages/Vec/VecISCopy.html#VecISCopy">VecISCopy</a>(rk-&gt;X0,rk-&gt;is_fast,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>,Xfast);
+<a name="line380">380: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(ts-&gt;vec_sol,rk-&gt;is_fast,&amp;Xfast);
+<a name="line381">381: </a>  }
+<a name="line382">382: </a>  <font color="#4169E1">return</font>(0);
+<a name="line383">383: </a>}
+
+<a name="line385">385: </a><strong><font color="#4169E1"><a name="TSStep_RK_MultirateSplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSStep_RK_MultirateSplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts)</font></strong>
+<a name="line386">386: </a>{
+<a name="line387">387: </a>  TS_RK           *rk = (TS_RK*)ts-&gt;data;
+<a name="line388">388: </a>  RKTableau       tab = rk-&gt;tableau;
+<a name="line389">389: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             *Y = rk-&gt;Y,*YdotRHS = rk-&gt;YdotRHS;
+<a name="line390">390: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             *YdotRHS_fast = rk-&gt;YdotRHS_fast,*YdotRHS_slow = rk-&gt;YdotRHS_slow;
+<a name="line391">391: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             Yslow,Yfast; <font color="#B22222">/* subvectors store the stges of slow components and fast components respectively                           */</font>
+<a name="line392">392: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  s = tab-&gt;s;
+<a name="line393">393: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *A = tab-&gt;A,*c = tab-&gt;c;
+<a name="line394">394: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>     *w = rk-&gt;work;
+<a name="line395">395: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        i,j;
+<a name="line396">396: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>       next_time_step = ts-&gt;time_step,t = ts-&gt;ptime,h = ts-&gt;time_step;
+<a name="line397">397: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line400">400: </a>  rk-&gt;status = TS_STEP_INCOMPLETE;
+<a name="line401">401: </a>  <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line402">402: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(YdotRHS[i],rk-&gt;is_slow,&amp;YdotRHS_slow[i]);
+<a name="line403">403: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(YdotRHS[i],rk-&gt;is_fast,&amp;YdotRHS_fast[i]);
+<a name="line404">404: </a>  }
+<a name="line405">405: </a>  <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ts-&gt;vec_sol,rk-&gt;X0);
+<a name="line406">406: </a>  <font color="#B22222">/* propogate both slow and fast components using large time steps */</font>
+<a name="line407">407: </a>  <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line408">408: </a>    rk-&gt;stage_time = t + h*c[i];
+<a name="line409">409: </a>    <a href="../../../../../docs/manualpages/TS/TSPreStage.html#TSPreStage">TSPreStage</a>(ts,rk-&gt;stage_time);
+<a name="line410">410: </a>    <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ts-&gt;vec_sol,Y[i]);
+<a name="line411">411: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(Y[i],rk-&gt;is_fast,&amp;Yfast);
+<a name="line412">412: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(Y[i],rk-&gt;is_slow,&amp;Yslow);
+<a name="line413">413: </a>    <font color="#4169E1">for</font> (j=0; j&lt;i; j++) w[j] = h*A[i*s+j];
+<a name="line414">414: </a>    <a href="../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(Yfast,i,w,YdotRHS_fast);
+<a name="line415">415: </a>    <a href="../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(Yslow,i,w,YdotRHS_slow);
+<a name="line416">416: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(Y[i],rk-&gt;is_fast,&amp;Yfast);
+<a name="line417">417: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(Y[i],rk-&gt;is_slow,&amp;Yslow);
+<a name="line418">418: </a>    <a href="../../../../../docs/manualpages/TS/TSPostStage.html#TSPostStage">TSPostStage</a>(ts,rk-&gt;stage_time,i,Y);
+<a name="line419">419: </a>    <a href="../../../../../docs/manualpages/TS/TSComputeRHSFunction.html#TSComputeRHSFunction">TSComputeRHSFunction</a>(rk-&gt;subts_slow,t+h*c[i],Y[i],YdotRHS_slow[i]);
+<a name="line420">420: </a>    <a href="../../../../../docs/manualpages/TS/TSComputeRHSFunction.html#TSComputeRHSFunction">TSComputeRHSFunction</a>(rk-&gt;subts_fast,t+h*c[i],Y[i],YdotRHS_fast[i]);
+<a name="line421">421: </a>  }
+<a name="line422">422: </a>  rk-&gt;slow = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line423">423: </a>  <font color="#B22222">/* update the slow components of the solution using slow time step */</font>
+<a name="line424">424: </a>  TSEvaluateStep_RK_MultirateSplit(ts,tab-&gt;order,ts-&gt;vec_sol,NULL);
+<a name="line425">425: </a>  <font color="#B22222">/* YdotRHS will be used for interpolation during refinement */</font>
+<a name="line426">426: </a>  <font color="#4169E1">for</font> (i=0; i&lt;s; i++) {
+<a name="line427">427: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(YdotRHS[i],rk-&gt;is_slow,&amp;YdotRHS_slow[i]);
+<a name="line428">428: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(YdotRHS[i],rk-&gt;is_fast,&amp;YdotRHS_fast[i]);
+<a name="line429">429: </a>  }
+
+<a name="line431">431: </a>  TSStepRefine_RK_MultirateSplit(ts);
+
+<a name="line433">433: </a>  ts-&gt;ptime = t + ts-&gt;time_step;
+<a name="line434">434: </a>  ts-&gt;time_step = next_time_step;
+<a name="line435">435: </a>  rk-&gt;status = TS_STEP_COMPLETE;
+<a name="line436">436: </a>  <font color="#4169E1">return</font>(0);
+<a name="line437">437: </a>}
+
+<a name="line439">439: </a><strong><font color="#4169E1"><a name="TSSetUp_RK_MultirateSplit"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSSetUp_RK_MultirateSplit(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts)</font></strong>
+<a name="line440">440: </a>{
+<a name="line441">441: </a>  TS_RK          *rk = (TS_RK*)ts-&gt;data,*nextlevelrk,*currentlevelrk;
+<a name="line442">442: </a>  <a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a>             nextlevelts;
+<a name="line443">443: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            X0;
+
+<a name="line447">447: </a>  <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetIS.html#TSRHSSplitGetIS">TSRHSSplitGetIS</a>(ts,<font color="#666666">"slow"</font>,&amp;rk-&gt;is_slow);
+<a name="line448">448: </a>  <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetIS.html#TSRHSSplitGetIS">TSRHSSplitGetIS</a>(ts,<font color="#666666">"fast"</font>,&amp;rk-&gt;is_fast);
+<a name="line449">449: </a>  <font color="#4169E1">if</font> (!rk-&gt;is_slow || !rk-&gt;is_fast) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts),PETSC_ERR_USER,<font color="#666666">"Must set up RHSSplits with <a href="../../../../../docs/manualpages/TS/TSRHSSplitSetIS.html#TSRHSSplitSetIS">TSRHSSplitSetIS</a>() using split names 'slow' and 'fast' respectively in order to use -ts_type bsi"</font>);
+<a name="line450">450: </a>  <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetSubTS.html#TSRHSSplitGetSubTS">TSRHSSplitGetSubTS</a>(ts,<font color="#666666">"slow"</font>,&amp;rk-&gt;subts_slow);
+<a name="line451">451: </a>  <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetSubTS.html#TSRHSSplitGetSubTS">TSRHSSplitGetSubTS</a>(ts,<font color="#666666">"fast"</font>,&amp;rk-&gt;subts_fast);
+<a name="line452">452: </a>  <font color="#4169E1">if</font> (!rk-&gt;subts_slow || !rk-&gt;subts_fast) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts),PETSC_ERR_USER,<font color="#666666">"Must set up the RHSFunctions for 'slow' and 'fast' components using <a href="../../../../../docs/manualpages/TS/TSRHSSplitSetRHSFunction.html#TSRHSSplitSetRHSFunction">TSRHSSplitSetRHSFunction</a>() or calling <a href="../../../../../docs/manualpages/TS/TSSetRHSFunction.html#TSSetRHSFunction">TSSetRHSFunction</a>() for each sub-<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a>"</font>);
+
+<a name="line454">454: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ts-&gt;vec_sol,&amp;X0);
+<a name="line455">455: </a>  <font color="#B22222">/* The <a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> at each level share the same tableau, work array, solution vector, stage values and stage derivatives */</font>
+<a name="line456">456: </a>  currentlevelrk = rk;
+<a name="line457">457: </a>  <font color="#4169E1">while</font> (currentlevelrk-&gt;subts_fast) {
+<a name="line458">458: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(rk-&gt;tableau-&gt;s,&amp;currentlevelrk-&gt;YdotRHS_fast);
+<a name="line459">459: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(rk-&gt;tableau-&gt;s,&amp;currentlevelrk-&gt;YdotRHS_slow);
+<a name="line460">460: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)X0);
+<a name="line461">461: </a>    currentlevelrk-&gt;X0 = X0;
+<a name="line462">462: </a>    currentlevelrk-&gt;ts_root = ts;
+
+<a name="line464">464: </a>    <font color="#B22222">/* set up the ts for the slow part */</font>
+<a name="line465">465: </a>    nextlevelts = currentlevelrk-&gt;subts_slow;
+<a name="line466">466: </a>    <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(nextlevelts,&amp;nextlevelrk);
+<a name="line467">467: </a>    nextlevelrk-&gt;tableau = rk-&gt;tableau;
+<a name="line468">468: </a>    nextlevelrk-&gt;work = rk-&gt;work;
+<a name="line469">469: </a>    nextlevelrk-&gt;Y = rk-&gt;Y;
+<a name="line470">470: </a>    nextlevelrk-&gt;YdotRHS = rk-&gt;YdotRHS;
+<a name="line471">471: </a>    nextlevelts-&gt;data = (void*)nextlevelrk;
+<a name="line472">472: </a>    TSCopyDM(ts,nextlevelts);
+<a name="line473">473: </a>    <a href="../../../../../docs/manualpages/TS/TSSetSolution.html#TSSetSolution">TSSetSolution</a>(nextlevelts,ts-&gt;vec_sol);
+
+<a name="line475">475: </a>    <font color="#B22222">/* set up the ts for the fast part */</font>
+<a name="line476">476: </a>    nextlevelts = currentlevelrk-&gt;subts_fast;
+<a name="line477">477: </a>    <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(nextlevelts,&amp;nextlevelrk);
+<a name="line478">478: </a>    nextlevelrk-&gt;tableau = rk-&gt;tableau;
+<a name="line479">479: </a>    nextlevelrk-&gt;work = rk-&gt;work;
+<a name="line480">480: </a>    nextlevelrk-&gt;Y = rk-&gt;Y;
+<a name="line481">481: </a>    nextlevelrk-&gt;YdotRHS = rk-&gt;YdotRHS;
+<a name="line482">482: </a>    nextlevelrk-&gt;dtratio = rk-&gt;dtratio;
+<a name="line483">483: </a>    <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetIS.html#TSRHSSplitGetIS">TSRHSSplitGetIS</a>(nextlevelts,<font color="#666666">"slow"</font>,&amp;nextlevelrk-&gt;is_slow);
+<a name="line484">484: </a>    <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetSubTS.html#TSRHSSplitGetSubTS">TSRHSSplitGetSubTS</a>(nextlevelts,<font color="#666666">"slow"</font>,&amp;nextlevelrk-&gt;subts_slow);
+<a name="line485">485: </a>    <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetIS.html#TSRHSSplitGetIS">TSRHSSplitGetIS</a>(nextlevelts,<font color="#666666">"fast"</font>,&amp;nextlevelrk-&gt;is_fast);
+<a name="line486">486: </a>    <a href="../../../../../docs/manualpages/TS/TSRHSSplitGetSubTS.html#TSRHSSplitGetSubTS">TSRHSSplitGetSubTS</a>(nextlevelts,<font color="#666666">"fast"</font>,&amp;nextlevelrk-&gt;subts_fast);
+<a name="line487">487: </a>    nextlevelts-&gt;data = (void*)nextlevelrk;
+<a name="line488">488: </a>    TSCopyDM(ts,nextlevelts);
+<a name="line489">489: </a>    <a href="../../../../../docs/manualpages/TS/TSSetSolution.html#TSSetSolution">TSSetSolution</a>(nextlevelts,ts-&gt;vec_sol);
+
+<a name="line491">491: </a>    currentlevelrk = nextlevelrk;
+<a name="line492">492: </a>  }
+<a name="line493">493: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;X0);
+
+<a name="line495">495: </a>  ts-&gt;ops-&gt;step         = TSStep_RK_MultirateSplit;
+<a name="line496">496: </a>  ts-&gt;ops-&gt;evaluatestep = TSEvaluateStep_RK_MultirateSplit;
+<a name="line497">497: </a>  ts-&gt;ops-&gt;interpolate  = TSInterpolate_RK_MultirateSplit;
+<a name="line498">498: </a>  <font color="#4169E1">return</font>(0);
+<a name="line499">499: </a>}
+
+<a name="line501">501: </a><strong><font color="#4169E1"><a name="TSRKSetMultirate_RK"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSRKSetMultirate_RK(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> use_multirate)</font></strong>
+<a name="line502">502: </a>{
+<a name="line503">503: </a>  TS_RK          *rk = (TS_RK*)ts-&gt;data;
+
+<a name="line508">508: </a>  rk-&gt;use_multirate = use_multirate;
+<a name="line509">509: </a>  <font color="#4169E1">if</font> (use_multirate) {
+<a name="line510">510: </a>    rk-&gt;dtratio = 2;
+<a name="line511">511: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts,<font color="#666666">"TSSetUp_RK_MultirateSplit_C"</font>,TSSetUp_RK_MultirateSplit);
+<a name="line512">512: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts,<font color="#666666">"TSReset_RK_MultirateSplit_C"</font>,TSReset_RK_MultirateSplit);
+<a name="line513">513: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts,<font color="#666666">"TSSetUp_RK_MultirateNonsplit_C"</font>,TSSetUp_RK_MultirateNonsplit);
+<a name="line514">514: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts,<font color="#666666">"TSReset_RK_MultirateNonsplit_C"</font>,TSReset_RK_MultirateNonsplit);
+<a name="line515">515: </a>  } <font color="#4169E1">else</font> {
+<a name="line516">516: </a>    rk-&gt;dtratio = 0;
+<a name="line517">517: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts,<font color="#666666">"TSSetUp_RK_MultirateSplit_C"</font>,NULL);
+<a name="line518">518: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts,<font color="#666666">"TSReset_RK_MultirateSplit_C"</font>,NULL);
+<a name="line519">519: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts,<font color="#666666">"TSSetUp_RK_MultirateNonsplit_C"</font>,NULL);
+<a name="line520">520: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ts,<font color="#666666">"TSReset_RK_MultirateNonsplit_C"</font>,NULL);
+<a name="line521">521: </a>  }
+<a name="line522">522: </a>  <font color="#4169E1">return</font>(0);
+<a name="line523">523: </a>}
+
+<a name="line525">525: </a><strong><font color="#4169E1"><a name="TSRKGetMultirate_RK"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TSRKGetMultirate_RK(<a href="../../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *use_multirate)</font></strong>
+<a name="line526">526: </a>{
+<a name="line527">527: </a>  TS_RK *rk = (TS_RK*)ts-&gt;data;
+
+<a name="line531">531: </a>  *use_multirate = rk-&gt;use_multirate;
+<a name="line532">532: </a>  <font color="#4169E1">return</font>(0);
+<a name="line533">533: </a>}
+</pre>
+</body>
+
+</html>

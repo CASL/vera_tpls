@@ -1,0 +1,758 @@
+<center><a href="ex10.c">Actual source code: ex10.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/snes/examples/tutorials/ex10d/ex10.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:25:30+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/snes/examples/tutorials/ex10d/ex10.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a><font color="#B22222">/*</font>
+<a name="line3">  3: </a><font color="#B22222">   Include "petscsnes.h" so that we can use <a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a> solvers.  Note that this</font>
+<a name="line4">  4: </a><font color="#B22222">   file automatically includes:</font>
+<a name="line5">  5: </a><font color="#B22222">     petscsys.h       - base PETSc routines   petscvec.h - vectors</font>
+<a name="line6">  6: </a><font color="#B22222">     petscmat.h - matrices</font>
+<a name="line7">  7: </a><font color="#B22222">     petscis.h     - index sets            petscksp.h - Krylov subspace methods</font>
+<a name="line8">  8: </a><font color="#B22222">     petscviewer.h - viewers               petscpc.h  - preconditioners</font>
+<a name="line9">  9: </a><font color="#B22222">     petscksp.h   - linear solvers</font>
+<a name="line10"> 10: </a><font color="#B22222">*/</font>
+<a name="line11"> 11: </a><font color="#A020F0">#include &lt;petscsnes.h&gt;</font>
+<a name="line12"> 12: </a><font color="#A020F0">#include &lt;petscao.h&gt;</font>
+
+<a name="line14"> 14: </a>static char help[] = <font color="#666666">"An Unstructured Grid Example.\n\</font>
+<a name="line15"> 15: </a><font color="#666666">This example demonstrates how to solve a nonlinear system in parallel\n\</font>
+<a name="line16"> 16: </a><font color="#666666">with <a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a> for an unstructured mesh. The mesh and partitioning information\n\</font>
+<a name="line17"> 17: </a><font color="#666666">is read in an application defined ordering,which is later transformed\n\</font>
+<a name="line18"> 18: </a><font color="#666666">into another convenient ordering (called the local ordering). The local\n\</font>
+<a name="line19"> 19: </a><font color="#666666">ordering, apart from being efficient on cpu cycles and memory, allows\n\</font>
+<a name="line20"> 20: </a><font color="#666666">the use of the SPMD model of parallel programming. After partitioning\n\</font>
+<a name="line21"> 21: </a><font color="#666666">is done, scatters are created between local (sequential)and global\n\</font>
+<a name="line22"> 22: </a><font color="#666666">(distributed) vectors. Finally, we set up the nonlinear solver context\n\</font>
+<a name="line23"> 23: </a><font color="#666666">in the usual way as a structured grid  (see\n\</font>
+<a name="line24"> 24: </a><font color="#666666">petsc/src/snes/examples/tutorials/ex5.c).\n\</font>
+<a name="line25"> 25: </a><font color="#666666">This example also illustrates the use of parallel matrix coloring.\n\</font>
+<a name="line26"> 26: </a><font color="#666666">The command line options include:\n\</font>
+<a name="line27"> 27: </a><font color="#666666">  -vert &lt;Nv&gt;, where Nv is the global number of nodes\n\</font>
+<a name="line28"> 28: </a><font color="#666666">  -elem &lt;Ne&gt;, where Ne is the global number of elements\n\</font>
+<a name="line29"> 29: </a><font color="#666666">  -nl_par &lt;lambda&gt;, where lambda is the multiplier for the non linear term (u*u) term\n\</font>
+<a name="line30"> 30: </a><font color="#666666">  -lin_par &lt;alpha&gt;, where alpha is the multiplier for the linear term (u)\n\</font>
+<a name="line31"> 31: </a><font color="#666666">  -fd_jacobian_coloring -mat_coloring_type lf\n"</font>;
+
+<a name="line33"> 33: </a><font color="#B22222">/*T</font>
+<a name="line34"> 34: </a><font color="#B22222">   Concepts: <a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a>^unstructured grid</font>
+<a name="line35"> 35: </a><font color="#B22222">   Concepts: <a href="../../../..10d/../docs/manualpages/AO/AO.html#AO">AO</a>^application to PETSc ordering or vice versa;</font>
+<a name="line36"> 36: </a><font color="#B22222">   Concepts: <a href="../../../..10d/../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>^using vector scatter operations;</font>
+<a name="line37"> 37: </a><font color="#B22222">   Processors: n</font>
+<a name="line38"> 38: </a><font color="#B22222">T*/</font>
+
+
+
+<a name="line42"> 42: </a><font color="#B22222">/* ------------------------------------------------------------------------</font>
+
+<a name="line44"> 44: </a><font color="#B22222">   PDE Solved : L(u) + lambda*u*u + alpha*u = 0 where L(u) is the Laplacian.</font>
+
+<a name="line46"> 46: </a><font color="#B22222">   The Laplacian is approximated in the following way: each edge is given a weight</font>
+<a name="line47"> 47: </a><font color="#B22222">   of one meaning that the diagonal term will have the weight equal to the degree</font>
+<a name="line48"> 48: </a><font color="#B22222">   of a node. The off diagonal terms will get a weight of -1.</font>
+
+<a name="line50"> 50: </a><font color="#B22222">   -----------------------------------------------------------------------*/</font>
+
+
+<a name="line53"> 53: </a><strong><font color="#228B22">#define MAX_ELEM      500  </font><font color="#B22222">/* Maximum number of elements */</font><font color="#228B22"></font></strong>
+<a name="line54"> 54: </a><strong><font color="#228B22">#define MAX_VERT      100  </font><font color="#B22222">/* Maximum number of vertices */</font><font color="#228B22"></font></strong>
+<a name="line55"> 55: </a><strong><font color="#228B22">#define MAX_VERT_ELEM   3  </font><font color="#B22222">/* Vertices per element       */</font><font color="#228B22"></font></strong>
+
+<a name="line57"> 57: </a><font color="#B22222">/*</font>
+<a name="line58"> 58: </a><font color="#B22222">  Application-defined context for problem specific data</font>
+<a name="line59"> 59: </a><font color="#B22222">*/</font>
+<a name="line60"> 60: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line61"> 61: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   Nvglobal,Nvlocal;              <font color="#B22222">/* global and local number of vertices */</font>
+<a name="line62"> 62: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   Neglobal,Nelocal;              <font color="#B22222">/* global and local number of vertices */</font>
+<a name="line63"> 63: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   AdjM[MAX_VERT][50];            <font color="#B22222">/* adjacency list of a vertex */</font>
+<a name="line64"> 64: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   itot[MAX_VERT];                <font color="#B22222">/* total number of neighbors for a vertex */</font>
+<a name="line65"> 65: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   icv[MAX_ELEM][MAX_VERT_ELEM];  <font color="#B22222">/* vertices belonging to an element */</font>
+<a name="line66"> 66: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   v2p[MAX_VERT];                 <font color="#B22222">/* processor number for a vertex */</font>
+<a name="line67"> 67: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   *locInd,*gloInd;               <font color="#B22222">/* local and global orderings for a node */</font>
+<a name="line68"> 68: </a>  <a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>        localX,localF;                 <font color="#B22222">/* local solution (u) and f(u) vectors */</font>
+<a name="line69"> 69: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>  non_lin_param;                 <font color="#B22222">/* nonlinear parameter for the PDE */</font>
+<a name="line70"> 70: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>  lin_param;                     <font color="#B22222">/* linear parameter for the PDE */</font>
+<a name="line71"> 71: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> scatter;                       <font color="#B22222">/* scatter context for the local and</font>
+<a name="line72"> 72: </a><font color="#B22222">                                               distributed vectors */</font>
+<a name="line73"> 73: </a>} AppCtx;
+
+<a name="line75"> 75: </a><font color="#B22222">/*</font>
+<a name="line76"> 76: </a><font color="#B22222">  User-defined routines</font>
+<a name="line77"> 77: </a><font color="#B22222">*/</font>
+<a name="line78"> 78: </a><strong><font color="#4169E1"><a href="../../../..10d/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> FormJacobian(<a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a>,<a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../..10d/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>,<a href="../../../..10d/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>,void*)</font></strong>;
+<a name="line79"> 79: </a><strong><font color="#4169E1"><a href="../../../..10d/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> FormFunction(<a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a>,<a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,void*)</font></strong>;
+<a name="line80"> 80: </a><strong><font color="#4169E1"><a href="../../../..10d/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> FormInitialGuess(AppCtx*,<a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>)</font></strong>;
+
+<a name="line82"> 82: </a><strong><font color="#4169E1"><a name="main"></a>int main(int argc,char **argv)</font></strong>
+<a name="line83"> 83: </a>{
+<a name="line84"> 84: </a>  <a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a>                   snes;                 <font color="#B22222">/* <a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a> context */</font>
+<a name="line85"> 85: </a>  <a href="../../../..10d/../docs/manualpages/SNES/SNESType.html#SNESType">SNESType</a>               type = <a href="../../../..10d/../docs/manualpages/SNES/SNESNEWTONLS.html#SNESNEWTONLS">SNESNEWTONLS</a>;  <font color="#B22222">/* default nonlinear solution method */</font>
+<a name="line86"> 86: </a>  <a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>                    x,r;                  <font color="#B22222">/* solution, residual vectors */</font>
+<a name="line87"> 87: </a>  <a href="../../../..10d/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>                    Jac;                  <font color="#B22222">/* Jacobian matrix */</font>
+<a name="line88"> 88: </a>  AppCtx                 user;                 <font color="#B22222">/* user-defined application context */</font>
+<a name="line89"> 89: </a>  <a href="../../../..10d/../docs/manualpages/AO/AO.html#AO">AO</a>                     ao;                   <font color="#B22222">/* Application Ordering object */</font>
+<a name="line90"> 90: </a>  <a href="../../../..10d/../docs/manualpages/IS/IS.html#IS">IS</a>                     isglobal,islocal;     <font color="#B22222">/* global and local index sets */</font>
+<a name="line91"> 91: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>            rank,size;            <font color="#B22222">/* rank of a process, number of processors */</font>
+<a name="line92"> 92: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               rstart;               <font color="#B22222">/* starting index of PETSc ordering for a processor */</font>
+<a name="line93"> 93: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               nfails;               <font color="#B22222">/* number of unsuccessful Newton steps */</font>
+<a name="line94"> 94: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               bs = 1;               <font color="#B22222">/* block size for multicomponent systems */</font>
+<a name="line95"> 95: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               nvertices;            <font color="#B22222">/* number of local plus ghost nodes of a processor */</font>
+<a name="line96"> 96: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               *pordering;           <font color="#B22222">/* PETSc ordering */</font>
+<a name="line97"> 97: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               *vertices;            <font color="#B22222">/* list of all vertices (incl. ghost ones) on a processor */</font>
+<a name="line98"> 98: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               *verticesmask;
+<a name="line99"> 99: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               *tmp;
+<a name="line100">100: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               i,j,jstart,inode,nb,nbrs,Nvneighborstotal = 0;
+<a name="line101">101: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+<a name="line102">102: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               its,N;
+<a name="line103">103: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>            *xx;
+<a name="line104">104: </a>  char                   str[256],form[256],part_name[256];
+<a name="line105">105: </a>  FILE                   *fptr,*fptr1;
+<a name="line106">106: </a>  <a href="../../../..10d/../docs/manualpages/IS/ISLocalToGlobalMapping.html#ISLocalToGlobalMapping">ISLocalToGlobalMapping</a> isl2g;
+<a name="line107">107: </a>  int                    dtmp;
+<a name="line108">108: </a><font color="#A020F0">#if defined(UNUSED_VARIABLES)</font>
+<a name="line109">109: </a>  <a href="../../../..10d/../docs/manualpages/Draw/PetscDraw.html#PetscDraw">PetscDraw</a>              draw;                 <font color="#B22222">/* drawing context */</font>
+<a name="line110">110: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>            *ff,*gg;
+<a name="line111">111: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>              tiny = 1.0e-10,zero = 0.0,one = 1.0,big = 1.0e+10;
+<a name="line112">112: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               *tmp1,*tmp2;
+<a name="line113">113: </a><font color="#A020F0">#endif</font>
+<a name="line114">114: </a>  <a href="../../../..10d/../docs/manualpages/Mat/MatFDColoring.html#MatFDColoring">MatFDColoring</a>          matfdcoloring = 0;
+<a name="line115">115: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>              fd_jacobian_coloring = <a href="../../../..10d/../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+
+<a name="line117">117: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line118">118: </a><font color="#B22222">     Initialize program</font>
+<a name="line119">119: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+
+<a name="line121">121: </a>   <a href="../../../..10d/../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(&amp;argc,&amp;argv,<font color="#666666">"options.inf"</font>,help);<font color="#4169E1">if</font> (ierr) <font color="#4169E1">return</font> ierr;
+<a name="line122">122: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(MPI_COMM_WORLD,&amp;rank);
+<a name="line123">123: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(MPI_COMM_WORLD,&amp;size);
+
+<a name="line125">125: </a>  <font color="#B22222">/* The current input file options.inf is for 2 proc run only */</font>
+<a name="line126">126: </a>  <font color="#4169E1">if</font> (size != 2) <a href="../../../..10d/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,1,<font color="#666666">"This Example currently runs on 2 procs only."</font>);
+
+<a name="line128">128: </a>  <font color="#B22222">/*</font>
+<a name="line129">129: </a><font color="#B22222">     Initialize problem parameters</font>
+<a name="line130">130: </a><font color="#B22222">  */</font>
+<a name="line131">131: </a>  user.Nvglobal = 16;      <font color="#B22222">/*Global # of vertices  */</font>
+<a name="line132">132: </a>  user.Neglobal = 18;      <font color="#B22222">/*Global # of elements  */</font>
+
+<a name="line134">134: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscOptionsGetInt.html#PetscOptionsGetInt">PetscOptionsGetInt</a>(NULL,NULL,<font color="#666666">"-vert"</font>,&amp;user.Nvglobal,NULL);
+<a name="line135">135: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscOptionsGetInt.html#PetscOptionsGetInt">PetscOptionsGetInt</a>(NULL,NULL,<font color="#666666">"-elem"</font>,&amp;user.Neglobal,NULL);
+
+<a name="line137">137: </a>  user.non_lin_param = 0.06;
+
+<a name="line139">139: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscOptionsGetReal.html#PetscOptionsGetReal">PetscOptionsGetReal</a>(NULL,NULL,<font color="#666666">"-nl_par"</font>,&amp;user.non_lin_param,NULL);
+
+<a name="line141">141: </a>  user.lin_param = -1.0;
+
+<a name="line143">143: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscOptionsGetReal.html#PetscOptionsGetReal">PetscOptionsGetReal</a>(NULL,NULL,<font color="#666666">"-lin_par"</font>,&amp;user.lin_param,NULL);
+
+<a name="line145">145: </a>  user.Nvlocal = 0;
+<a name="line146">146: </a>  user.Nelocal = 0;
+
+<a name="line148">148: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line149">149: </a><font color="#B22222">      Read the mesh and partitioning information</font>
+<a name="line150">150: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+
+<a name="line152">152: </a>  <font color="#B22222">/*</font>
+<a name="line153">153: </a><font color="#B22222">     Read the mesh and partitioning information from 'adj.in'.</font>
+<a name="line154">154: </a><font color="#B22222">     The file format is as follows.</font>
+<a name="line155">155: </a><font color="#B22222">     For each line the first entry is the processor rank where the</font>
+<a name="line156">156: </a><font color="#B22222">     current node belongs. The second entry is the number of</font>
+<a name="line157">157: </a><font color="#B22222">     neighbors of a node. The rest of the line is the adjacency</font>
+<a name="line158">158: </a><font color="#B22222">     list of a node. Currently this file is set up to work on two</font>
+<a name="line159">159: </a><font color="#B22222">     processors.</font>
+
+<a name="line161">161: </a><font color="#B22222">     This is not a very good example of reading input. In the future,</font>
+<a name="line162">162: </a><font color="#B22222">     we will put an example that shows the style that should be</font>
+<a name="line163">163: </a><font color="#B22222">     used in a real application, where partitioning will be done</font>
+<a name="line164">164: </a><font color="#B22222">     dynamically by calling partitioning routines (at present, we have</font>
+<a name="line165">165: </a><font color="#B22222">     a  ready interface to ParMeTiS).</font>
+<a name="line166">166: </a><font color="#B22222">   */</font>
+<a name="line167">167: </a>  fptr = fopen(<font color="#666666">"adj.in"</font>,<font color="#666666">"r"</font>);
+<a name="line168">168: </a>  <font color="#4169E1">if</font> (!fptr) <a href="../../../..10d/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,0,<font color="#666666">"Could not open adj.in"</font>);
+
+<a name="line170">170: </a>  <font color="#B22222">/*</font>
+<a name="line171">171: </a><font color="#B22222">     Each processor writes to the file output.&lt;rank&gt; where rank is the</font>
+<a name="line172">172: </a><font color="#B22222">     processor's rank.</font>
+<a name="line173">173: </a><font color="#B22222">  */</font>
+<a name="line174">174: </a>  sprintf(part_name,<font color="#666666">"output.%d"</font>,rank);
+<a name="line175">175: </a>  fptr1 = fopen(part_name,<font color="#666666">"w"</font>);
+<a name="line176">176: </a>  <font color="#4169E1">if</font> (!fptr1) <a href="../../../..10d/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,0,<font color="#666666">"Could no open output file"</font>);
+<a name="line177">177: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(user.Nvglobal,&amp;user.gloInd);
+<a name="line178">178: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"Rank is %D\n"</font>,rank);
+<a name="line179">179: </a>  <font color="#4169E1">for</font> (inode = 0; inode &lt; user.Nvglobal; inode++) {
+<a name="line180">180: </a>    <font color="#4169E1">if</font> (!fgets(str,256,fptr)) <a href="../../../..10d/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,1,<font color="#666666">"fgets read failed"</font>);
+<a name="line181">181: </a>    sscanf(str,<font color="#666666">"%d"</font>,&amp;dtmp);user.v2p[inode] = dtmp;
+<a name="line182">182: </a>    <font color="#4169E1">if</font> (user.v2p[inode] == rank) {
+<a name="line183">183: </a>      <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"Node %D belongs to processor %D\n"</font>,inode,user.v2p[inode]);
+
+<a name="line185">185: </a>      user.gloInd[user.Nvlocal] = inode;
+<a name="line186">186: </a>      sscanf(str,<font color="#666666">"%*d %d"</font>,&amp;dtmp);
+<a name="line187">187: </a>      nbrs = dtmp;
+<a name="line188">188: </a>      <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"Number of neighbors for the vertex %D is %D\n"</font>,inode,nbrs);
+
+<a name="line190">190: </a>      user.itot[user.Nvlocal] = nbrs;
+<a name="line191">191: </a>      Nvneighborstotal       += nbrs;
+<a name="line192">192: </a>      <font color="#4169E1">for</font> (i = 0; i &lt; user.itot[user.Nvlocal]; i++) {
+<a name="line193">193: </a>        form[0]='\0';
+<a name="line194">194: </a>        <font color="#4169E1">for</font> (j=0; j &lt; i+2; j++) {
+<a name="line195">195: </a>          <a href="../../../..10d/../docs/manualpages/Sys/PetscStrlcat.html#PetscStrlcat">PetscStrlcat</a>(form,<font color="#666666">"%*d "</font>,<font color="#4169E1">sizeof</font>(form));
+<a name="line196">196: </a>        }
+<a name="line197">197: </a>        <a href="../../../..10d/../docs/manualpages/Sys/PetscStrlcat.html#PetscStrlcat">PetscStrlcat</a>(form,<font color="#666666">"%d"</font>,<font color="#4169E1">sizeof</font>(form));
+
+<a name="line199">199: </a>        sscanf(str,form,&amp;dtmp);
+<a name="line200">200: </a>        user.AdjM[user.Nvlocal][i] = dtmp;
+
+<a name="line202">202: </a>        <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"%D "</font>,user.AdjM[user.Nvlocal][i]);
+<a name="line203">203: </a>      }
+<a name="line204">204: </a>      <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"\n"</font>);
+<a name="line205">205: </a>      user.Nvlocal++;
+<a name="line206">206: </a>    }
+<a name="line207">207: </a>  }
+<a name="line208">208: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"Total # of Local Vertices is %D \n"</font>,user.Nvlocal);
+
+<a name="line210">210: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line211">211: </a><font color="#B22222">     Create different orderings</font>
+<a name="line212">212: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+
+<a name="line214">214: </a>  <font color="#B22222">/*</font>
+<a name="line215">215: </a><font color="#B22222">    Create the local ordering list for vertices. First a list using the PETSc global</font>
+<a name="line216">216: </a><font color="#B22222">    ordering is created. Then we use the <a href="../../../..10d/../docs/manualpages/AO/AO.html#AO">AO</a> object to get the PETSc-to-application and</font>
+<a name="line217">217: </a><font color="#B22222">    application-to-PETSc mappings. Each vertex also gets a local index (stored in the</font>
+<a name="line218">218: </a><font color="#B22222">    locInd array).</font>
+<a name="line219">219: </a><font color="#B22222">  */</font>
+<a name="line220">220: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Scan.html#MPI_Scan">MPI_Scan</a>(&amp;user.Nvlocal,&amp;rstart,1,<a href="../../../..10d/../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,MPI_SUM,<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>);
+<a name="line221">221: </a>  rstart -= user.Nvlocal;
+<a name="line222">222: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(user.Nvlocal,&amp;pordering);
+
+<a name="line224">224: </a>  <font color="#4169E1">for</font> (i=0; i &lt; user.Nvlocal; i++) pordering[i] = rstart + i;
+
+<a name="line226">226: </a>  <font color="#B22222">/*</font>
+<a name="line227">227: </a><font color="#B22222">    Create the <a href="../../../..10d/../docs/manualpages/AO/AO.html#AO">AO</a> object</font>
+<a name="line228">228: </a><font color="#B22222">  */</font>
+<a name="line229">229: </a>  <a href="../../../..10d/../docs/manualpages/AO/AOCreateBasic.html#AOCreateBasic">AOCreateBasic</a>(MPI_COMM_WORLD,user.Nvlocal,user.gloInd,pordering,&amp;ao);
+<a name="line230">230: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pordering);
+
+<a name="line232">232: </a>  <font color="#B22222">/*</font>
+<a name="line233">233: </a><font color="#B22222">    Keep the global indices for later use</font>
+<a name="line234">234: </a><font color="#B22222">  */</font>
+<a name="line235">235: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(user.Nvlocal,&amp;user.locInd);
+<a name="line236">236: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(Nvneighborstotal,&amp;tmp);
+
+<a name="line238">238: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line239">239: </a><font color="#B22222">    Demonstrate the use of <a href="../../../..10d/../docs/manualpages/AO/AO.html#AO">AO</a> functionality</font>
+<a name="line240">240: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+
+<a name="line242">242: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"Before <a href="../../../..10d/../docs/manualpages/AO/AOApplicationToPetsc.html#AOApplicationToPetsc">AOApplicationToPetsc</a>, local indices are : \n"</font>);
+<a name="line243">243: </a>  <font color="#4169E1">for</font> (i=0; i &lt; user.Nvlocal; i++) {
+<a name="line244">244: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">" %D "</font>,user.gloInd[i]);
+
+<a name="line246">246: </a>    user.locInd[i] = user.gloInd[i];
+<a name="line247">247: </a>  }
+<a name="line248">248: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"\n"</font>);
+<a name="line249">249: </a>  jstart = 0;
+<a name="line250">250: </a>  <font color="#4169E1">for</font> (i=0; i &lt; user.Nvlocal; i++) {
+<a name="line251">251: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"Neghbors of local vertex %D are : "</font>,user.gloInd[i]);
+<a name="line252">252: </a>    <font color="#4169E1">for</font> (j=0; j &lt; user.itot[i]; j++) {
+<a name="line253">253: </a>      <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"%D "</font>,user.AdjM[i][j]);
+
+<a name="line255">255: </a>      tmp[j + jstart] = user.AdjM[i][j];
+<a name="line256">256: </a>    }
+<a name="line257">257: </a>    jstart += user.itot[i];
+<a name="line258">258: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"\n"</font>);
+<a name="line259">259: </a>  }
+
+<a name="line261">261: </a>  <font color="#B22222">/*</font>
+<a name="line262">262: </a><font color="#B22222">    Now map the vlocal and neighbor lists to the PETSc ordering</font>
+<a name="line263">263: </a><font color="#B22222">  */</font>
+<a name="line264">264: </a>  <a href="../../../..10d/../docs/manualpages/AO/AOApplicationToPetsc.html#AOApplicationToPetsc">AOApplicationToPetsc</a>(ao,user.Nvlocal,user.locInd);
+<a name="line265">265: </a>  <a href="../../../..10d/../docs/manualpages/AO/AOApplicationToPetsc.html#AOApplicationToPetsc">AOApplicationToPetsc</a>(ao,Nvneighborstotal,tmp);
+<a name="line266">266: </a>  <a href="../../../..10d/../docs/manualpages/AO/AODestroy.html#AODestroy">AODestroy</a>(&amp;ao);
+
+<a name="line268">268: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"After <a href="../../../..10d/../docs/manualpages/AO/AOApplicationToPetsc.html#AOApplicationToPetsc">AOApplicationToPetsc</a>, local indices are : \n"</font>);
+<a name="line269">269: </a>  <font color="#4169E1">for</font> (i=0; i &lt; user.Nvlocal; i++) {
+<a name="line270">270: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">" %D "</font>,user.locInd[i]);
+<a name="line271">271: </a>  }
+<a name="line272">272: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"\n"</font>);
+
+<a name="line274">274: </a>  jstart = 0;
+<a name="line275">275: </a>  <font color="#4169E1">for</font> (i=0; i &lt; user.Nvlocal; i++) {
+<a name="line276">276: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"Neghbors of local vertex %D are : "</font>,user.locInd[i]);
+<a name="line277">277: </a>    <font color="#4169E1">for</font> (j=0; j &lt; user.itot[i]; j++) {
+<a name="line278">278: </a>      user.AdjM[i][j] = tmp[j+jstart];
+
+<a name="line280">280: </a>      <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"%D "</font>,user.AdjM[i][j]);
+<a name="line281">281: </a>    }
+<a name="line282">282: </a>    jstart += user.itot[i];
+<a name="line283">283: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"\n"</font>);
+<a name="line284">284: </a>  }
+
+<a name="line286">286: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line287">287: </a><font color="#B22222">     Extract the ghost vertex information for each processor</font>
+<a name="line288">288: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line289">289: </a>  <font color="#B22222">/*</font>
+<a name="line290">290: </a><font color="#B22222">   Next, we need to generate a list of vertices required for this processor</font>
+<a name="line291">291: </a><font color="#B22222">   and a local numbering scheme for all vertices required on this processor.</font>
+<a name="line292">292: </a><font color="#B22222">      vertices - integer array of all vertices needed on this processor in PETSc</font>
+<a name="line293">293: </a><font color="#B22222">                 global numbering; this list consists of first the "locally owned"</font>
+<a name="line294">294: </a><font color="#B22222">                 vertices followed by the ghost vertices.</font>
+<a name="line295">295: </a><font color="#B22222">      verticesmask - integer array that for each global vertex lists its local</font>
+<a name="line296">296: </a><font color="#B22222">                     vertex number (in vertices) + 1. If the global vertex is not</font>
+<a name="line297">297: </a><font color="#B22222">                     represented on this processor, then the corresponding</font>
+<a name="line298">298: </a><font color="#B22222">                     entry in verticesmask is zero</font>
+
+<a name="line300">300: </a><font color="#B22222">      Note: vertices and verticesmask are both Nvglobal in length; this may</font>
+<a name="line301">301: </a><font color="#B22222">    sound terribly non-scalable, but in fact is not so bad for a reasonable</font>
+<a name="line302">302: </a><font color="#B22222">    number of processors. Importantly, it allows us to use NO SEARCHING</font>
+<a name="line303">303: </a><font color="#B22222">    in setting up the data structures.</font>
+<a name="line304">304: </a><font color="#B22222">  */</font>
+<a name="line305">305: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(user.Nvglobal,&amp;vertices);
+<a name="line306">306: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(user.Nvglobal,&amp;verticesmask);
+<a name="line307">307: </a>  nvertices = 0;
+
+<a name="line309">309: </a>  <font color="#B22222">/*</font>
+<a name="line310">310: </a><font color="#B22222">    First load "owned vertices" into list</font>
+<a name="line311">311: </a><font color="#B22222">  */</font>
+<a name="line312">312: </a>  <font color="#4169E1">for</font> (i=0; i &lt; user.Nvlocal; i++) {
+<a name="line313">313: </a>    vertices[nvertices++]        = user.locInd[i];
+<a name="line314">314: </a>    verticesmask[user.locInd[i]] = nvertices;
+<a name="line315">315: </a>  }
+
+<a name="line317">317: </a>  <font color="#B22222">/*</font>
+<a name="line318">318: </a><font color="#B22222">    Now load ghost vertices into list</font>
+<a name="line319">319: </a><font color="#B22222">  */</font>
+<a name="line320">320: </a>  <font color="#4169E1">for</font> (i=0; i &lt; user.Nvlocal; i++) {
+<a name="line321">321: </a>    <font color="#4169E1">for</font> (j=0; j &lt; user.itot[i]; j++) {
+<a name="line322">322: </a>      nb = user.AdjM[i][j];
+<a name="line323">323: </a>      <font color="#4169E1">if</font> (!verticesmask[nb]) {
+<a name="line324">324: </a>        vertices[nvertices++] = nb;
+<a name="line325">325: </a>        verticesmask[nb]      = nvertices;
+<a name="line326">326: </a>      }
+<a name="line327">327: </a>    }
+<a name="line328">328: </a>  }
+
+<a name="line330">330: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"\n"</font>);
+<a name="line331">331: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"The array vertices is :\n"</font>);
+<a name="line332">332: </a>  <font color="#4169E1">for</font> (i=0; i &lt; nvertices; i++) {
+<a name="line333">333: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"%D "</font>,vertices[i]);
+<a name="line334">334: </a>  }
+<a name="line335">335: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"\n"</font>);
+
+<a name="line337">337: </a>  <font color="#B22222">/*</font>
+<a name="line338">338: </a><font color="#B22222">     Map the vertices listed in the neighbors to the local numbering from</font>
+<a name="line339">339: </a><font color="#B22222">    the global ordering that they contained initially.</font>
+<a name="line340">340: </a><font color="#B22222">  */</font>
+<a name="line341">341: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"\n"</font>);
+<a name="line342">342: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"After mapping neighbors in the local contiguous ordering\n"</font>);
+<a name="line343">343: </a>  <font color="#4169E1">for</font> (i=0; i&lt;user.Nvlocal; i++) {
+<a name="line344">344: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"Neghbors of local vertex %D are :\n"</font>,i);
+<a name="line345">345: </a>    <font color="#4169E1">for</font> (j = 0; j &lt; user.itot[i]; j++) {
+<a name="line346">346: </a>      nb              = user.AdjM[i][j];
+<a name="line347">347: </a>      user.AdjM[i][j] = verticesmask[nb] - 1;
+
+<a name="line349">349: </a>      <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"%D "</font>,user.AdjM[i][j]);
+<a name="line350">350: </a>    }
+<a name="line351">351: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"\n"</font>);
+<a name="line352">352: </a>  }
+
+<a name="line354">354: </a>  N = user.Nvglobal;
+
+<a name="line356">356: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line357">357: </a><font color="#B22222">     Create vector and matrix data structures</font>
+<a name="line358">358: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+
+<a name="line360">360: </a>  <font color="#B22222">/*</font>
+<a name="line361">361: </a><font color="#B22222">    Create vector data structures</font>
+<a name="line362">362: </a><font color="#B22222">  */</font>
+<a name="line363">363: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(MPI_COMM_WORLD,&amp;x);
+<a name="line364">364: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a>(x,user.Nvlocal,N);
+<a name="line365">365: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>(x);
+<a name="line366">366: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(x,&amp;r);
+<a name="line367">367: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecCreateSeq.html#VecCreateSeq">VecCreateSeq</a>(MPI_COMM_SELF,bs*nvertices,&amp;user.localX);
+<a name="line368">368: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(user.localX,&amp;user.localF);
+
+<a name="line370">370: </a>  <font color="#B22222">/*</font>
+<a name="line371">371: </a><font color="#B22222">    Create the scatter between the global representation and the</font>
+<a name="line372">372: </a><font color="#B22222">    local representation</font>
+<a name="line373">373: </a><font color="#B22222">  */</font>
+<a name="line374">374: </a>  <a href="../../../..10d/../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(MPI_COMM_SELF,bs*nvertices,0,1,&amp;islocal);
+<a name="line375">375: </a>  <a href="../../../..10d/../docs/manualpages/IS/ISCreateBlock.html#ISCreateBlock">ISCreateBlock</a>(MPI_COMM_SELF,bs,nvertices,vertices,<a href="../../../..10d/../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;isglobal);
+<a name="line376">376: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(x,isglobal,user.localX,islocal,&amp;user.scatter);
+<a name="line377">377: </a>  <a href="../../../..10d/../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;isglobal);
+<a name="line378">378: </a>  <a href="../../../..10d/../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;islocal);
+
+<a name="line380">380: </a>  <font color="#B22222">/*</font>
+<a name="line381">381: </a><font color="#B22222">     Create matrix data structure; Just to keep the example simple, we have not done any</font>
+<a name="line382">382: </a><font color="#B22222">     preallocation of memory for the matrix. In real application code with big matrices,</font>
+<a name="line383">383: </a><font color="#B22222">     preallocation should always be done to expedite the matrix creation.</font>
+<a name="line384">384: </a><font color="#B22222">  */</font>
+<a name="line385">385: </a>  <a href="../../../..10d/../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(MPI_COMM_WORLD,&amp;Jac);
+<a name="line386">386: </a>  <a href="../../../..10d/../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(Jac,<a href="../../../..10d/../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,<a href="../../../..10d/../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,N,N);
+<a name="line387">387: </a>  <a href="../../../..10d/../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(Jac);
+<a name="line388">388: </a>  <a href="../../../..10d/../docs/manualpages/Mat/MatSetUp.html#MatSetUp">MatSetUp</a>(Jac);
+
+<a name="line390">390: </a>  <font color="#B22222">/*</font>
+<a name="line391">391: </a><font color="#B22222">    The following routine allows us to set the matrix values in local ordering</font>
+<a name="line392">392: </a><font color="#B22222">  */</font>
+<a name="line393">393: </a>  <a href="../../../..10d/../docs/manualpages/IS/ISLocalToGlobalMappingCreate.html#ISLocalToGlobalMappingCreate">ISLocalToGlobalMappingCreate</a>(MPI_COMM_SELF,bs,nvertices,vertices,<a href="../../../..10d/../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;isl2g);
+<a name="line394">394: </a>  <a href="../../../..10d/../docs/manualpages/Mat/MatSetLocalToGlobalMapping.html#MatSetLocalToGlobalMapping">MatSetLocalToGlobalMapping</a>(Jac,isl2g,isl2g);
+
+<a name="line396">396: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line397">397: </a><font color="#B22222">     Create nonlinear solver context</font>
+<a name="line398">398: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+
+<a name="line400">400: </a>  <a href="../../../..10d/../docs/manualpages/SNES/SNESCreate.html#SNESCreate">SNESCreate</a>(MPI_COMM_WORLD,&amp;snes);
+<a name="line401">401: </a>  <a href="../../../..10d/../docs/manualpages/SNES/SNESSetType.html#SNESSetType">SNESSetType</a>(snes,type);
+
+<a name="line403">403: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line404">404: </a><font color="#B22222">    Set routines for function and Jacobian evaluation</font>
+<a name="line405">405: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line406">406: </a>  <a href="../../../..10d/../docs/manualpages/SNES/SNESSetFunction.html#SNESSetFunction">SNESSetFunction</a>(snes,r,FormFunction,(void*)&amp;user);
+
+<a name="line408">408: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscOptionsGetBool.html#PetscOptionsGetBool">PetscOptionsGetBool</a>(NULL,NULL,<font color="#666666">"-fd_jacobian_coloring"</font>,&amp;fd_jacobian_coloring,0);
+<a name="line409">409: </a>  <font color="#4169E1">if</font> (!fd_jacobian_coloring) {
+<a name="line410">410: </a>    <a href="../../../..10d/../docs/manualpages/SNES/SNESSetJacobian.html#SNESSetJacobian">SNESSetJacobian</a>(snes,Jac,Jac,FormJacobian,(void*)&amp;user);
+<a name="line411">411: </a>  } <font color="#4169E1">else</font> {  <font color="#B22222">/* Use matfdcoloring */</font>
+<a name="line412">412: </a>    <a href="../../../..10d/../docs/manualpages/IS/ISColoring.html#ISColoring">ISColoring</a>   iscoloring;
+<a name="line413">413: </a>    <a href="../../../..10d/../docs/manualpages/Mat/MatColoring.html#MatColoring">MatColoring</a>  mc;
+
+<a name="line415">415: </a>    <font color="#B22222">/* Get the data structure of Jac */</font>
+<a name="line416">416: </a>    FormJacobian(snes,x,Jac,Jac,&amp;user);
+<a name="line417">417: </a>    <font color="#B22222">/* Create coloring context */</font>
+<a name="line418">418: </a>    <a href="../../../..10d/../docs/manualpages/MatOrderings/MatColoringCreate.html#MatColoringCreate">MatColoringCreate</a>(Jac,&amp;mc);
+<a name="line419">419: </a>    <a href="../../../..10d/../docs/manualpages/MatOrderings/MatColoringSetType.html#MatColoringSetType">MatColoringSetType</a>(mc,<a href="../../../..10d/../docs/manualpages/MatOrderings/MATCOLORINGSL.html#MATCOLORINGSL">MATCOLORINGSL</a>);
+<a name="line420">420: </a>    <a href="../../../..10d/../docs/manualpages/MatOrderings/MatColoringSetFromOptions.html#MatColoringSetFromOptions">MatColoringSetFromOptions</a>(mc);
+<a name="line421">421: </a>    <a href="../../../..10d/../docs/manualpages/MatOrderings/MatColoringApply.html#MatColoringApply">MatColoringApply</a>(mc,&amp;iscoloring);
+<a name="line422">422: </a>    <a href="../../../..10d/../docs/manualpages/MatOrderings/MatColoringDestroy.html#MatColoringDestroy">MatColoringDestroy</a>(&amp;mc);
+<a name="line423">423: </a>    <a href="../../../..10d/../docs/manualpages/MatFD/MatFDColoringCreate.html#MatFDColoringCreate">MatFDColoringCreate</a>(Jac,iscoloring,&amp;matfdcoloring);
+<a name="line424">424: </a>    <a href="../../../..10d/../docs/manualpages/MatFD/MatFDColoringSetFunction.html#MatFDColoringSetFunction">MatFDColoringSetFunction</a>(matfdcoloring,(<a href="../../../..10d/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> (*)(void))FormFunction,&amp;user);
+<a name="line425">425: </a>    <a href="../../../..10d/../docs/manualpages/MatFD/MatFDColoringSetFromOptions.html#MatFDColoringSetFromOptions">MatFDColoringSetFromOptions</a>(matfdcoloring);
+<a name="line426">426: </a>    <a href="../../../..10d/../docs/manualpages/MatFD/MatFDColoringSetUp.html#MatFDColoringSetUp">MatFDColoringSetUp</a>(Jac,iscoloring,matfdcoloring);
+<a name="line427">427: </a>    <font color="#B22222">/* <a href="../../../..10d/../docs/manualpages/MatFD/MatFDColoringView.html#MatFDColoringView">MatFDColoringView</a>(matfdcoloring,<a href="../../../..10d/../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_WORLD.html#PETSC_VIEWER_STDOUT_WORLD">PETSC_VIEWER_STDOUT_WORLD</a>); */</font>
+<a name="line428">428: </a>    <a href="../../../..10d/../docs/manualpages/SNES/SNESSetJacobian.html#SNESSetJacobian">SNESSetJacobian</a>(snes,Jac,Jac,<a href="../../../..10d/../docs/manualpages/SNES/SNESComputeJacobianDefaultColor.html#SNESComputeJacobianDefaultColor">SNESComputeJacobianDefaultColor</a>,matfdcoloring);
+<a name="line429">429: </a>    <a href="../../../..10d/../docs/manualpages/IS/ISColoringDestroy.html#ISColoringDestroy">ISColoringDestroy</a>(&amp;iscoloring);
+<a name="line430">430: </a>  }
+
+<a name="line432">432: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line433">433: </a><font color="#B22222">     Customize nonlinear solver; set runtime options</font>
+<a name="line434">434: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+
+<a name="line436">436: </a>  <a href="../../../..10d/../docs/manualpages/SNES/SNESSetFromOptions.html#SNESSetFromOptions">SNESSetFromOptions</a>(snes);
+
+<a name="line438">438: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line439">439: </a><font color="#B22222">     Evaluate initial guess; then solve nonlinear system</font>
+<a name="line440">440: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+
+<a name="line442">442: </a>  <font color="#B22222">/*</font>
+<a name="line443">443: </a><font color="#B22222">     Note: The user should initialize the vector, x, with the initial guess</font>
+<a name="line444">444: </a><font color="#B22222">     for the nonlinear solver prior to calling <a href="../../../..10d/../docs/manualpages/SNES/SNESSolve.html#SNESSolve">SNESSolve</a>().  In particular,</font>
+<a name="line445">445: </a><font color="#B22222">     to employ an initial guess of zero, the user should explicitly set</font>
+<a name="line446">446: </a><font color="#B22222">     this vector to zero by calling <a href="../../../..10d/../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>().</font>
+<a name="line447">447: </a><font color="#B22222">  */</font>
+<a name="line448">448: </a>  FormInitialGuess(&amp;user,x);
+
+<a name="line450">450: </a>  <font color="#B22222">/*</font>
+<a name="line451">451: </a><font color="#B22222">    Print the initial guess</font>
+<a name="line452">452: </a><font color="#B22222">  */</font>
+<a name="line453">453: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(x,&amp;xx);
+<a name="line454">454: </a>  <font color="#4169E1">for</font> (inode = 0; inode &lt; user.Nvlocal; inode++) {
+<a name="line455">455: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"Initial Solution at node %D is %f \n"</font>,inode,xx[inode]);
+<a name="line456">456: </a>  }
+<a name="line457">457: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(x,&amp;xx);
+
+<a name="line459">459: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line460">460: </a><font color="#B22222">     Now solve the nonlinear system</font>
+<a name="line461">461: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+
+<a name="line463">463: </a>  <a href="../../../..10d/../docs/manualpages/SNES/SNESSolve.html#SNESSolve">SNESSolve</a>(snes,NULL,x);
+<a name="line464">464: </a>  <a href="../../../..10d/../docs/manualpages/SNES/SNESGetIterationNumber.html#SNESGetIterationNumber">SNESGetIterationNumber</a>(snes,&amp;its);
+<a name="line465">465: </a>  <a href="../../../..10d/../docs/manualpages/SNES/SNESGetNonlinearStepFailures.html#SNESGetNonlinearStepFailures">SNESGetNonlinearStepFailures</a>(snes,&amp;nfails);
+
+<a name="line467">467: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line468">468: </a><font color="#B22222">    Print the output : solution vector and other information</font>
+<a name="line469">469: </a><font color="#B22222">     Each processor writes to the file output.&lt;rank&gt; where rank is the</font>
+<a name="line470">470: </a><font color="#B22222">     processor's rank.</font>
+<a name="line471">471: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+
+<a name="line473">473: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(x,&amp;xx);
+<a name="line474">474: </a>  <font color="#4169E1">for</font> (inode = 0; inode &lt; user.Nvlocal; inode++) {
+<a name="line475">475: </a>    <a href="../../../..10d/../docs/manualpages/Sys/PetscFPrintf.html#PetscFPrintf">PetscFPrintf</a>(<a href="../../../..10d/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,fptr1,<font color="#666666">"Solution at node %D is %f \n"</font>,inode,xx[inode]);
+<a name="line476">476: </a>  }
+<a name="line477">477: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(x,&amp;xx);
+<a name="line478">478: </a>  fclose(fptr1);
+<a name="line479">479: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(MPI_COMM_WORLD,<font color="#666666">"number of <a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a> iterations = %D, "</font>,its);
+<a name="line480">480: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(MPI_COMM_WORLD,<font color="#666666">"number of unsuccessful steps = %D\n"</font>,nfails);
+
+<a name="line482">482: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line483">483: </a><font color="#B22222">     Free work space.  All PETSc objects should be destroyed when they</font>
+<a name="line484">484: </a><font color="#B22222">     are no longer needed.</font>
+<a name="line485">485: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line486">486: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(user.gloInd);
+<a name="line487">487: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(user.locInd);
+<a name="line488">488: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vertices);
+<a name="line489">489: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(verticesmask);
+<a name="line490">490: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(tmp);
+<a name="line491">491: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;user.scatter);
+<a name="line492">492: </a>  <a href="../../../..10d/../docs/manualpages/IS/ISLocalToGlobalMappingDestroy.html#ISLocalToGlobalMappingDestroy">ISLocalToGlobalMappingDestroy</a>(&amp;isl2g);
+<a name="line493">493: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;x);
+<a name="line494">494: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;r);
+<a name="line495">495: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;user.localX);
+<a name="line496">496: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;user.localF);
+<a name="line497">497: </a>  <a href="../../../..10d/../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;Jac);  <a href="../../../..10d/../docs/manualpages/SNES/SNESDestroy.html#SNESDestroy">SNESDestroy</a>(&amp;snes);
+<a name="line498">498: </a>  <font color="#B22222">/*<a href="../../../..10d/../docs/manualpages/Draw/PetscDrawDestroy.html#PetscDrawDestroy">PetscDrawDestroy</a>(draw);*/</font>
+<a name="line499">499: </a>  <font color="#4169E1">if</font> (fd_jacobian_coloring) {
+<a name="line500">500: </a>    <a href="../../../..10d/../docs/manualpages/MatFD/MatFDColoringDestroy.html#MatFDColoringDestroy">MatFDColoringDestroy</a>(&amp;matfdcoloring);
+<a name="line501">501: </a>  }
+<a name="line502">502: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>();
+<a name="line503">503: </a>  <font color="#4169E1">return</font> ierr;
+<a name="line504">504: </a>}
+<a name="line505">505: </a><font color="#B22222">/* --------------------  Form initial approximation ----------------- */</font>
+
+<a name="line507">507: </a><font color="#B22222">/*</font>
+<a name="line508">508: </a><font color="#B22222">   FormInitialGuess - Forms initial approximation.</font>
+
+<a name="line510">510: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line511">511: </a><font color="#B22222">   user - user-defined application context</font>
+<a name="line512">512: </a><font color="#B22222">   X - vector</font>
+
+<a name="line514">514: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line515">515: </a><font color="#B22222">   X - vector</font>
+<a name="line516">516: </a><font color="#B22222"> */</font>
+<a name="line517">517: </a><strong><font color="#4169E1"><a name="FormInitialGuess"></a><a href="../../../..10d/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> FormInitialGuess(AppCtx *user,<a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X)</font></strong>
+<a name="line518">518: </a>{
+<a name="line519">519: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    i,Nvlocal,ierr;
+<a name="line520">520: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *gloInd;
+<a name="line521">521: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x;
+<a name="line522">522: </a><font color="#A020F0">#if defined(UNUSED_VARIABLES)</font>
+<a name="line523">523: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> temp1,temp,hx,hy,hxdhy,hydhx,sc;
+<a name="line524">524: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  Neglobal,Nvglobal,j,row;
+<a name="line525">525: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> alpha,lambda;
+
+<a name="line527">527: </a>  Nvglobal = user-&gt;Nvglobal;
+<a name="line528">528: </a>  Neglobal = user-&gt;Neglobal;
+<a name="line529">529: </a>  lambda   = user-&gt;non_lin_param;
+<a name="line530">530: </a>  alpha    = user-&gt;lin_param;
+<a name="line531">531: </a><font color="#A020F0">#endif</font>
+
+<a name="line533">533: </a>  Nvlocal = user-&gt;Nvlocal;
+<a name="line534">534: </a>  gloInd  = user-&gt;gloInd;
+
+<a name="line536">536: </a>  <font color="#B22222">/*</font>
+<a name="line537">537: </a><font color="#B22222">     Get a pointer to vector data.</font>
+<a name="line538">538: </a><font color="#B22222">       - For default PETSc vectors, <a href="../../../..10d/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>() returns a pointer to</font>
+<a name="line539">539: </a><font color="#B22222">         the data array.  Otherwise, the routine is implementation dependent.</font>
+<a name="line540">540: </a><font color="#B22222">       - You MUST call <a href="../../../..10d/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>() when you no longer need access to</font>
+<a name="line541">541: </a><font color="#B22222">         the array.</font>
+<a name="line542">542: </a><font color="#B22222">  */</font>
+<a name="line543">543: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(X,&amp;x);
+
+<a name="line545">545: </a>  <font color="#B22222">/*</font>
+<a name="line546">546: </a><font color="#B22222">     Compute initial guess over the locally owned part of the grid</font>
+<a name="line547">547: </a><font color="#B22222">  */</font>
+<a name="line548">548: </a>  <font color="#4169E1">for</font> (i=0; i &lt; Nvlocal; i++) x[i] = (<a href="../../../..10d/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)gloInd[i];
+
+<a name="line550">550: </a>  <font color="#B22222">/*</font>
+<a name="line551">551: </a><font color="#B22222">     Restore vector</font>
+<a name="line552">552: </a><font color="#B22222">  */</font>
+<a name="line553">553: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(X,&amp;x);
+<a name="line554">554: </a>  <font color="#4169E1">return</font> 0;
+<a name="line555">555: </a>}
+<a name="line556">556: </a><font color="#B22222">/* --------------------  Evaluate Function F(x) --------------------- */</font>
+<a name="line557">557: </a><font color="#B22222">/*</font>
+<a name="line558">558: </a><font color="#B22222">   FormFunction - Evaluates nonlinear function, F(x).</font>
+
+<a name="line560">560: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line561">561: </a><font color="#B22222">.  snes - the <a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a> context</font>
+<a name="line562">562: </a><font color="#B22222">.  X - input vector</font>
+<a name="line563">563: </a><font color="#B22222">.  ptr - optional user-defined context, as set by <a href="../../../..10d/../docs/manualpages/SNES/SNESSetFunction.html#SNESSetFunction">SNESSetFunction</a>()</font>
+
+<a name="line565">565: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line566">566: </a><font color="#B22222">.  F - function vector</font>
+<a name="line567">567: </a><font color="#B22222"> */</font>
+<a name="line568">568: </a><strong><font color="#4169E1"><a name="FormFunction"></a><a href="../../../..10d/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> FormFunction(<a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a> snes,<a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X,<a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F,void *ptr)</font></strong>
+<a name="line569">569: </a>{
+<a name="line570">570: </a>  AppCtx         *user = (AppCtx*)ptr;
+<a name="line572">572: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,Nvlocal;
+<a name="line573">573: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      alpha,lambda;
+<a name="line574">574: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *x,*f;
+<a name="line575">575: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>     scatter;
+<a name="line576">576: </a>  <a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            localX = user-&gt;localX;
+<a name="line577">577: </a><font color="#A020F0">#if defined(UNUSED_VARIABLES)</font>
+<a name="line578">578: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> ut,ub,ul,ur,u,*g,sc,uyy,uxx;
+<a name="line579">579: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   hx,hy,hxdhy,hydhx;
+<a name="line580">580: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   two = 2.0,one = 1.0;
+<a name="line581">581: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    Nvglobal,Neglobal,row;
+<a name="line582">582: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *gloInd;
+
+<a name="line584">584: </a>  Nvglobal = user-&gt;Nvglobal;
+<a name="line585">585: </a>  Neglobal = user-&gt;Neglobal;
+<a name="line586">586: </a>  gloInd   = user-&gt;gloInd;
+<a name="line587">587: </a><font color="#A020F0">#endif</font>
+
+<a name="line589">589: </a>  Nvlocal = user-&gt;Nvlocal;
+<a name="line590">590: </a>  lambda  = user-&gt;non_lin_param;
+<a name="line591">591: </a>  alpha   = user-&gt;lin_param;
+<a name="line592">592: </a>  scatter = user-&gt;scatter;
+
+<a name="line594">594: </a>  <font color="#B22222">/*</font>
+<a name="line595">595: </a><font color="#B22222">     PDE : L(u) + lambda*u*u +alpha*u = 0 where L(u) is the approximate Laplacian as</font>
+<a name="line596">596: </a><font color="#B22222">     described in the beginning of this code</font>
+
+<a name="line598">598: </a><font color="#B22222">     First scatter the distributed vector X into local vector localX (that includes</font>
+<a name="line599">599: </a><font color="#B22222">     values for ghost nodes. If we wish,we can put some other work between</font>
+<a name="line600">600: </a><font color="#B22222">     <a href="../../../..10d/../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>() and <a href="../../../..10d/../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>() to overlap the communication with</font>
+<a name="line601">601: </a><font color="#B22222">     computation.</font>
+<a name="line602">602: </a><font color="#B22222"> */</font>
+<a name="line603">603: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(scatter,X,localX,<a href="../../../..10d/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../..10d/../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line604">604: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(scatter,X,localX,<a href="../../../..10d/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../..10d/../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+
+<a name="line606">606: </a>  <font color="#B22222">/*</font>
+<a name="line607">607: </a><font color="#B22222">     Get pointers to vector data</font>
+<a name="line608">608: </a><font color="#B22222">  */</font>
+<a name="line609">609: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(localX,&amp;x);
+<a name="line610">610: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(F,&amp;f);
+
+<a name="line612">612: </a>  <font color="#B22222">/*</font>
+<a name="line613">613: </a><font color="#B22222">    Now compute the f(x). As mentioned earlier, the computed Laplacian is just an</font>
+<a name="line614">614: </a><font color="#B22222">    approximate one chosen for illustrative purpose only. Another point to notice</font>
+<a name="line615">615: </a><font color="#B22222">    is that this is a local (completly parallel) calculation. In practical application</font>
+<a name="line616">616: </a><font color="#B22222">    codes, function calculation time is a dominat portion of the overall execution time.</font>
+<a name="line617">617: </a><font color="#B22222">  */</font>
+<a name="line618">618: </a>  <font color="#4169E1">for</font> (i=0; i &lt; Nvlocal; i++) {
+<a name="line619">619: </a>    f[i] = (user-&gt;itot[i] - alpha)*x[i] - lambda*x[i]*x[i];
+<a name="line620">620: </a>    <font color="#4169E1">for</font> (j = 0; j &lt; user-&gt;itot[i]; j++) f[i] -= x[user-&gt;AdjM[i][j]];
+<a name="line621">621: </a>  }
+
+<a name="line623">623: </a>  <font color="#B22222">/*</font>
+<a name="line624">624: </a><font color="#B22222">     Restore vectors</font>
+<a name="line625">625: </a><font color="#B22222">  */</font>
+<a name="line626">626: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(localX,&amp;x);
+<a name="line627">627: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(F,&amp;f);
+<a name="line628">628: </a>  <font color="#B22222">/*<a href="../../../..10d/../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(F,<a href="../../../..10d/../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_WORLD.html#PETSC_VIEWER_STDOUT_WORLD">PETSC_VIEWER_STDOUT_WORLD</a>);*/</font>
+
+<a name="line630">630: </a>  <font color="#4169E1">return</font> 0;
+<a name="line631">631: </a>}
+
+<a name="line633">633: </a><font color="#B22222">/* --------------------  Evaluate Jacobian F'(x) -------------------- */</font>
+<a name="line634">634: </a><font color="#B22222">/*</font>
+<a name="line635">635: </a><font color="#B22222">   FormJacobian - Evaluates Jacobian matrix.</font>
+
+<a name="line637">637: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line638">638: </a><font color="#B22222">.  snes - the <a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a> context</font>
+<a name="line639">639: </a><font color="#B22222">.  X - input vector</font>
+<a name="line640">640: </a><font color="#B22222">.  ptr - optional user-defined context, as set by <a href="../../../..10d/../docs/manualpages/SNES/SNESSetJacobian.html#SNESSetJacobian">SNESSetJacobian</a>()</font>
+
+<a name="line642">642: </a><font color="#B22222">   Output Parameters:</font>
+<a name="line643">643: </a><font color="#B22222">.  A - Jacobian matrix</font>
+<a name="line644">644: </a><font color="#B22222">.  B - optionally different preconditioning matrix</font>
+<a name="line645">645: </a><font color="#B22222">.  flag - flag indicating matrix structure</font>
+
+<a name="line647">647: </a><font color="#B22222">*/</font>
+<a name="line648">648: </a><strong><font color="#4169E1"><a name="FormJacobian"></a><a href="../../../..10d/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> FormJacobian(<a href="../../../..10d/../docs/manualpages/SNES/SNES.html#SNES">SNES</a> snes,<a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X,<a href="../../../..10d/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> J,<a href="../../../..10d/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> jac,void *ptr)</font></strong>
+<a name="line649">649: </a>{
+<a name="line650">650: </a>  AppCtx      *user = (AppCtx*)ptr;
+<a name="line651">651: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    i,j,Nvlocal,col[50],ierr;
+<a name="line652">652: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> alpha,lambda,value[50];
+<a name="line653">653: </a>  <a href="../../../..10d/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>         localX = user-&gt;localX;
+<a name="line654">654: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>  scatter;
+<a name="line655">655: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x;
+<a name="line656">656: </a><font color="#A020F0">#if defined(UNUSED_VARIABLES)</font>
+<a name="line657">657: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> two = 2.0,one = 1.0;
+<a name="line658">658: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    row,Nvglobal,Neglobal;
+<a name="line659">659: </a>  <a href="../../../..10d/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *gloInd;
+
+<a name="line661">661: </a>  Nvglobal = user-&gt;Nvglobal;
+<a name="line662">662: </a>  Neglobal = user-&gt;Neglobal;
+<a name="line663">663: </a>  gloInd   = user-&gt;gloInd;
+<a name="line664">664: </a><font color="#A020F0">#endif</font>
+
+<a name="line666">666: </a>  <font color="#B22222">/*printf("Entering into FormJacobian \n");*/</font>
+<a name="line667">667: </a>  Nvlocal = user-&gt;Nvlocal;
+<a name="line668">668: </a>  lambda  = user-&gt;non_lin_param;
+<a name="line669">669: </a>  alpha   =  user-&gt;lin_param;
+<a name="line670">670: </a>  scatter = user-&gt;scatter;
+
+<a name="line672">672: </a>  <font color="#B22222">/*</font>
+<a name="line673">673: </a><font color="#B22222">     PDE : L(u) + lambda*u*u +alpha*u = 0 where L(u) is the approximate Laplacian as</font>
+<a name="line674">674: </a><font color="#B22222">     described in the beginning of this code</font>
+
+<a name="line676">676: </a><font color="#B22222">     First scatter the distributed vector X into local vector localX (that includes</font>
+<a name="line677">677: </a><font color="#B22222">     values for ghost nodes. If we wish, we can put some other work between</font>
+<a name="line678">678: </a><font color="#B22222">     <a href="../../../..10d/../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>() and <a href="../../../..10d/../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>() to overlap the communication with</font>
+<a name="line679">679: </a><font color="#B22222">     computation.</font>
+<a name="line680">680: </a><font color="#B22222">  */</font>
+<a name="line681">681: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(scatter,X,localX,<a href="../../../..10d/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../..10d/../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line682">682: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(scatter,X,localX,<a href="../../../..10d/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../..10d/../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+
+<a name="line684">684: </a>  <font color="#B22222">/*</font>
+<a name="line685">685: </a><font color="#B22222">     Get pointer to vector data</font>
+<a name="line686">686: </a><font color="#B22222">  */</font>
+<a name="line687">687: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(localX,&amp;x);
+
+<a name="line689">689: </a>  <font color="#4169E1">for</font> (i=0; i &lt; Nvlocal; i++) {
+<a name="line690">690: </a>    col[0]   = i;
+<a name="line691">691: </a>    value[0] = user-&gt;itot[i] - 2.0*lambda*x[i] - alpha;
+<a name="line692">692: </a>    <font color="#4169E1">for</font> (j = 0; j &lt; user-&gt;itot[i]; j++) {
+<a name="line693">693: </a>      col[j+1]   = user-&gt;AdjM[i][j];
+<a name="line694">694: </a>      value[j+1] = -1.0;
+<a name="line695">695: </a>    }
+
+<a name="line697">697: </a>    <font color="#B22222">/*</font>
+<a name="line698">698: </a><font color="#B22222">      Set the matrix values in the local ordering. Note that in order to use this</font>
+<a name="line699">699: </a><font color="#B22222">      feature we must call the routine <a href="../../../..10d/../docs/manualpages/Mat/MatSetLocalToGlobalMapping.html#MatSetLocalToGlobalMapping">MatSetLocalToGlobalMapping</a>() after the</font>
+<a name="line700">700: </a><font color="#B22222">      matrix has been created.</font>
+<a name="line701">701: </a><font color="#B22222">    */</font>
+<a name="line702">702: </a>    <a href="../../../..10d/../docs/manualpages/Mat/MatSetValuesLocal.html#MatSetValuesLocal">MatSetValuesLocal</a>(jac,1,&amp;i,1+user-&gt;itot[i],col,value,<a href="../../../..10d/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line703">703: </a>  }
+
+<a name="line705">705: </a>  <font color="#B22222">/*</font>
+<a name="line706">706: </a><font color="#B22222">     Assemble matrix, using the 2-step process:</font>
+<a name="line707">707: </a><font color="#B22222">       <a href="../../../..10d/../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(), <a href="../../../..10d/../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>().</font>
+<a name="line708">708: </a><font color="#B22222">     Between these two calls, the pointer to vector data has been restored to</font>
+<a name="line709">709: </a><font color="#B22222">     demonstrate the use of overlapping communicationn with computation.</font>
+<a name="line710">710: </a><font color="#B22222">  */</font>
+<a name="line711">711: </a>  <a href="../../../..10d/../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(jac,<a href="../../../..10d/../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line712">712: </a>  <a href="../../../..10d/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(localX,&amp;x);
+<a name="line713">713: </a>  <a href="../../../..10d/../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(jac,<a href="../../../..10d/../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+
+<a name="line715">715: </a>  <font color="#B22222">/*</font>
+<a name="line716">716: </a><font color="#B22222">     Tell the matrix we will never add a new nonzero location to the</font>
+<a name="line717">717: </a><font color="#B22222">     matrix. If we do, it will generate an error.</font>
+<a name="line718">718: </a><font color="#B22222">  */</font>
+<a name="line719">719: </a>  <a href="../../../..10d/../docs/manualpages/Mat/MatSetOption.html#MatSetOption">MatSetOption</a>(jac,<a href="../../../..10d/../docs/manualpages/Mat/MatOption.html#MatOption">MAT_NEW_NONZERO_LOCATION_ERR</a>,<a href="../../../..10d/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line720">720: </a>  <font color="#B22222">/* <a href="../../../..10d/../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(jac,<a href="../../../..10d/../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_SELF.html#PETSC_VIEWER_STDOUT_SELF">PETSC_VIEWER_STDOUT_SELF</a>); */</font>
+<a name="line721">721: </a>  <font color="#4169E1">return</font> 0;
+<a name="line722">722: </a>}
+
+
+
+<a name="line726">726: </a><font color="#B22222">/*TEST</font>
+
+<a name="line728">728: </a><font color="#B22222">   build:</font>
+<a name="line729">729: </a><font color="#B22222">      requires: !complex</font>
+
+<a name="line731">731: </a><font color="#B22222">   test:</font>
+<a name="line732">732: </a><font color="#B22222">      nsize: 2</font>
+<a name="line733">733: </a><font color="#B22222">      args: -snes_monitor_short</font>
+<a name="line734">734: </a><font color="#B22222">      localrunfiles: options.inf adj.in</font>
+
+<a name="line736">736: </a><font color="#B22222">   test:</font>
+<a name="line737">737: </a><font color="#B22222">      suffix: 2</font>
+<a name="line738">738: </a><font color="#B22222">      nsize: 2</font>
+<a name="line739">739: </a><font color="#B22222">      args: -snes_monitor_short -fd_jacobian_coloring</font>
+<a name="line740">740: </a><font color="#B22222">      localrunfiles: options.inf adj.in</font>
+
+<a name="line742">742: </a><font color="#B22222">TEST*/</font>
+</pre>
+</body>
+
+</html>

@@ -1,0 +1,715 @@
+<center><a href="ex5opt_ic.c">Actual source code: ex5opt_ic.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ts/examples/tutorials/advection-diffusion-reaction/ex5opt_ic.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:31:19+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ts/examples/tutorials/advection-diffusion-reaction/ex5opt_ic.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a>static char help[] = <font color="#666666">"Demonstrates adjoint sensitivity analysis for Reaction-Diffusion Equations.\n"</font>;
+
+<a name="line3">  3: </a><font color="#B22222">/*</font>
+<a name="line4">  4: </a><font color="#B22222">   See ex5.c for details on the equation.</font>
+<a name="line5">  5: </a><font color="#B22222">   This code demonestrates the TSAdjoint/TAO interface to solve an inverse initial value problem built on a system of</font>
+<a name="line6">  6: </a><font color="#B22222">   time-dependent partial differential equations.</font>
+<a name="line7">  7: </a><font color="#B22222">   In this problem, the initial value for the PDE is unknown, but the output (the final solution of the PDE) is known.</font>
+<a name="line8">  8: </a><font color="#B22222">   We want to determine the initial value that can produce the given output.</font>
+<a name="line9">  9: </a><font color="#B22222">   We formulate the problem as a nonlinear optimization problem that minimizes the discrepency between the simulated</font>
+<a name="line10"> 10: </a><font color="#B22222">   result and given reference solution, calculate the gradient of the objective function with the discrete adjoint</font>
+<a name="line11"> 11: </a><font color="#B22222">   solver, and solve the optimization problem with TAO.</font>
+
+<a name="line13"> 13: </a><font color="#B22222">   Runtime options:</font>
+<a name="line14"> 14: </a><font color="#B22222">     -forwardonly  - run only the forward simulation</font>
+<a name="line15"> 15: </a><font color="#B22222">     -implicitform - provide IFunction and IJacobian to <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a>, if not set, RHSFunction and RHSJacobian will be used</font>
+<a name="line16"> 16: </a><font color="#B22222"> */</font>
+
+<a name="line18"> 18: </a><font color="#A020F0">#include &lt;petscsys.h&gt;</font>
+<a name="line19"> 19: </a><font color="#A020F0">#include &lt;petscdm.h&gt;</font>
+<a name="line20"> 20: </a><font color="#A020F0">#include &lt;petscdmda.h&gt;</font>
+<a name="line21"> 21: </a><font color="#A020F0">#include &lt;petscts.h&gt;</font>
+<a name="line22"> 22: </a><font color="#A020F0">#include &lt;petsctao.h&gt;</font>
+
+<a name="line24"> 24: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line25"> 25: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u,v;
+<a name="line26"> 26: </a>} Field;
+
+<a name="line28"> 28: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line29"> 29: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> D1,D2,gamma,kappa;
+<a name="line30"> 30: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a>        ts;
+<a name="line31"> 31: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>       U;
+<a name="line32"> 32: </a>} AppCtx;
+
+<a name="line34"> 34: </a><font color="#B22222">/* User-defined routines */</font>
+<a name="line35"> 35: </a><strong><font color="#4169E1">extern <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> RHSFunction(<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,void*),InitialConditions(<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>)</font></strong>;
+<a name="line36"> 36: </a><strong><font color="#4169E1">extern <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> RHSJacobian(<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>,void*)</font></strong>;
+<a name="line37"> 37: </a><strong><font color="#4169E1">extern <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IFunction(<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,void*)</font></strong>;
+<a name="line38"> 38: </a><strong><font color="#4169E1">extern <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IJacobian(<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>,void*)</font></strong>;
+<a name="line39"> 39: </a><strong><font color="#4169E1">extern <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> FormFunctionAndGradient(<a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/Tao.html#Tao">Tao</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>*,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,void*)</font></strong>;
+
+<a name="line41"> 41: </a><font color="#B22222">/*</font>
+<a name="line42"> 42: </a><font color="#B22222">   Set terminal condition for the adjoint variable</font>
+<a name="line43"> 43: </a><font color="#B22222"> */</font>
+<a name="line44"> 44: </a><strong><font color="#4169E1"><a name="InitializeLambda"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> InitializeLambda(<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a> da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> lambda,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U,AppCtx *appctx)</font></strong>
+<a name="line45"> 45: </a>{
+<a name="line46"> 46: </a>  char           filename[PETSC_MAX_PATH_LEN]=<font color="#666666">""</font>;
+<a name="line47"> 47: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>    viewer;
+<a name="line48"> 48: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            Uob;
+
+<a name="line51"> 51: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(U,&amp;Uob);
+<a name="line52"> 52: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscSNPrintf.html#PetscSNPrintf">PetscSNPrintf</a>(filename,<font color="#4169E1">sizeof</font> filename,<font color="#666666">"ex5opt.ob"</font>);
+<a name="line53"> 53: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,filename,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">FILE_MODE_READ</a>,&amp;viewer);
+<a name="line54"> 54: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(Uob,viewer);
+<a name="line55"> 55: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(&amp;viewer);
+<a name="line56"> 56: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(Uob,-1.,U);
+<a name="line57"> 57: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecScale.html#VecScale">VecScale</a>(Uob,2.0);
+<a name="line58"> 58: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(lambda,1.,Uob);
+<a name="line59"> 59: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;Uob);
+<a name="line60"> 60: </a>  <font color="#4169E1">return</font>(0);
+<a name="line61"> 61: </a>}
+
+<a name="line63"> 63: </a><font color="#B22222">/*</font>
+<a name="line64"> 64: </a><font color="#B22222">   Set up a viewer that dumps data into a binary file</font>
+<a name="line65"> 65: </a><font color="#B22222"> */</font>
+<a name="line66"> 66: </a><strong><font color="#4169E1"><a name="OutputBIN"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> OutputBIN(<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a> da, const char *filename, <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> *viewer)</font></strong>
+<a name="line67"> 67: </a>{
+
+<a name="line70"> 70: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)da),viewer);
+<a name="line71"> 71: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>(*viewer,<a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PETSCVIEWERBINARY.html#PETSCVIEWERBINARY">PETSCVIEWERBINARY</a>);
+<a name="line72"> 72: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewerFileSetMode.html#PetscViewerFileSetMode">PetscViewerFileSetMode</a>(*viewer,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">FILE_MODE_WRITE</a>);
+<a name="line73"> 73: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewerFileSetName.html#PetscViewerFileSetName">PetscViewerFileSetName</a>(*viewer,filename);
+<a name="line74"> 74: </a>  <font color="#4169E1">return</font>(0);
+<a name="line75"> 75: </a>}
+
+<a name="line77"> 77: </a><font color="#B22222">/*</font>
+<a name="line78"> 78: </a><font color="#B22222">   Generate a reference solution and save it to a binary file</font>
+<a name="line79"> 79: </a><font color="#B22222"> */</font>
+<a name="line80"> 80: </a><strong><font color="#4169E1"><a name="GenerateOBs"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> GenerateOBs(<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U,AppCtx *appctx)</font></strong>
+<a name="line81"> 81: </a>{
+<a name="line82"> 82: </a>  char           filename[PETSC_MAX_PATH_LEN] = <font color="#666666">""</font>;
+<a name="line83"> 83: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>    viewer;
+<a name="line84"> 84: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a>             da;
+
+<a name="line87"> 87: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSGetDM.html#TSGetDM">TSGetDM</a>(ts,&amp;da);
+<a name="line88"> 88: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSolve.html#TSSolve">TSSolve</a>(ts,U);
+<a name="line89"> 89: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscSNPrintf.html#PetscSNPrintf">PetscSNPrintf</a>(filename,<font color="#4169E1">sizeof</font> filename,<font color="#666666">"ex5opt.ob"</font>);
+<a name="line90"> 90: </a>  OutputBIN(da,filename,&amp;viewer);
+<a name="line91"> 91: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(U,viewer);
+<a name="line92"> 92: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(&amp;viewer);
+<a name="line93"> 93: </a>  <font color="#4169E1">return</font>(0);
+<a name="line94"> 94: </a>}
+
+<a name="line96"> 96: </a><strong><font color="#4169E1"><a name="InitialConditions"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> InitialConditions(<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a> da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U)</font></strong>
+<a name="line97"> 97: </a>{
+<a name="line99"> 99: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,xs,ys,xm,ym,Mx,My;
+<a name="line100">100: </a>  Field          **u;
+<a name="line101">101: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      hx,hy,x,y;
+
+<a name="line104">104: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetInfo.html#DMDAGetInfo">DMDAGetInfo</a>(da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,&amp;Mx,&amp;My,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>);
+
+<a name="line106">106: </a>  hx = 2.5/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)Mx;
+<a name="line107">107: </a>  hy = 2.5/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)My;
+
+<a name="line109">109: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArray.html#DMDAVecGetArray">DMDAVecGetArray</a>(da,U,&amp;u);
+<a name="line110">110: </a>  <font color="#B22222">/* Get local grid boundaries */</font>
+<a name="line111">111: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetCorners.html#DMDAGetCorners">DMDAGetCorners</a>(da,&amp;xs,&amp;ys,NULL,&amp;xm,&amp;ym,NULL);
+
+<a name="line113">113: </a>  <font color="#B22222">/* Compute function over the locally owned part of the grid */</font>
+<a name="line114">114: </a>  <font color="#4169E1">for</font> (j=ys; j&lt;ys+ym; j++) {
+<a name="line115">115: </a>    y = j*hy;
+<a name="line116">116: </a>    <font color="#4169E1">for</font> (i=xs; i&lt;xs+xm; i++) {
+<a name="line117">117: </a>      x = i*hx;
+<a name="line118">118: </a>      <font color="#4169E1">if</font> ((1.0 &lt;= x) &amp;&amp; (x &lt;= 1.5) &amp;&amp; (1.0 &lt;= y) &amp;&amp; (y &lt;= 1.5)) u[j][i].v = .25*PetscPowReal(PetscSinReal(4.0*PETSC_PI*x),2.0)*PetscPowReal(PetscSinReal(4.0*PETSC_PI*y),2.0);
+<a name="line119">119: </a>      <font color="#4169E1">else</font> u[j][i].v = 0.0;
+
+<a name="line121">121: </a>      u[j][i].u = 1.0 - 2.0*u[j][i].v;
+<a name="line122">122: </a>    }
+<a name="line123">123: </a>  }
+
+<a name="line125">125: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArray.html#DMDAVecRestoreArray">DMDAVecRestoreArray</a>(da,U,&amp;u);
+<a name="line126">126: </a>  <font color="#4169E1">return</font>(0);
+<a name="line127">127: </a>}
+
+<a name="line129">129: </a><strong><font color="#4169E1"><a name="PerturbedInitialConditions"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PerturbedInitialConditions(<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a> da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U)</font></strong>
+<a name="line130">130: </a>{
+<a name="line132">132: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,xs,ys,xm,ym,Mx,My;
+<a name="line133">133: </a>  Field          **u;
+<a name="line134">134: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      hx,hy,x,y;
+
+<a name="line137">137: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetInfo.html#DMDAGetInfo">DMDAGetInfo</a>(da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,&amp;Mx,&amp;My,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>);
+
+<a name="line139">139: </a>  hx = 2.5/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)Mx;
+<a name="line140">140: </a>  hy = 2.5/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)My;
+
+<a name="line142">142: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArray.html#DMDAVecGetArray">DMDAVecGetArray</a>(da,U,&amp;u);
+<a name="line143">143: </a>  <font color="#B22222">/* Get local grid boundaries */</font>
+<a name="line144">144: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetCorners.html#DMDAGetCorners">DMDAGetCorners</a>(da,&amp;xs,&amp;ys,NULL,&amp;xm,&amp;ym,NULL);
+
+<a name="line146">146: </a>  <font color="#B22222">/* Compute function over the locally owned part of the grid */</font>
+<a name="line147">147: </a>  <font color="#4169E1">for</font> (j=ys; j&lt;ys+ym; j++) {
+<a name="line148">148: </a>    y = j*hy;
+<a name="line149">149: </a>    <font color="#4169E1">for</font> (i=xs; i&lt;xs+xm; i++) {
+<a name="line150">150: </a>      x = i*hx;
+<a name="line151">151: </a>      <font color="#4169E1">if</font> ((1.0 &lt;= x) &amp;&amp; (x &lt;= 1.5) &amp;&amp; (1.0 &lt;= y) &amp;&amp; (y &lt;= 1.5)) u[j][i].v = .25*PetscPowReal(PetscSinReal(4.0*PETSC_PI*0.5*x),2.0)*PetscPowReal(PetscSinReal(4.0*PETSC_PI*0.5*y),2.0);
+<a name="line152">152: </a>      <font color="#4169E1">else</font> u[j][i].v = 0.0;
+
+<a name="line154">154: </a>      u[j][i].u = 1.0 - 2.0*u[j][i].v;
+<a name="line155">155: </a>    }
+<a name="line156">156: </a>  }
+
+<a name="line158">158: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArray.html#DMDAVecRestoreArray">DMDAVecRestoreArray</a>(da,U,&amp;u);
+<a name="line159">159: </a>  <font color="#4169E1">return</font>(0);
+<a name="line160">160: </a>}
+
+<a name="line162">162: </a><strong><font color="#4169E1"><a name="PerturbedInitialConditions2"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PerturbedInitialConditions2(<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a> da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U)</font></strong>
+<a name="line163">163: </a>{
+<a name="line165">165: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,xs,ys,xm,ym,Mx,My;
+<a name="line166">166: </a>  Field          **u;
+<a name="line167">167: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      hx,hy,x,y;
+
+<a name="line170">170: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetInfo.html#DMDAGetInfo">DMDAGetInfo</a>(da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,&amp;Mx,&amp;My,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>);
+
+<a name="line172">172: </a>  hx = 2.5/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)Mx;
+<a name="line173">173: </a>  hy = 2.5/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)My;
+
+<a name="line175">175: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArray.html#DMDAVecGetArray">DMDAVecGetArray</a>(da,U,&amp;u);
+<a name="line176">176: </a>  <font color="#B22222">/* Get local grid boundaries */</font>
+<a name="line177">177: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetCorners.html#DMDAGetCorners">DMDAGetCorners</a>(da,&amp;xs,&amp;ys,NULL,&amp;xm,&amp;ym,NULL);
+
+<a name="line179">179: </a>  <font color="#B22222">/* Compute function over the locally owned part of the grid */</font>
+<a name="line180">180: </a>  <font color="#4169E1">for</font> (j=ys; j&lt;ys+ym; j++) {
+<a name="line181">181: </a>    y = j*hy;
+<a name="line182">182: </a>    <font color="#4169E1">for</font> (i=xs; i&lt;xs+xm; i++) {
+<a name="line183">183: </a>      x = i*hx;
+<a name="line184">184: </a>      <font color="#4169E1">if</font> ((1.0 &lt;= x-0.5) &amp;&amp; (x-0.5 &lt;= 1.5) &amp;&amp; (1.0 &lt;= y) &amp;&amp; (y &lt;= 1.5)) u[j][i].v = .25*PetscPowReal(PetscSinReal(4.0*PETSC_PI*(x-0.5)),2.0)*PetscPowReal(PetscSinReal(4.0*PETSC_PI*y),2.0);
+<a name="line185">185: </a>      <font color="#4169E1">else</font> u[j][i].v = 0.0;
+
+<a name="line187">187: </a>      u[j][i].u = 1.0 - 2.0*u[j][i].v;
+<a name="line188">188: </a>    }
+<a name="line189">189: </a>  }
+
+<a name="line191">191: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArray.html#DMDAVecRestoreArray">DMDAVecRestoreArray</a>(da,U,&amp;u);
+<a name="line192">192: </a>  <font color="#4169E1">return</font>(0);
+<a name="line193">193: </a>}
+
+<a name="line195">195: </a><strong><font color="#4169E1"><a name="PerturbedInitialConditions3"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PerturbedInitialConditions3(<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a> da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U)</font></strong>
+<a name="line196">196: </a>{
+<a name="line198">198: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,xs,ys,xm,ym,Mx,My;
+<a name="line199">199: </a>  Field          **u;
+<a name="line200">200: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      hx,hy,x,y;
+
+<a name="line203">203: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetInfo.html#DMDAGetInfo">DMDAGetInfo</a>(da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,&amp;Mx,&amp;My,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>);
+
+<a name="line205">205: </a>  hx = 2.5/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)Mx;
+<a name="line206">206: </a>  hy = 2.5/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)My;
+
+<a name="line208">208: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArray.html#DMDAVecGetArray">DMDAVecGetArray</a>(da,U,&amp;u);
+<a name="line209">209: </a>  <font color="#B22222">/* Get local grid boundaries */</font>
+<a name="line210">210: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetCorners.html#DMDAGetCorners">DMDAGetCorners</a>(da,&amp;xs,&amp;ys,NULL,&amp;xm,&amp;ym,NULL);
+
+<a name="line212">212: </a>  <font color="#B22222">/* Compute function over the locally owned part of the grid */</font>
+<a name="line213">213: </a>  <font color="#4169E1">for</font> (j=ys; j&lt;ys+ym; j++) {
+<a name="line214">214: </a>    y = j*hy;
+<a name="line215">215: </a>    <font color="#4169E1">for</font> (i=xs; i&lt;xs+xm; i++) {
+<a name="line216">216: </a>      x = i*hx;
+<a name="line217">217: </a>      <font color="#4169E1">if</font> ((0.5 &lt;= x) &amp;&amp; (x &lt;= 2.0) &amp;&amp; (0.5 &lt;= y) &amp;&amp; (y &lt;= 2.0)) u[j][i].v = .25*PetscPowReal(PetscSinReal(4.0*PETSC_PI*x),2.0)*PetscPowReal(PetscSinReal(4.0*PETSC_PI*y),2.0);
+<a name="line218">218: </a>      <font color="#4169E1">else</font> u[j][i].v = 0.0;
+
+<a name="line220">220: </a>      u[j][i].u = 1.0 - 2.0*u[j][i].v;
+<a name="line221">221: </a>    }
+<a name="line222">222: </a>  }
+
+<a name="line224">224: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArray.html#DMDAVecRestoreArray">DMDAVecRestoreArray</a>(da,U,&amp;u);
+<a name="line225">225: </a>  <font color="#4169E1">return</font>(0);
+<a name="line226">226: </a>}
+
+<a name="line228">228: </a><strong><font color="#4169E1"><a name="main"></a>int main(int argc,char **argv)</font></strong>
+<a name="line229">229: </a>{
+<a name="line231">231: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a>             da;
+<a name="line232">232: </a>  AppCtx         appctx;
+<a name="line233">233: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      forwardonly = <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,implicitform = <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line234">234: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       perturbic = 1;
+
+<a name="line236">236: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(&amp;argc,&amp;argv,(char*)0,help);<font color="#4169E1">if</font> (ierr) <font color="#4169E1">return</font> ierr;
+<a name="line237">237: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscOptionsGetBool.html#PetscOptionsGetBool">PetscOptionsGetBool</a>(NULL,NULL,<font color="#666666">"-forwardonly"</font>,&amp;forwardonly,NULL);
+<a name="line238">238: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscOptionsGetBool.html#PetscOptionsGetBool">PetscOptionsGetBool</a>(NULL,NULL,<font color="#666666">"-implicitform"</font>,&amp;implicitform,NULL);
+<a name="line239">239: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscOptionsGetInt.html#PetscOptionsGetInt">PetscOptionsGetInt</a>(NULL,NULL,<font color="#666666">"-perturbic"</font>,&amp;perturbic,NULL);
+
+<a name="line241">241: </a>  appctx.D1    = 8.0e-5;
+<a name="line242">242: </a>  appctx.D2    = 4.0e-5;
+<a name="line243">243: </a>  appctx.gamma = .024;
+<a name="line244">244: </a>  appctx.kappa = .06;
+
+<a name="line246">246: </a>  <font color="#B22222">/* Create distributed array (<a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDA.html#DMDA">DMDA</a>) to manage parallel grid and vectors */</font>
+<a name="line247">247: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDACreate2d.html#DMDACreate2d">DMDACreate2d</a>(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_PERIODIC</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_PERIODIC</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAStencilType.html#DMDAStencilType">DMDA_STENCIL_STAR</a>,64,64,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,2,1,NULL,NULL,&amp;da);
+<a name="line248">248: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMSetFromOptions.html#DMSetFromOptions">DMSetFromOptions</a>(da);
+<a name="line249">249: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMSetUp.html#DMSetUp">DMSetUp</a>(da);
+<a name="line250">250: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDASetFieldName.html#DMDASetFieldName">DMDASetFieldName</a>(da,0,<font color="#666666">"u"</font>);
+<a name="line251">251: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDASetFieldName.html#DMDASetFieldName">DMDASetFieldName</a>(da,1,<font color="#666666">"v"</font>);
+
+<a name="line253">253: </a>  <font color="#B22222">/* Extract global vectors from <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDA.html#DMDA">DMDA</a>; then duplicate for remaining</font>
+<a name="line254">254: </a><font color="#B22222">     vectors that are the same types */</font>
+<a name="line255">255: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMCreateGlobalVector.html#DMCreateGlobalVector">DMCreateGlobalVector</a>(da,&amp;appctx.U);
+
+<a name="line257">257: </a>  <font color="#B22222">/* Create timestepping solver context */</font>
+<a name="line258">258: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSCreate.html#TSCreate">TSCreate</a>(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;appctx.ts);
+<a name="line259">259: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetType.html#TSSetType">TSSetType</a>(appctx.ts,<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSCN.html#TSCN">TSCN</a>);
+<a name="line260">260: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetDM.html#TSSetDM">TSSetDM</a>(appctx.ts,da);
+<a name="line261">261: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetProblemType.html#TSSetProblemType">TSSetProblemType</a>(appctx.ts,<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSProblemType.html#TSProblemType">TS_NONLINEAR</a>);
+<a name="line262">262: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetEquationType.html#TSSetEquationType">TSSetEquationType</a>(appctx.ts,<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSEquationType.html#TSEquationType">TS_EQ_ODE_EXPLICIT</a>); <font color="#B22222">/* less Jacobian evaluations when adjoint BEuler is used, otherwise no effect */</font>
+<a name="line263">263: </a>  <font color="#4169E1">if</font> (!implicitform) {
+<a name="line264">264: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetRHSFunction.html#TSSetRHSFunction">TSSetRHSFunction</a>(appctx.ts,NULL,RHSFunction,&amp;appctx);
+<a name="line265">265: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetRHSJacobian.html#TSSetRHSJacobian">TSSetRHSJacobian</a>(appctx.ts,NULL,NULL,RHSJacobian,&amp;appctx);
+<a name="line266">266: </a>  } <font color="#4169E1">else</font> {
+<a name="line267">267: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetIFunction.html#TSSetIFunction">TSSetIFunction</a>(appctx.ts,NULL,IFunction,&amp;appctx);
+<a name="line268">268: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetIJacobian.html#TSSetIJacobian">TSSetIJacobian</a>(appctx.ts,NULL,NULL,IJacobian,&amp;appctx);
+<a name="line269">269: </a>  }
+
+<a name="line271">271: </a>  <font color="#B22222">/* Set initial conditions */</font>
+<a name="line272">272: </a>  InitialConditions(da,appctx.U);
+<a name="line273">273: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetSolution.html#TSSetSolution">TSSetSolution</a>(appctx.ts,appctx.U);
+
+<a name="line275">275: </a>  <font color="#B22222">/* Set solver options */</font>
+<a name="line276">276: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetMaxTime.html#TSSetMaxTime">TSSetMaxTime</a>(appctx.ts,2000.0);
+<a name="line277">277: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetTimeStep.html#TSSetTimeStep">TSSetTimeStep</a>(appctx.ts,0.5);
+<a name="line278">278: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetExactFinalTime.html#TSSetExactFinalTime">TSSetExactFinalTime</a>(appctx.ts,<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSExactFinalTimeOption.html#TSExactFinalTimeOption">TS_EXACTFINALTIME_MATCHSTEP</a>);
+<a name="line279">279: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetFromOptions.html#TSSetFromOptions">TSSetFromOptions</a>(appctx.ts);
+
+<a name="line281">281: </a>  GenerateOBs(appctx.ts,appctx.U,&amp;appctx);
+
+<a name="line283">283: </a>  <font color="#4169E1">if</font> (!forwardonly) {
+<a name="line284">284: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao;
+<a name="line285">285: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> P;
+<a name="line286">286: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> lambda[1];
+<a name="line287">287: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Profiling/PetscLogStage.html#PetscLogStage">PetscLogStage</a> opt_stage;
+
+<a name="line289">289: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Profiling/PetscLogStageRegister.html#PetscLogStageRegister">PetscLogStageRegister</a>(<font color="#666666">"Optimization"</font>,&amp;opt_stage);
+<a name="line290">290: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Profiling/PetscLogStagePush.html#PetscLogStagePush">PetscLogStagePush</a>(opt_stage);
+<a name="line291">291: </a>    <font color="#4169E1">if</font> (perturbic == 1) {
+<a name="line292">292: </a>      PerturbedInitialConditions(da,appctx.U);
+<a name="line293">293: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (perturbic == 2) {
+<a name="line294">294: </a>      PerturbedInitialConditions2(da,appctx.U);
+<a name="line295">295: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (perturbic == 3) {
+<a name="line296">296: </a>      PerturbedInitialConditions3(da,appctx.U);
+<a name="line297">297: </a>    }
+
+<a name="line299">299: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(appctx.U,&amp;lambda[0]);
+<a name="line300">300: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Sensitivity/TSSetCostGradients.html#TSSetCostGradients">TSSetCostGradients</a>(appctx.ts,1,lambda,NULL);
+
+<a name="line302">302: </a>    <font color="#B22222">/* Have the <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a> save its trajectory needed by <a href="../../../..-diffusion-reaction/../docs/manualpages/Sensitivity/TSAdjointSolve.html#TSAdjointSolve">TSAdjointSolve</a>() */</font>
+<a name="line303">303: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetSaveTrajectory.html#TSSetSaveTrajectory">TSSetSaveTrajectory</a>(appctx.ts);
+
+<a name="line305">305: </a>    <font color="#B22222">/* Create TAO solver and set desired solution method */</font>
+<a name="line306">306: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/TaoCreate.html#TaoCreate">TaoCreate</a>(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;tao);
+<a name="line307">307: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/TaoSetType.html#TaoSetType">TaoSetType</a>(tao,<a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/TAOBLMVM.html#TAOBLMVM">TAOBLMVM</a>);
+
+<a name="line309">309: </a>    <font color="#B22222">/* Set initial guess for TAO */</font>
+<a name="line310">310: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(appctx.U,&amp;P);
+<a name="line311">311: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(appctx.U,P);
+<a name="line312">312: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/TaoSetInitialVector.html#TaoSetInitialVector">TaoSetInitialVector</a>(tao,P);
+
+<a name="line314">314: </a>    <font color="#B22222">/* Set routine for function and gradient evaluation */</font>
+<a name="line315">315: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/TaoSetObjectiveAndGradientRoutine.html#TaoSetObjectiveAndGradientRoutine">TaoSetObjectiveAndGradientRoutine</a>(tao,FormFunctionAndGradient,&amp;appctx);
+
+<a name="line317">317: </a>    <font color="#B22222">/* Check for any TAO command line options */</font>
+<a name="line318">318: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/TaoSetFromOptions.html#TaoSetFromOptions">TaoSetFromOptions</a>(tao);
+
+<a name="line320">320: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/TaoSolve.html#TaoSolve">TaoSolve</a>(tao);
+<a name="line321">321: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/TaoDestroy.html#TaoDestroy">TaoDestroy</a>(&amp;tao);
+<a name="line322">322: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;lambda[0]);
+<a name="line323">323: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;P);
+<a name="line324">324: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/Profiling/PetscLogStagePop.html#PetscLogStagePop">PetscLogStagePop</a>();
+<a name="line325">325: </a>  }
+
+<a name="line327">327: </a>  <font color="#B22222">/* Free work space.  All PETSc objects should be destroyed when they</font>
+<a name="line328">328: </a><font color="#B22222">     are no longer needed. */</font>
+<a name="line329">329: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;appctx.U);
+<a name="line330">330: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSDestroy.html#TSDestroy">TSDestroy</a>(&amp;appctx.ts);
+<a name="line331">331: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(&amp;da);
+<a name="line332">332: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>();
+<a name="line333">333: </a>  <font color="#4169E1">return</font> ierr;
+<a name="line334">334: </a>}
+
+<a name="line336">336: </a><font color="#B22222">/* ------------------------ <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a> callbacks ---------------------------- */</font>
+
+<a name="line338">338: </a><font color="#B22222">/*</font>
+<a name="line339">339: </a><font color="#B22222">   RHSFunction - Evaluates nonlinear function, F(x).</font>
+
+<a name="line341">341: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line342">342: </a><font color="#B22222">.  ts - the <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a> context</font>
+<a name="line343">343: </a><font color="#B22222">.  X - input vector</font>
+<a name="line344">344: </a><font color="#B22222">.  ptr - optional user-defined context, as set by <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetRHSFunction.html#TSSetRHSFunction">TSSetRHSFunction</a>()</font>
+
+<a name="line346">346: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line347">347: </a><font color="#B22222">.  F - function vector</font>
+<a name="line348">348: </a><font color="#B22222"> */</font>
+<a name="line349">349: </a><strong><font color="#4169E1"><a name="RHSFunction"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> RHSFunction(<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> ftime,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F,void *ptr)</font></strong>
+<a name="line350">350: </a>{
+<a name="line351">351: </a>  AppCtx         *appctx = (AppCtx*)ptr;
+<a name="line352">352: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a>             da;
+<a name="line354">354: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,Mx,My,xs,ys,xm,ym;
+<a name="line355">355: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      hx,hy,sx,sy;
+<a name="line356">356: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    uc,uxx,uyy,vc,vxx,vyy;
+<a name="line357">357: </a>  Field          **u,**f;
+<a name="line358">358: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            localU;
+
+<a name="line361">361: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSGetDM.html#TSGetDM">TSGetDM</a>(ts,&amp;da);
+<a name="line362">362: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGetLocalVector.html#DMGetLocalVector">DMGetLocalVector</a>(da,&amp;localU);
+<a name="line363">363: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetInfo.html#DMDAGetInfo">DMDAGetInfo</a>(da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,&amp;Mx,&amp;My,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>);
+<a name="line364">364: </a>  hx = 2.50/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)Mx; sx = 1.0/(hx*hx);
+<a name="line365">365: </a>  hy = 2.50/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)My; sy = 1.0/(hy*hy);
+
+<a name="line367">367: </a>  <font color="#B22222">/* Scatter ghost points to local vector,using the 2-step process</font>
+<a name="line368">368: </a><font color="#B22222">     <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(),<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>().</font>
+<a name="line369">369: </a><font color="#B22222">     By placing code between these two statements, computations can be</font>
+<a name="line370">370: </a><font color="#B22222">     done while messages are in transition. */</font>
+<a name="line371">371: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(da,U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,localU);
+<a name="line372">372: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>(da,U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,localU);
+
+<a name="line374">374: </a>  <font color="#B22222">/* Get pointers to vector data */</font>
+<a name="line375">375: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArrayRead.html#DMDAVecGetArrayRead">DMDAVecGetArrayRead</a>(da,localU,&amp;u);
+<a name="line376">376: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArray.html#DMDAVecGetArray">DMDAVecGetArray</a>(da,F,&amp;f);
+
+<a name="line378">378: </a>  <font color="#B22222">/* Get local grid boundaries */</font>
+<a name="line379">379: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetCorners.html#DMDAGetCorners">DMDAGetCorners</a>(da,&amp;xs,&amp;ys,NULL,&amp;xm,&amp;ym,NULL);
+
+<a name="line381">381: </a>  <font color="#B22222">/* Compute function over the locally owned part of the grid */</font>
+<a name="line382">382: </a>  <font color="#4169E1">for</font> (j=ys; j&lt;ys+ym; j++) {
+<a name="line383">383: </a>    <font color="#4169E1">for</font> (i=xs; i&lt;xs+xm; i++) {
+<a name="line384">384: </a>      uc        = u[j][i].u;
+<a name="line385">385: </a>      uxx       = (-2.0*uc + u[j][i-1].u + u[j][i+1].u)*sx;
+<a name="line386">386: </a>      uyy       = (-2.0*uc + u[j-1][i].u + u[j+1][i].u)*sy;
+<a name="line387">387: </a>      vc        = u[j][i].v;
+<a name="line388">388: </a>      vxx       = (-2.0*vc + u[j][i-1].v + u[j][i+1].v)*sx;
+<a name="line389">389: </a>      vyy       = (-2.0*vc + u[j-1][i].v + u[j+1][i].v)*sy;
+<a name="line390">390: </a>      f[j][i].u = appctx-&gt;D1*(uxx + uyy) - uc*vc*vc + appctx-&gt;gamma*(1.0 - uc);
+<a name="line391">391: </a>      f[j][i].v = appctx-&gt;D2*(vxx + vyy) + uc*vc*vc - (appctx-&gt;gamma + appctx-&gt;kappa)*vc;
+<a name="line392">392: </a>    }
+<a name="line393">393: </a>  }
+<a name="line394">394: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(16*xm*ym);
+
+<a name="line396">396: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArrayRead.html#DMDAVecRestoreArrayRead">DMDAVecRestoreArrayRead</a>(da,localU,&amp;u);
+<a name="line397">397: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArray.html#DMDAVecRestoreArray">DMDAVecRestoreArray</a>(da,F,&amp;f);
+<a name="line398">398: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMRestoreLocalVector.html#DMRestoreLocalVector">DMRestoreLocalVector</a>(da,&amp;localU);
+<a name="line399">399: </a>  <font color="#4169E1">return</font>(0);
+<a name="line400">400: </a>}
+
+<a name="line402">402: </a><strong><font color="#4169E1"><a name="RHSJacobian"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> RHSJacobian(<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> BB,void *ctx)</font></strong>
+<a name="line403">403: </a>{
+<a name="line404">404: </a>  AppCtx         *appctx = (AppCtx*)ctx;     <font color="#B22222">/* user-defined application context */</font>
+<a name="line405">405: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a>             da;
+<a name="line407">407: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,Mx,My,xs,ys,xm,ym;
+<a name="line408">408: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      hx,hy,sx,sy;
+<a name="line409">409: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    uc,vc;
+<a name="line410">410: </a>  Field          **u;
+<a name="line411">411: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            localU;
+<a name="line412">412: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatStencil.html#MatStencil">MatStencil</a>     stencil[6],rowstencil;
+<a name="line413">413: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    entries[6];
+
+<a name="line416">416: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSGetDM.html#TSGetDM">TSGetDM</a>(ts,&amp;da);
+<a name="line417">417: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGetLocalVector.html#DMGetLocalVector">DMGetLocalVector</a>(da,&amp;localU);
+<a name="line418">418: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetInfo.html#DMDAGetInfo">DMDAGetInfo</a>(da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,&amp;Mx,&amp;My,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>);
+
+<a name="line420">420: </a>  hx = 2.50/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)Mx; sx = 1.0/(hx*hx);
+<a name="line421">421: </a>  hy = 2.50/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)My; sy = 1.0/(hy*hy);
+
+<a name="line423">423: </a>  <font color="#B22222">/* Scatter ghost points to local vector,using the 2-step process</font>
+<a name="line424">424: </a><font color="#B22222">     <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(),<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>().</font>
+<a name="line425">425: </a><font color="#B22222">     By placing code between these two statements, computations can be</font>
+<a name="line426">426: </a><font color="#B22222">     done while messages are in transition. */</font>
+<a name="line427">427: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(da,U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,localU);
+<a name="line428">428: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>(da,U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,localU);
+
+<a name="line430">430: </a>  <font color="#B22222">/* Get pointers to vector data */</font>
+<a name="line431">431: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArrayRead.html#DMDAVecGetArrayRead">DMDAVecGetArrayRead</a>(da,localU,&amp;u);
+
+<a name="line433">433: </a>  <font color="#B22222">/* Get local grid boundaries */</font>
+<a name="line434">434: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetCorners.html#DMDAGetCorners">DMDAGetCorners</a>(da,&amp;xs,&amp;ys,NULL,&amp;xm,&amp;ym,NULL);
+
+<a name="line436">436: </a>  stencil[0].k = 0;
+<a name="line437">437: </a>  stencil[1].k = 0;
+<a name="line438">438: </a>  stencil[2].k = 0;
+<a name="line439">439: </a>  stencil[3].k = 0;
+<a name="line440">440: </a>  stencil[4].k = 0;
+<a name="line441">441: </a>  stencil[5].k = 0;
+<a name="line442">442: </a>  rowstencil.k = 0;
+
+<a name="line444">444: </a>  <font color="#B22222">/* Compute function over the locally owned part of the grid */</font>
+<a name="line445">445: </a>  <font color="#4169E1">for</font> (j=ys; j&lt;ys+ym; j++) {
+<a name="line446">446: </a>    stencil[0].j = j-1;
+<a name="line447">447: </a>    stencil[1].j = j+1;
+<a name="line448">448: </a>    stencil[2].j = j;
+<a name="line449">449: </a>    stencil[3].j = j;
+<a name="line450">450: </a>    stencil[4].j = j;
+<a name="line451">451: </a>    stencil[5].j = j;
+<a name="line452">452: </a>    rowstencil.k = 0; rowstencil.j = j;
+<a name="line453">453: </a>    <font color="#4169E1">for</font> (i=xs; i&lt;xs+xm; i++) {
+<a name="line454">454: </a>      uc = u[j][i].u;
+<a name="line455">455: </a>      vc = u[j][i].v;
+
+<a name="line457">457: </a>      <font color="#B22222">/* uxx       = (-2.0*uc + u[j][i-1].u + u[j][i+1].u)*sx;</font>
+<a name="line458">458: </a><font color="#B22222">         uyy       = (-2.0*uc + u[j-1][i].u + u[j+1][i].u)*sy;</font>
+<a name="line459">459: </a><font color="#B22222">         vxx       = (-2.0*vc + u[j][i-1].v + u[j][i+1].v)*sx;</font>
+<a name="line460">460: </a><font color="#B22222">         vyy       = (-2.0*vc + u[j-1][i].v + u[j+1][i].v)*sy;</font>
+<a name="line461">461: </a><font color="#B22222">         f[j][i].u = appctx-&gt;D1*(uxx + uyy) - uc*vc*vc + appctx-&gt;gamma*(1.0 - uc);*/</font>
+
+<a name="line463">463: </a>      stencil[0].i = i; stencil[0].c = 0; entries[0] = appctx-&gt;D1*sy;
+<a name="line464">464: </a>      stencil[1].i = i; stencil[1].c = 0; entries[1] = appctx-&gt;D1*sy;
+<a name="line465">465: </a>      stencil[2].i = i-1; stencil[2].c = 0; entries[2] = appctx-&gt;D1*sx;
+<a name="line466">466: </a>      stencil[3].i = i+1; stencil[3].c = 0; entries[3] = appctx-&gt;D1*sx;
+<a name="line467">467: </a>      stencil[4].i = i; stencil[4].c = 0; entries[4] = -2.0*appctx-&gt;D1*(sx + sy) - vc*vc - appctx-&gt;gamma;
+<a name="line468">468: </a>      stencil[5].i = i; stencil[5].c = 1; entries[5] = -2.0*uc*vc;
+<a name="line469">469: </a>      rowstencil.i = i; rowstencil.c = 0;
+
+<a name="line471">471: </a>      <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatSetValuesStencil.html#MatSetValuesStencil">MatSetValuesStencil</a>(A,1,&amp;rowstencil,6,stencil,entries,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line472">472: </a>      stencil[0].c = 1; entries[0] = appctx-&gt;D2*sy;
+<a name="line473">473: </a>      stencil[1].c = 1; entries[1] = appctx-&gt;D2*sy;
+<a name="line474">474: </a>      stencil[2].c = 1; entries[2] = appctx-&gt;D2*sx;
+<a name="line475">475: </a>      stencil[3].c = 1; entries[3] = appctx-&gt;D2*sx;
+<a name="line476">476: </a>      stencil[4].c = 1; entries[4] = -2.0*appctx-&gt;D2*(sx + sy) + 2.0*uc*vc - appctx-&gt;gamma - appctx-&gt;kappa;
+<a name="line477">477: </a>      stencil[5].c = 0; entries[5] = vc*vc;
+<a name="line478">478: </a>      rowstencil.c = 1;
+
+<a name="line480">480: </a>      <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatSetValuesStencil.html#MatSetValuesStencil">MatSetValuesStencil</a>(A,1,&amp;rowstencil,6,stencil,entries,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line481">481: </a>      <font color="#B22222">/* f[j][i].v = appctx-&gt;D2*(vxx + vyy) + uc*vc*vc - (appctx-&gt;gamma + appctx-&gt;kappa)*vc; */</font>
+<a name="line482">482: </a>    }
+<a name="line483">483: </a>  }
+<a name="line484">484: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(19*xm*ym);
+
+<a name="line486">486: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArrayRead.html#DMDAVecRestoreArrayRead">DMDAVecRestoreArrayRead</a>(da,localU,&amp;u);
+<a name="line487">487: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMRestoreLocalVector.html#DMRestoreLocalVector">DMRestoreLocalVector</a>(da,&amp;localU);
+<a name="line488">488: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(A,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line489">489: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(A,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line490">490: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatSetOption.html#MatSetOption">MatSetOption</a>(A,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatOption.html#MatOption">MAT_NEW_NONZERO_LOCATION_ERR</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line491">491: </a>  <font color="#4169E1">return</font>(0);
+<a name="line492">492: </a>}
+
+<a name="line494">494: </a><font color="#B22222">/*</font>
+<a name="line495">495: </a><font color="#B22222">   IFunction - Evaluates implicit nonlinear function, xdot - F(x).</font>
+
+<a name="line497">497: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line498">498: </a><font color="#B22222">.  ts - the <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a> context</font>
+<a name="line499">499: </a><font color="#B22222">.  U - input vector</font>
+<a name="line500">500: </a><font color="#B22222">.  Udot - input vector</font>
+<a name="line501">501: </a><font color="#B22222">.  ptr - optional user-defined context, as set by <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetRHSFunction.html#TSSetRHSFunction">TSSetRHSFunction</a>()</font>
+
+<a name="line503">503: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line504">504: </a><font color="#B22222">.  F - function vector</font>
+<a name="line505">505: </a><font color="#B22222"> */</font>
+<a name="line506">506: </a><strong><font color="#4169E1"><a name="IFunction"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IFunction(<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> ftime,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> Udot,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F,void *ptr)</font></strong>
+<a name="line507">507: </a>{
+<a name="line508">508: </a>  AppCtx         *appctx = (AppCtx*)ptr;
+<a name="line509">509: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a>             da;
+<a name="line511">511: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,Mx,My,xs,ys,xm,ym;
+<a name="line512">512: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      hx,hy,sx,sy;
+<a name="line513">513: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    uc,uxx,uyy,vc,vxx,vyy;
+<a name="line514">514: </a>  Field          **u,**f,**udot;
+<a name="line515">515: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            localU;
+
+<a name="line518">518: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSGetDM.html#TSGetDM">TSGetDM</a>(ts,&amp;da);
+<a name="line519">519: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGetLocalVector.html#DMGetLocalVector">DMGetLocalVector</a>(da,&amp;localU);
+<a name="line520">520: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetInfo.html#DMDAGetInfo">DMDAGetInfo</a>(da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,&amp;Mx,&amp;My,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>);
+<a name="line521">521: </a>  hx = 2.50/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)Mx; sx = 1.0/(hx*hx);
+<a name="line522">522: </a>  hy = 2.50/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)My; sy = 1.0/(hy*hy);
+
+<a name="line524">524: </a>  <font color="#B22222">/* Scatter ghost points to local vector,using the 2-step process</font>
+<a name="line525">525: </a><font color="#B22222">     <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(),<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>().</font>
+<a name="line526">526: </a><font color="#B22222">     By placing code between these two statements, computations can be</font>
+<a name="line527">527: </a><font color="#B22222">     done while messages are in transition. */</font>
+<a name="line528">528: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(da,U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,localU);
+<a name="line529">529: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>(da,U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,localU);
+
+<a name="line531">531: </a>  <font color="#B22222">/* Get pointers to vector data */</font>
+<a name="line532">532: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArrayRead.html#DMDAVecGetArrayRead">DMDAVecGetArrayRead</a>(da,localU,&amp;u);
+<a name="line533">533: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArray.html#DMDAVecGetArray">DMDAVecGetArray</a>(da,F,&amp;f);
+<a name="line534">534: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArrayRead.html#DMDAVecGetArrayRead">DMDAVecGetArrayRead</a>(da,Udot,&amp;udot);
+
+<a name="line536">536: </a>  <font color="#B22222">/* Get local grid boundaries */</font>
+<a name="line537">537: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetCorners.html#DMDAGetCorners">DMDAGetCorners</a>(da,&amp;xs,&amp;ys,NULL,&amp;xm,&amp;ym,NULL);
+
+<a name="line539">539: </a>  <font color="#B22222">/* Compute function over the locally owned part of the grid */</font>
+<a name="line540">540: </a>  <font color="#4169E1">for</font> (j=ys; j&lt;ys+ym; j++) {
+<a name="line541">541: </a>    <font color="#4169E1">for</font> (i=xs; i&lt;xs+xm; i++) {
+<a name="line542">542: </a>      uc        = u[j][i].u;
+<a name="line543">543: </a>      uxx       = (-2.0*uc + u[j][i-1].u + u[j][i+1].u)*sx;
+<a name="line544">544: </a>      uyy       = (-2.0*uc + u[j-1][i].u + u[j+1][i].u)*sy;
+<a name="line545">545: </a>      vc        = u[j][i].v;
+<a name="line546">546: </a>      vxx       = (-2.0*vc + u[j][i-1].v + u[j][i+1].v)*sx;
+<a name="line547">547: </a>      vyy       = (-2.0*vc + u[j-1][i].v + u[j+1][i].v)*sy;
+<a name="line548">548: </a>      f[j][i].u = udot[j][i].u - ( appctx-&gt;D1*(uxx + uyy) - uc*vc*vc + appctx-&gt;gamma*(1.0 - uc) );
+<a name="line549">549: </a>      f[j][i].v = udot[j][i].v - ( appctx-&gt;D2*(vxx + vyy) + uc*vc*vc - (appctx-&gt;gamma + appctx-&gt;kappa)*vc );
+<a name="line550">550: </a>    }
+<a name="line551">551: </a>  }
+<a name="line552">552: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(16*xm*ym);
+
+<a name="line554">554: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArrayRead.html#DMDAVecRestoreArrayRead">DMDAVecRestoreArrayRead</a>(da,localU,&amp;u);
+<a name="line555">555: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArray.html#DMDAVecRestoreArray">DMDAVecRestoreArray</a>(da,F,&amp;f);
+<a name="line556">556: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArrayRead.html#DMDAVecRestoreArrayRead">DMDAVecRestoreArrayRead</a>(da,Udot,&amp;udot);
+<a name="line557">557: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMRestoreLocalVector.html#DMRestoreLocalVector">DMRestoreLocalVector</a>(da,&amp;localU);
+<a name="line558">558: </a>  <font color="#4169E1">return</font>(0);
+<a name="line559">559: </a>}
+
+<a name="line561">561: </a><strong><font color="#4169E1"><a name="IJacobian"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IJacobian(<a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> Udot,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> a,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> BB,void *ctx)</font></strong>
+<a name="line562">562: </a>{
+<a name="line563">563: </a>  AppCtx         *appctx = (AppCtx*)ctx;     <font color="#B22222">/* user-defined application context */</font>
+<a name="line564">564: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a>             da;
+<a name="line566">566: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,Mx,My,xs,ys,xm,ym;
+<a name="line567">567: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      hx,hy,sx,sy;
+<a name="line568">568: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    uc,vc;
+<a name="line569">569: </a>  Field          **u;
+<a name="line570">570: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            localU;
+<a name="line571">571: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatStencil.html#MatStencil">MatStencil</a>     stencil[6],rowstencil;
+<a name="line572">572: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    entries[6];
+
+<a name="line575">575: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSGetDM.html#TSGetDM">TSGetDM</a>(ts,&amp;da);
+<a name="line576">576: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGetLocalVector.html#DMGetLocalVector">DMGetLocalVector</a>(da,&amp;localU);
+<a name="line577">577: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetInfo.html#DMDAGetInfo">DMDAGetInfo</a>(da,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,&amp;Mx,&amp;My,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>);
+
+<a name="line579">579: </a>  hx = 2.50/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)Mx; sx = 1.0/(hx*hx);
+<a name="line580">580: </a>  hy = 2.50/(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)My; sy = 1.0/(hy*hy);
+
+<a name="line582">582: </a>  <font color="#B22222">/* Scatter ghost points to local vector,using the 2-step process</font>
+<a name="line583">583: </a><font color="#B22222">     <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(),<a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>().</font>
+<a name="line584">584: </a><font color="#B22222">     By placing code between these two statements, computations can be</font>
+<a name="line585">585: </a><font color="#B22222">     done while messages are in transition.*/</font>
+<a name="line586">586: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(da,U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,localU);
+<a name="line587">587: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>(da,U,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,localU);
+
+<a name="line589">589: </a>  <font color="#B22222">/* Get pointers to vector data */</font>
+<a name="line590">590: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecGetArrayRead.html#DMDAVecGetArrayRead">DMDAVecGetArrayRead</a>(da,localU,&amp;u);
+
+<a name="line592">592: </a>  <font color="#B22222">/* Get local grid boundaries */</font>
+<a name="line593">593: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAGetCorners.html#DMDAGetCorners">DMDAGetCorners</a>(da,&amp;xs,&amp;ys,NULL,&amp;xm,&amp;ym,NULL);
+
+<a name="line595">595: </a>  stencil[0].k = 0;
+<a name="line596">596: </a>  stencil[1].k = 0;
+<a name="line597">597: </a>  stencil[2].k = 0;
+<a name="line598">598: </a>  stencil[3].k = 0;
+<a name="line599">599: </a>  stencil[4].k = 0;
+<a name="line600">600: </a>  stencil[5].k = 0;
+<a name="line601">601: </a>  rowstencil.k = 0;
+
+<a name="line603">603: </a>  <font color="#B22222">/* Compute function over the locally owned part of the grid */</font>
+<a name="line604">604: </a>  <font color="#4169E1">for</font> (j=ys; j&lt;ys+ym; j++) {
+<a name="line605">605: </a>    stencil[0].j = j-1;
+<a name="line606">606: </a>    stencil[1].j = j+1;
+<a name="line607">607: </a>    stencil[2].j = j;
+<a name="line608">608: </a>    stencil[3].j = j;
+<a name="line609">609: </a>    stencil[4].j = j;
+<a name="line610">610: </a>    stencil[5].j = j;
+<a name="line611">611: </a>    rowstencil.k = 0; rowstencil.j = j;
+<a name="line612">612: </a>    <font color="#4169E1">for</font> (i=xs; i&lt;xs+xm; i++) {
+<a name="line613">613: </a>      uc = u[j][i].u;
+<a name="line614">614: </a>      vc = u[j][i].v;
+
+<a name="line616">616: </a>      <font color="#B22222">/* uxx       = (-2.0*uc + u[j][i-1].u + u[j][i+1].u)*sx;</font>
+<a name="line617">617: </a><font color="#B22222">         uyy       = (-2.0*uc + u[j-1][i].u + u[j+1][i].u)*sy;</font>
+<a name="line618">618: </a><font color="#B22222">         vxx       = (-2.0*vc + u[j][i-1].v + u[j][i+1].v)*sx;</font>
+<a name="line619">619: </a><font color="#B22222">         vyy       = (-2.0*vc + u[j-1][i].v + u[j+1][i].v)*sy;</font>
+<a name="line620">620: </a><font color="#B22222">         f[j][i].u = appctx-&gt;D1*(uxx + uyy) - uc*vc*vc + appctx-&gt;gamma*(1.0 - uc); */</font>
+<a name="line621">621: </a>      stencil[0].i = i; stencil[0].c = 0; entries[0] = -appctx-&gt;D1*sy;
+<a name="line622">622: </a>      stencil[1].i = i; stencil[1].c = 0; entries[1] = -appctx-&gt;D1*sy;
+<a name="line623">623: </a>      stencil[2].i = i-1; stencil[2].c = 0; entries[2] = -appctx-&gt;D1*sx;
+<a name="line624">624: </a>      stencil[3].i = i+1; stencil[3].c = 0; entries[3] = -appctx-&gt;D1*sx;
+<a name="line625">625: </a>      stencil[4].i = i; stencil[4].c = 0; entries[4] = 2.0*appctx-&gt;D1*(sx + sy) + vc*vc + appctx-&gt;gamma + a;
+<a name="line626">626: </a>      stencil[5].i = i; stencil[5].c = 1; entries[5] = 2.0*uc*vc;
+<a name="line627">627: </a>      rowstencil.i = i; rowstencil.c = 0;
+
+<a name="line629">629: </a>      <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatSetValuesStencil.html#MatSetValuesStencil">MatSetValuesStencil</a>(A,1,&amp;rowstencil,6,stencil,entries,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line630">630: </a>      stencil[0].c = 1; entries[0] = -appctx-&gt;D2*sy;
+<a name="line631">631: </a>      stencil[1].c = 1; entries[1] = -appctx-&gt;D2*sy;
+<a name="line632">632: </a>      stencil[2].c = 1; entries[2] = -appctx-&gt;D2*sx;
+<a name="line633">633: </a>      stencil[3].c = 1; entries[3] = -appctx-&gt;D2*sx;
+<a name="line634">634: </a>      stencil[4].c = 1; entries[4] = 2.0*appctx-&gt;D2*(sx + sy) - 2.0*uc*vc + appctx-&gt;gamma + appctx-&gt;kappa + a;
+<a name="line635">635: </a>      stencil[5].c = 0; entries[5] = -vc*vc;
+<a name="line636">636: </a>      rowstencil.c = 1;
+
+<a name="line638">638: </a>      <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatSetValuesStencil.html#MatSetValuesStencil">MatSetValuesStencil</a>(A,1,&amp;rowstencil,6,stencil,entries,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line639">639: </a>      <font color="#B22222">/* f[j][i].v = appctx-&gt;D2*(vxx + vyy) + uc*vc*vc - (appctx-&gt;gamma + appctx-&gt;kappa)*vc; */</font>
+<a name="line640">640: </a>    }
+<a name="line641">641: </a>  }
+<a name="line642">642: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(19*xm*ym);
+
+<a name="line644">644: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DMDA/DMDAVecRestoreArrayRead.html#DMDAVecRestoreArrayRead">DMDAVecRestoreArrayRead</a>(da,localU,&amp;u);
+<a name="line645">645: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DMRestoreLocalVector.html#DMRestoreLocalVector">DMRestoreLocalVector</a>(da,&amp;localU);
+<a name="line646">646: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(A,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line647">647: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(A,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line648">648: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatSetOption.html#MatSetOption">MatSetOption</a>(A,<a href="../../../..-diffusion-reaction/../docs/manualpages/Mat/MatOption.html#MatOption">MAT_NEW_NONZERO_LOCATION_ERR</a>,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line649">649: </a>  <font color="#4169E1">return</font>(0);
+<a name="line650">650: </a>}
+
+<a name="line652">652: </a><font color="#B22222">/* ------------------------ TAO callbacks ---------------------------- */</font>
+
+<a name="line654">654: </a><font color="#B22222">/*</font>
+<a name="line655">655: </a><font color="#B22222">   FormFunctionAndGradient - Evaluates the function and corresponding gradient.</font>
+
+<a name="line657">657: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line658">658: </a><font color="#B22222">   tao - the <a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/Tao.html#Tao">Tao</a> context</font>
+<a name="line659">659: </a><font color="#B22222">   P   - the input vector</font>
+<a name="line660">660: </a><font color="#B22222">   ctx - optional user-defined context, as set by <a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/TaoSetObjectiveAndGradientRoutine.html#TaoSetObjectiveAndGradientRoutine">TaoSetObjectiveAndGradientRoutine</a>()</font>
+
+<a name="line662">662: </a><font color="#B22222">   Output Parameters:</font>
+<a name="line663">663: </a><font color="#B22222">   f   - the newly evaluated function</font>
+<a name="line664">664: </a><font color="#B22222">   G   - the newly evaluated gradient</font>
+<a name="line665">665: </a><font color="#B22222">*/</font>
+<a name="line666">666: </a><strong><font color="#4169E1"><a name="FormFunctionAndGradient"></a><a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> FormFunctionAndGradient(<a href="../../../..-diffusion-reaction/../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> P,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *f,<a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> G,void *ctx)</font></strong>
+<a name="line667">667: </a>{
+<a name="line668">668: </a>  AppCtx         *appctx = (AppCtx*)ctx;
+<a name="line669">669: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      soberr,timestep;
+<a name="line670">670: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            *lambda;
+<a name="line671">671: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            SDiff;
+<a name="line672">672: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/DM/DM.html#DM">DM</a>             da;
+<a name="line673">673: </a>  char           filename[PETSC_MAX_PATH_LEN]=<font color="#666666">""</font>;
+<a name="line674">674: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>    viewer;
+
+<a name="line678">678: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetTime.html#TSSetTime">TSSetTime</a>(appctx-&gt;ts,0.0);
+<a name="line679">679: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSGetTimeStep.html#TSGetTimeStep">TSGetTimeStep</a>(appctx-&gt;ts,&amp;timestep);
+<a name="line680">680: </a>  <font color="#4169E1">if</font> (timestep&lt;0) {
+<a name="line681">681: </a>    <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetTimeStep.html#TSSetTimeStep">TSSetTimeStep</a>(appctx-&gt;ts,-timestep);
+<a name="line682">682: </a>  }
+<a name="line683">683: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetStepNumber.html#TSSetStepNumber">TSSetStepNumber</a>(appctx-&gt;ts,0);
+<a name="line684">684: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSetFromOptions.html#TSSetFromOptions">TSSetFromOptions</a>(appctx-&gt;ts);
+
+<a name="line686">686: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(P,&amp;SDiff);
+<a name="line687">687: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(P,appctx-&gt;U);
+<a name="line688">688: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSGetDM.html#TSGetDM">TSGetDM</a>(appctx-&gt;ts,&amp;da);
+<a name="line689">689: </a>  *f = 0;
+
+<a name="line691">691: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/TS/TSSolve.html#TSSolve">TSSolve</a>(appctx-&gt;ts,appctx-&gt;U);
+<a name="line692">692: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscSNPrintf.html#PetscSNPrintf">PetscSNPrintf</a>(filename,<font color="#4169E1">sizeof</font> filename,<font color="#666666">"ex5opt.ob"</font>);
+<a name="line693">693: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,filename,<a href="../../../..-diffusion-reaction/../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">FILE_MODE_READ</a>,&amp;viewer);
+<a name="line694">694: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(SDiff,viewer);
+<a name="line695">695: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(&amp;viewer);
+<a name="line696">696: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(SDiff,-1.,appctx-&gt;U);
+<a name="line697">697: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(SDiff,SDiff,&amp;soberr);
+<a name="line698">698: </a>  *f += soberr;
+
+<a name="line700">700: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sensitivity/TSGetCostGradients.html#TSGetCostGradients">TSGetCostGradients</a>(appctx-&gt;ts,NULL,&amp;lambda,NULL);
+<a name="line701">701: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(lambda[0],0.0);
+<a name="line702">702: </a>  InitializeLambda(da,lambda[0],appctx-&gt;U,appctx);
+<a name="line703">703: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Sensitivity/TSAdjointSolve.html#TSAdjointSolve">TSAdjointSolve</a>(appctx-&gt;ts);
+
+<a name="line705">705: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(lambda[0],G);
+
+<a name="line707">707: </a>  <a href="../../../..-diffusion-reaction/../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;SDiff);
+<a name="line708">708: </a>  <font color="#4169E1">return</font>(0);
+<a name="line709">709: </a>}
+
+<a name="line711">711: </a><font color="#B22222">/*TEST</font>
+
+<a name="line713">713: </a><font color="#B22222">   build:</font>
+<a name="line714">714: </a><font color="#B22222">      requires: !complex !single</font>
+
+<a name="line716">716: </a><font color="#B22222">   test:</font>
+<a name="line717">717: </a><font color="#B22222">      args: -ts_max_steps 5 -ts_type rk -ts_rk_type 3 -ts_trajectory_type memory -tao_monitor -tao_view -tao_gatol 1e-6</font>
+<a name="line718">718: </a><font color="#B22222">      output_file: output/ex5opt_ic_1.out</font>
+
+<a name="line720">720: </a><font color="#B22222">TEST*/</font>
+</pre>
+</body>
+
+</html>

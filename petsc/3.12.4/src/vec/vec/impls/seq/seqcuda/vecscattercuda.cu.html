@@ -1,0 +1,306 @@
+<center><a href="vecscattercuda.cu">Actual source code: vecscattercuda.cu</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/vec/vec/impls/seq/seqcuda/vecscattercuda.cu.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:35:42+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/vec/vec/impls/seq/seqcuda/vecscattercuda.cu.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><font color="#B22222">/*</font>
+<a name="line2">  2: </a><font color="#B22222">   Implements the various scatter operations on cuda vectors</font>
+<a name="line3">  3: </a><font color="#B22222">*/</font>
+
+<a name="line5">  5: </a><strong><font color="#228B22">#define PETSC_SKIP_SPINLOCK</font></strong>
+<a name="line6">  6: </a><strong><font color="#228B22">#define PETSC_SKIP_CXX_COMPLEX_FIX</font></strong>
+
+<a name="line8">  8: </a><font color="#A020F0">#include &lt;petscconf.h&gt;</font>
+<a name="line9">  9: </a> #include <A href="../../../../../../include/petsc/private/vecimpl.h.html">&lt;petsc/private/vecimpl.h&gt;</A>
+<a name="line10"> 10: </a> #include <A href="../../../../../../include/../src/vec/vec/impls/dvecimpl.h.html">&lt;../src/vec/vec/impls/dvecimpl.h&gt;</A>
+<a name="line11"> 11: </a> #include <A href="../../../../../../include/../src/vec/vec/impls/seq/seqcuda/cudavecimpl.h.html">&lt;../src/vec/vec/impls/seq/seqcuda/cudavecimpl.h&gt;</A>
+
+<a name="line13"> 13: </a><font color="#A020F0">#include &lt;cuda_runtime.h&gt;</font>
+
+<a name="line15"> 15: </a><strong><font color="#4169E1"><a name="VecScatterCUDAIndicesCreate_StoS"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterCUDAIndicesCreate_StoS(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> toFirst,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> fromFirst,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> toStep, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> fromStep,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *tslots, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *fslots,PetscCUDAIndices *ci)</font></strong> {
+
+<a name="line17"> 17: </a>  PetscCUDAIndices           cci;
+<a name="line18"> 18: </a>  VecScatterCUDAIndices_StoS stos_scatter;
+<a name="line19"> 19: </a>  cudaError_t                err;
+<a name="line20"> 20: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>                   *intVecGPU;
+<a name="line21"> 21: </a>  int                        device;
+<a name="line22"> 22: </a>  cudaDeviceProp             props;
+<a name="line23"> 23: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>             ierr;
+
+<a name="line26"> 26: </a>  cci = new <font color="#4169E1">struct _p_PetscCUDAIndices</font>;
+<a name="line27"> 27: </a>  stos_scatter = new <font color="#4169E1">struct _p_VecScatterCUDAIndices_StoS</font>;
+
+<a name="line29"> 29: </a>  <font color="#B22222">/* create the "from" indices */</font>
+<a name="line30"> 30: </a>  stos_scatter-&gt;fslots = 0;
+<a name="line31"> 31: </a>  stos_scatter-&gt;fromFirst = 0;
+<a name="line32"> 32: </a>  stos_scatter-&gt;fromStep = 0;
+<a name="line33"> 33: </a>  <font color="#4169E1">if</font> (n) {
+<a name="line34"> 34: </a>    <font color="#4169E1">if</font> (fslots) {
+<a name="line35"> 35: </a>      <font color="#B22222">/* allocate GPU memory for the to-slots */</font>
+<a name="line36"> 36: </a>      err = cudaMalloc((void **)&amp;intVecGPU,n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>));CHKERRCUDA(err);
+<a name="line37"> 37: </a>      err = cudaMemcpy(intVecGPU,fslots,n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>),cudaMemcpyHostToDevice);CHKERRCUDA(err);
+<a name="line38"> 38: </a>      PetscLogCpuToGpu(n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>));
+
+<a name="line40"> 40: </a>      <font color="#B22222">/* assign the pointer to the struct */</font>
+<a name="line41"> 41: </a>      stos_scatter-&gt;fslots = intVecGPU;
+<a name="line42"> 42: </a>      stos_scatter-&gt;fromMode = VEC_SCATTER_CUDA_GENERAL;
+<a name="line43"> 43: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (fromStep) {
+<a name="line44"> 44: </a>      stos_scatter-&gt;fromFirst = fromFirst;
+<a name="line45"> 45: </a>      stos_scatter-&gt;fromStep = fromStep;
+<a name="line46"> 46: </a>      stos_scatter-&gt;fromMode = VEC_SCATTER_CUDA_STRIDED;
+<a name="line47"> 47: </a>    } <font color="#4169E1">else</font> <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Must provide fslots or fromStep."</font>);
+<a name="line48"> 48: </a>  }
+
+<a name="line50"> 50: </a>  <font color="#B22222">/* create the "to" indices */</font>
+<a name="line51"> 51: </a>  stos_scatter-&gt;tslots = 0;
+<a name="line52"> 52: </a>  stos_scatter-&gt;toFirst = 0;
+<a name="line53"> 53: </a>  stos_scatter-&gt;toStep = 0;
+<a name="line54"> 54: </a>  <font color="#4169E1">if</font> (n) {
+<a name="line55"> 55: </a>    <font color="#4169E1">if</font> (tslots) {
+<a name="line56"> 56: </a>      <font color="#B22222">/* allocate GPU memory for the to-slots */</font>
+<a name="line57"> 57: </a>      err = cudaMalloc((void **)&amp;intVecGPU,n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>));CHKERRCUDA(err);
+<a name="line58"> 58: </a>      err = cudaMemcpy(intVecGPU,tslots,n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>),cudaMemcpyHostToDevice);CHKERRCUDA(err);
+<a name="line59"> 59: </a>      PetscLogCpuToGpu(n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>));
+
+<a name="line61"> 61: </a>      <font color="#B22222">/* assign the pointer to the struct */</font>
+<a name="line62"> 62: </a>      stos_scatter-&gt;tslots = intVecGPU;
+<a name="line63"> 63: </a>      stos_scatter-&gt;toMode = VEC_SCATTER_CUDA_GENERAL;
+<a name="line64"> 64: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (toStep) {
+<a name="line65"> 65: </a>      stos_scatter-&gt;toFirst = toFirst;
+<a name="line66"> 66: </a>      stos_scatter-&gt;toStep = toStep;
+<a name="line67"> 67: </a>      stos_scatter-&gt;toMode = VEC_SCATTER_CUDA_STRIDED;
+<a name="line68"> 68: </a>    } <font color="#4169E1">else</font> <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Must provide tslots or toStep."</font>);
+<a name="line69"> 69: </a>  }
+
+<a name="line71"> 71: </a>  <font color="#B22222">/* Scatter uses default stream as well.</font>
+<a name="line72"> 72: </a><font color="#B22222">     Note: Here we have used a separate stream earlier.</font>
+<a name="line73"> 73: </a><font color="#B22222">           However, without proper synchronization with the default stream, one will inevitably run into data races.</font>
+<a name="line74"> 74: </a><font color="#B22222">           Please keep that in mind when trying to reintroduce streams for scatters.</font>
+<a name="line75"> 75: </a><font color="#B22222">           Ultimately, it's better to have correct code/results at 90 percent of peak performance than to have incorrect code/results at 99 percent of peak performance. */</font>
+<a name="line76"> 76: </a>  stos_scatter-&gt;stream = 0;
+
+<a name="line78"> 78: </a>  <font color="#B22222">/* the number of indices */</font>
+<a name="line79"> 79: </a>  stos_scatter-&gt;n = n;
+
+<a name="line81"> 81: </a>  <font color="#B22222">/* get the maximum number of coresident thread blocks */</font>
+<a name="line82"> 82: </a>  cudaGetDevice(&amp;device);
+<a name="line83"> 83: </a>  cudaGetDeviceProperties(&amp;props, device);
+<a name="line84"> 84: </a>  stos_scatter-&gt;MAX_CORESIDENT_THREADS = props.maxThreadsPerMultiProcessor;
+<a name="line85"> 85: </a>  <font color="#4169E1">if</font> (props.major&gt;=3) {
+<a name="line86"> 86: </a>    stos_scatter-&gt;MAX_BLOCKS = 16*props.multiProcessorCount;
+<a name="line87"> 87: </a>  } <font color="#4169E1">else</font> {
+<a name="line88"> 88: </a>    stos_scatter-&gt;MAX_BLOCKS = 8*props.multiProcessorCount;
+<a name="line89"> 89: </a>  }
+
+<a name="line91"> 91: </a>  <font color="#B22222">/* assign the indices */</font>
+<a name="line92"> 92: </a>  cci-&gt;scatter = (VecScatterCUDAIndices_StoS)stos_scatter;
+<a name="line93"> 93: </a>  cci-&gt;scatterType = VEC_SCATTER_CUDA_STOS;
+<a name="line94"> 94: </a>  *ci = cci;
+<a name="line95"> 95: </a>  <font color="#4169E1">return</font>(0);
+<a name="line96"> 96: </a>}
+
+<a name="line98"> 98: </a><strong><font color="#4169E1"><a name="VecScatterCUDAIndicesCreate_PtoP"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterCUDAIndicesCreate_PtoP(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> ns,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *sendIndices,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nr,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *recvIndices,PetscCUDAIndices *ci)</font></strong>
+<a name="line99"> 99: </a>{
+<a name="line100">100: </a>  PetscCUDAIndices           cci;
+<a name="line101">101: </a>  VecScatterCUDAIndices_PtoP ptop_scatter;
+
+<a name="line104">104: </a>  cci = new <font color="#4169E1">struct _p_PetscCUDAIndices</font>;
+<a name="line105">105: </a>  ptop_scatter = new <font color="#4169E1">struct _p_VecScatterCUDAIndices_PtoP</font>;
+
+<a name="line107">107: </a>  <font color="#B22222">/* this calculation assumes that the input indices are sorted */</font>
+<a name="line108">108: </a>  <font color="#4169E1">if</font> (sendIndices) {
+<a name="line109">109: </a>    ptop_scatter-&gt;ns = sendIndices[ns-1]-sendIndices[0]+1;
+<a name="line110">110: </a>    ptop_scatter-&gt;sendLowestIndex = sendIndices[0];
+<a name="line111">111: </a>  } <font color="#4169E1">else</font> {
+<a name="line112">112: </a>    ptop_scatter-&gt;ns = 0;
+<a name="line113">113: </a>    ptop_scatter-&gt;sendLowestIndex = 0;
+<a name="line114">114: </a>  }
+<a name="line115">115: </a>  <font color="#4169E1">if</font> (recvIndices) {
+<a name="line116">116: </a>    ptop_scatter-&gt;nr = recvIndices[nr-1]-recvIndices[0]+1;
+<a name="line117">117: </a>    ptop_scatter-&gt;recvLowestIndex = recvIndices[0];
+<a name="line118">118: </a>  } <font color="#4169E1">else</font> {
+<a name="line119">119: </a>    ptop_scatter-&gt;nr = 0;
+<a name="line120">120: </a>    ptop_scatter-&gt;recvLowestIndex = 0;
+<a name="line121">121: </a>  }
+
+<a name="line123">123: </a>  <font color="#B22222">/* assign indices */</font>
+<a name="line124">124: </a>  cci-&gt;scatter = (VecScatterCUDAIndices_PtoP)ptop_scatter;
+<a name="line125">125: </a>  cci-&gt;scatterType = VEC_SCATTER_CUDA_PTOP;
+
+<a name="line127">127: </a>  *ci = cci;
+<a name="line128">128: </a>  <font color="#4169E1">return</font>(0);
+<a name="line129">129: </a>}
+
+<a name="line131">131: </a><strong><font color="#4169E1"><a name="VecScatterCUDAIndicesDestroy"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterCUDAIndicesDestroy(PetscCUDAIndices *ci)</font></strong>
+<a name="line132">132: </a>{
+<a name="line134">134: </a>  <font color="#4169E1">if</font> (*ci) {
+<a name="line135">135: </a>    <font color="#4169E1">if</font> ((*ci)-&gt;scatterType == VEC_SCATTER_CUDA_PTOP) {
+<a name="line136">136: </a>      delete (VecScatterCUDAIndices_PtoP)(*ci)-&gt;scatter;
+<a name="line137">137: </a>      (*ci)-&gt;scatter = 0;
+<a name="line138">138: </a>    } <font color="#4169E1">else</font> {
+<a name="line139">139: </a>      cudaError_t err;
+<a name="line140">140: </a>      VecScatterCUDAIndices_StoS stos_scatter = (VecScatterCUDAIndices_StoS)(*ci)-&gt;scatter;
+<a name="line141">141: </a>      <font color="#4169E1">if</font> (stos_scatter-&gt;fslots) {
+<a name="line142">142: </a>        err = cudaFree(stos_scatter-&gt;fslots);CHKERRCUDA(err);
+<a name="line143">143: </a>        stos_scatter-&gt;fslots = 0;
+<a name="line144">144: </a>      }
+
+<a name="line146">146: </a>      <font color="#B22222">/* free the GPU memory for the to-slots */</font>
+<a name="line147">147: </a>      <font color="#4169E1">if</font> (stos_scatter-&gt;tslots) {
+<a name="line148">148: </a>        err = cudaFree(stos_scatter-&gt;tslots);CHKERRCUDA(err);
+<a name="line149">149: </a>        stos_scatter-&gt;tslots = 0;
+<a name="line150">150: </a>      }
+
+<a name="line152">152: </a>      <font color="#B22222">/* free the stream variable */</font>
+<a name="line153">153: </a>      <font color="#4169E1">if</font> (stos_scatter-&gt;stream) {
+<a name="line154">154: </a>        err = cudaStreamDestroy(stos_scatter-&gt;stream);CHKERRCUDA(err);
+<a name="line155">155: </a>        stos_scatter-&gt;stream = 0;
+<a name="line156">156: </a>      }
+<a name="line157">157: </a>      delete stos_scatter;
+<a name="line158">158: </a>      (*ci)-&gt;scatter = 0;
+<a name="line159">159: </a>    }
+<a name="line160">160: </a>    delete *ci;
+<a name="line161">161: </a>    *ci = 0;
+<a name="line162">162: </a>  }
+<a name="line163">163: </a>  <font color="#4169E1">return</font>(0);
+<a name="line164">164: </a>}
+
+<a name="line166">166: </a><font color="#B22222">/* Insert operator */</font>
+<a name="line167">167: </a>class Insert {
+<a name="line168">168: </a><strong><font color="#FF0000">  public:</font></strong>
+<a name="line169">169: </a>    __device__ <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> operator() (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> b) const {
+<a name="line170">170: </a>      <font color="#4169E1">return</font> a;
+<a name="line171">171: </a>    }
+<a name="line172">172: </a>};
+
+<a name="line174">174: </a><font color="#B22222">/* Add operator */</font>
+<a name="line175">175: </a>class Add {
+<a name="line176">176: </a><strong><font color="#FF0000">  public:</font></strong>
+<a name="line177">177: </a>    __device__ <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> operator() (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> b) const {
+<a name="line178">178: </a>      <font color="#4169E1">return</font> a+b;
+<a name="line179">179: </a>    }
+<a name="line180">180: </a>};
+
+<a name="line182">182: </a><font color="#B22222">/* Add operator */</font>
+<a name="line183">183: </a>class Max {
+<a name="line184">184: </a><strong><font color="#FF0000">  public:</font></strong>
+<a name="line185">185: </a>    __device__ <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> operator() (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> b) const {
+<a name="line186">186: </a>      <font color="#4169E1">return</font> <a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(a),<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(b));
+<a name="line187">187: </a>    }
+<a name="line188">188: </a>};
+
+<a name="line190">190: </a><font color="#B22222">/* Sequential general to sequential general GPU kernel */</font>
+<a name="line191">191: </a>template&lt;class OPERATOR&gt;
+<a name="line192">192: </a><strong><font color="#4169E1"><a name="VecScatterCUDA_SGtoSG_kernel"></a>__global__ void VecScatterCUDA_SGtoSG_kernel(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *xind,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *yind,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y,OPERATOR OP)</font></strong> {
+<a name="line193">193: </a>  const int tidx = blockIdx.x*blockDim.x + threadIdx.x;
+<a name="line194">194: </a>  const int grid_size = gridDim.x * blockDim.x;
+<a name="line195">195: </a>  <font color="#4169E1">for</font> (int i = tidx; i &lt; n; i += grid_size) {
+<a name="line196">196: </a>    y[yind[i]] = OP(x[xind[i]],y[yind[i]]);
+<a name="line197">197: </a>  }
+<a name="line198">198: </a>}
+
+<a name="line200">200: </a><font color="#B22222">/* Sequential general to sequential strided GPU kernel */</font>
+<a name="line201">201: </a>template&lt;class OPERATOR&gt;
+<a name="line202">202: </a><strong><font color="#4169E1"><a name="VecScatterCUDA_SGtoSS_kernel"></a>__global__ void VecScatterCUDA_SGtoSS_kernel(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *xind,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> toFirst,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> toStep,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y,OPERATOR OP)</font></strong> {
+<a name="line203">203: </a>  const int tidx = blockIdx.x*blockDim.x + threadIdx.x;
+<a name="line204">204: </a>  const int grid_size = gridDim.x * blockDim.x;
+<a name="line205">205: </a>  <font color="#4169E1">for</font> (int i = tidx; i &lt; n; i += grid_size) {
+<a name="line206">206: </a>    y[toFirst+i*toStep] = OP(x[xind[i]],y[toFirst+i*toStep]);
+<a name="line207">207: </a>  }
+<a name="line208">208: </a>}
+
+<a name="line210">210: </a><font color="#B22222">/* Sequential strided to sequential strided GPU kernel */</font>
+<a name="line211">211: </a>template&lt;class OPERATOR&gt;
+<a name="line212">212: </a><strong><font color="#4169E1"><a name="VecScatterCUDA_SStoSS_kernel"></a>__global__ void VecScatterCUDA_SStoSS_kernel(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> fromFirst,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> fromStep,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> toFirst,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> toStep,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y,OPERATOR OP)</font></strong> {
+<a name="line213">213: </a>  const int tidx = blockIdx.x*blockDim.x + threadIdx.x;
+<a name="line214">214: </a>  const int grid_size = gridDim.x * blockDim.x;
+<a name="line215">215: </a>  <font color="#4169E1">for</font> (int i = tidx; i &lt; n; i += grid_size) {
+<a name="line216">216: </a>    y[toFirst+i*toStep] = OP(x[fromFirst+i*fromStep],y[toFirst+i*toStep]);
+<a name="line217">217: </a>  }
+<a name="line218">218: </a>}
+
+<a name="line220">220: </a><font color="#B22222">/* Sequential strided to sequential general GPU kernel */</font>
+<a name="line221">221: </a>template&lt;class OPERATOR&gt;
+<a name="line222">222: </a><strong><font color="#4169E1"><a name="VecScatterCUDA_SStoSG_kernel"></a>__global__ void VecScatterCUDA_SStoSG_kernel(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> fromFirst,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> fromStep,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *yind,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y,OPERATOR OP)</font></strong> {
+<a name="line223">223: </a>  const int tidx = blockIdx.x*blockDim.x + threadIdx.x;
+<a name="line224">224: </a>  const int grid_size = gridDim.x * blockDim.x;
+<a name="line225">225: </a>  <font color="#4169E1">for</font> (int i = tidx; i &lt; n; i += grid_size) {
+<a name="line226">226: </a>    y[yind[i]] = OP(x[fromFirst+i*fromStep],y[yind[i]]);
+<a name="line227">227: </a>  }
+<a name="line228">228: </a>}
+
+<a name="line230">230: </a>template&lt;class OPERATOR&gt;
+<a name="line231">231: </a><strong><font color="#4169E1"><a name="VecScatterCUDA_StoS_Dispatcher"></a>void VecScatterCUDA_StoS_Dispatcher(const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xarray,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *yarray,PetscCUDAIndices ci,<a href="../../../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">ScatterMode</a> mode,OPERATOR OP)</font></strong> {
+
+<a name="line233">233: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>                   nBlocks=0,nThreads=128;
+<a name="line234">234: </a>  VecScatterCUDAIndices_StoS stos_scatter = (VecScatterCUDAIndices_StoS)ci-&gt;scatter;
+
+<a name="line236">236: </a>  nBlocks=(int)ceil(((float) stos_scatter-&gt;n)/((float) nThreads))+1;
+<a name="line237">237: </a>  <font color="#4169E1">if</font> (nBlocks&gt;stos_scatter-&gt;MAX_CORESIDENT_THREADS/nThreads) {
+<a name="line238">238: </a>    nBlocks = stos_scatter-&gt;MAX_CORESIDENT_THREADS/nThreads;
+<a name="line239">239: </a>  }
+<a name="line240">240: </a>  dim3 block(nThreads,1,1);
+<a name="line241">241: </a>  dim3 grid(nBlocks,1,1);
+
+<a name="line243">243: </a>  <font color="#4169E1">if</font> (mode == <a href="../../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>) {
+<a name="line244">244: </a>    <font color="#4169E1">if</font> (stos_scatter-&gt;fromMode == VEC_SCATTER_CUDA_GENERAL &amp;&amp; stos_scatter-&gt;toMode == VEC_SCATTER_CUDA_GENERAL) {
+<a name="line245">245: </a>      VecScatterCUDA_SGtoSG_kernel&lt;&lt;&lt;grid,block,0,stos_scatter-&gt;stream&gt;&gt;&gt;(stos_scatter-&gt;n,stos_scatter-&gt;fslots,xarray,stos_scatter-&gt;tslots,yarray,OP);
+<a name="line246">246: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (stos_scatter-&gt;fromMode == VEC_SCATTER_CUDA_GENERAL &amp;&amp; stos_scatter-&gt;toMode == VEC_SCATTER_CUDA_STRIDED) {
+<a name="line247">247: </a>      VecScatterCUDA_SGtoSS_kernel&lt;&lt;&lt;grid,block,0,stos_scatter-&gt;stream&gt;&gt;&gt;(stos_scatter-&gt;n,stos_scatter-&gt;fslots,xarray,stos_scatter-&gt;toFirst,stos_scatter-&gt;toStep,yarray,OP);
+<a name="line248">248: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (stos_scatter-&gt;fromMode == VEC_SCATTER_CUDA_STRIDED &amp;&amp; stos_scatter-&gt;toMode == VEC_SCATTER_CUDA_STRIDED) {
+<a name="line249">249: </a>      VecScatterCUDA_SStoSS_kernel&lt;&lt;&lt;grid,block,0,stos_scatter-&gt;stream&gt;&gt;&gt;(stos_scatter-&gt;n,stos_scatter-&gt;fromFirst,stos_scatter-&gt;fromStep,xarray,stos_scatter-&gt;toFirst,stos_scatter-&gt;toStep,yarray,OP);
+<a name="line250">250: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (stos_scatter-&gt;fromMode == VEC_SCATTER_CUDA_STRIDED &amp;&amp; stos_scatter-&gt;toMode == VEC_SCATTER_CUDA_GENERAL) {
+<a name="line251">251: </a>      VecScatterCUDA_SStoSG_kernel&lt;&lt;&lt;grid,block,0,stos_scatter-&gt;stream&gt;&gt;&gt;(stos_scatter-&gt;n,stos_scatter-&gt;fromFirst,stos_scatter-&gt;fromStep,xarray,stos_scatter-&gt;tslots,yarray,OP);
+<a name="line252">252: </a>    }
+<a name="line253">253: </a>  } <font color="#4169E1">else</font> {
+<a name="line254">254: </a>    <font color="#4169E1">if</font> (stos_scatter-&gt;toMode == VEC_SCATTER_CUDA_GENERAL &amp;&amp; stos_scatter-&gt;fromMode == VEC_SCATTER_CUDA_GENERAL) {
+<a name="line255">255: </a>      VecScatterCUDA_SGtoSG_kernel&lt;&lt;&lt;grid,block,0,stos_scatter-&gt;stream&gt;&gt;&gt;(stos_scatter-&gt;n,stos_scatter-&gt;tslots,xarray,stos_scatter-&gt;fslots,yarray,OP);
+<a name="line256">256: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (stos_scatter-&gt;toMode == VEC_SCATTER_CUDA_GENERAL &amp;&amp; stos_scatter-&gt;fromMode == VEC_SCATTER_CUDA_STRIDED) {
+<a name="line257">257: </a>      VecScatterCUDA_SGtoSS_kernel&lt;&lt;&lt;grid,block,0,stos_scatter-&gt;stream&gt;&gt;&gt;(stos_scatter-&gt;n,stos_scatter-&gt;tslots,xarray,stos_scatter-&gt;fromFirst,stos_scatter-&gt;fromStep,yarray,OP);
+<a name="line258">258: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (stos_scatter-&gt;toMode == VEC_SCATTER_CUDA_STRIDED &amp;&amp; stos_scatter-&gt;fromMode == VEC_SCATTER_CUDA_STRIDED) {
+<a name="line259">259: </a>      VecScatterCUDA_SStoSS_kernel&lt;&lt;&lt;grid,block,0,stos_scatter-&gt;stream&gt;&gt;&gt;(stos_scatter-&gt;n,stos_scatter-&gt;toFirst,stos_scatter-&gt;toStep,xarray,stos_scatter-&gt;fromFirst,stos_scatter-&gt;fromStep,yarray,OP);
+<a name="line260">260: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (stos_scatter-&gt;toMode == VEC_SCATTER_CUDA_STRIDED &amp;&amp; stos_scatter-&gt;fromMode == VEC_SCATTER_CUDA_GENERAL) {
+<a name="line261">261: </a>      VecScatterCUDA_SStoSG_kernel&lt;&lt;&lt;grid,block,0,stos_scatter-&gt;stream&gt;&gt;&gt;(stos_scatter-&gt;n,stos_scatter-&gt;toFirst,stos_scatter-&gt;toStep,xarray,stos_scatter-&gt;fslots,yarray,OP);
+<a name="line262">262: </a>    }
+<a name="line263">263: </a>  }
+<a name="line264">264: </a>}
+
+<a name="line266">266: </a><strong><font color="#4169E1"><a name="VecScatterCUDA_StoS"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterCUDA_StoS(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y,PetscCUDAIndices ci,<a href="../../../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">InsertMode</a> addv,<a href="../../../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">ScatterMode</a> mode)</font></strong>
+<a name="line267">267: </a>{
+<a name="line268">268: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>             ierr;
+<a name="line269">269: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>          *xarray;
+<a name="line270">270: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>                *yarray;
+<a name="line271">271: </a>  VecScatterCUDAIndices_StoS stos_scatter = (VecScatterCUDAIndices_StoS)ci-&gt;scatter;
+<a name="line272">272: </a>  cudaError_t                err;
+
+<a name="line275">275: </a>  VecCUDAAllocateCheck(x);
+<a name="line276">276: </a>  VecCUDAAllocateCheck(y);
+<a name="line277">277: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(x,&amp;xarray);
+<a name="line278">278: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArray.html#VecCUDAGetArray">VecCUDAGetArray</a>(y,&amp;yarray);
+<a name="line279">279: </a>  <font color="#4169E1">if</font> (stos_scatter-&gt;n) {
+<a name="line280">280: </a>    <font color="#4169E1">if</font> (addv == <a href="../../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>)
+<a name="line281">281: </a>      VecScatterCUDA_StoS_Dispatcher(xarray,yarray,ci,mode,Insert());
+<a name="line282">282: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (addv == <a href="../../../../../../docs/manualpages/Sys/ADD_VALUES.html#ADD_VALUES">ADD_VALUES</a>)
+<a name="line283">283: </a>      VecScatterCUDA_StoS_Dispatcher(xarray,yarray,ci,mode,Add());
+<a name="line284">284: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (addv == <a href="../../../../../../docs/manualpages/Sys/MAX_VALUES.html#MAX_VALUES">MAX_VALUES</a>)
+<a name="line285">285: </a>      VecScatterCUDA_StoS_Dispatcher(xarray,yarray,ci,mode,Max());
+<a name="line286">286: </a>    <font color="#4169E1">else</font> <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_UNKNOWN_TYPE,<font color="#666666">"Wrong insert option"</font>);
+<a name="line287">287: </a>    err = cudaGetLastError();CHKERRCUDA(err);
+<a name="line288">288: </a>    err = cudaStreamSynchronize(stos_scatter-&gt;stream);CHKERRCUDA(err);
+<a name="line289">289: </a>  }
+<a name="line290">290: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(x,&amp;xarray);
+<a name="line291">291: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArray.html#VecCUDARestoreArray">VecCUDARestoreArray</a>(y,&amp;yarray);
+<a name="line292">292: </a>  <font color="#4169E1">return</font>(0);
+<a name="line293">293: </a>}
+</pre>
+</body>
+
+</html>

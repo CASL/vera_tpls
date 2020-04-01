@@ -1,0 +1,196 @@
+<center><a href="ex29.c">Actual source code: ex29.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/ksp/examples/tests/ex29.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:18:16+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/ksp/examples/tests/ex29.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a>static char help[] =<font color="#666666">"Tests ML interface. Modified from ~src/ksp/ksp/examples/tests/ex19.c \n\</font>
+<a name="line3">  3: </a><font color="#666666">  -mx &lt;xg&gt;, where &lt;xg&gt; = number of grid points in the x-direction\n\</font>
+<a name="line4">  4: </a><font color="#666666">  -my &lt;yg&gt;, where &lt;yg&gt; = number of grid points in the y-direction\n\</font>
+<a name="line5">  5: </a><font color="#666666">  -Nx &lt;npx&gt;, where &lt;npx&gt; = number of processors in the x-direction\n\</font>
+<a name="line6">  6: </a><font color="#666666">  -Ny &lt;npy&gt;, where &lt;npy&gt; = number of processors in the y-direction\n\n"</font>;
+
+<a name="line8">  8: </a><font color="#B22222">/*</font>
+<a name="line9">  9: </a><font color="#B22222">    This problem is modeled by</font>
+<a name="line10"> 10: </a><font color="#B22222">    the partial differential equation</font>
+
+<a name="line12"> 12: </a><font color="#B22222">            -Laplacian u  = g,  0 &lt; x,y &lt; 1,</font>
+
+<a name="line14"> 14: </a><font color="#B22222">    with boundary conditions</font>
+
+<a name="line16"> 16: </a><font color="#B22222">             u = 0  for  x = 0, x = 1, y = 0, y = 1.</font>
+
+<a name="line18"> 18: </a><font color="#B22222">    A finite difference approximation with the usual 5-point stencil</font>
+<a name="line19"> 19: </a><font color="#B22222">    is used to discretize the boundary value problem to obtain a nonlinear</font>
+<a name="line20"> 20: </a><font color="#B22222">    system of equations.</font>
+
+<a name="line22"> 22: </a><font color="#B22222">    Usage: ./ex29 -ksp_type gmres -ksp_monitor</font>
+<a name="line23"> 23: </a><font color="#B22222">           -pc_mg_type &lt;multiplicative&gt; (one of) additive multiplicative full kascade</font>
+<a name="line24"> 24: </a><font color="#B22222">           -mg_coarse_ksp_max_it 10 -mg_levels_3_ksp_max_it 10 -mg_levels_2_ksp_max_it 10</font>
+<a name="line25"> 25: </a><font color="#B22222">           -mg_levels_1_ksp_max_it 10 -mg_fine_ksp_max_it 10</font>
+<a name="line26"> 26: </a><font color="#B22222">*/</font>
+
+<a name="line28"> 28: </a> #include <A href="../../../../../include/petscksp.h.html">&lt;petscksp.h&gt;</A>
+<a name="line29"> 29: </a> #include <A href="../../../../../include/petscdm.h.html">&lt;petscdm.h&gt;</A>
+<a name="line30"> 30: </a> #include <A href="../../../../../include/petscdmda.h.html">&lt;petscdmda.h&gt;</A>
+
+<a name="line32"> 32: </a><font color="#B22222">/* User-defined application contexts */</font>
+<a name="line33"> 33: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line34"> 34: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> mx,my;              <font color="#B22222">/* number grid points in x and y direction */</font>
+<a name="line35"> 35: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>      localX,localF;      <font color="#B22222">/* local vectors with ghost region */</font>
+<a name="line36"> 36: </a>  <a href="../../../../../docs/manualpages/DM/DM.html#DM">DM</a>       da;
+<a name="line37"> 37: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>      x,b,r;              <font color="#B22222">/* global vectors */</font>
+<a name="line38"> 38: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>      J;                  <font color="#B22222">/* Jacobian on grid */</font>
+<a name="line39"> 39: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>      A,P,R;
+<a name="line40"> 40: </a>  <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>      ksp;
+<a name="line41"> 41: </a>} GridCtx;
+<a name="line42"> 42: </a><strong><font color="#4169E1">extern int FormJacobian_Grid(GridCtx*,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>*)</font></strong>;
+
+<a name="line44"> 44: </a><strong><font color="#4169E1"><a name="main"></a>int main(int argc,char **argv)</font></strong>
+<a name="line45"> 45: </a>{
+<a name="line47"> 47: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       its,n,Nx=<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,Ny=<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,nlocal,i;
+<a name="line48"> 48: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+<a name="line49"> 49: </a>  <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>             pc;
+<a name="line50"> 50: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       mx,my;
+<a name="line51"> 51: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            A;
+<a name="line52"> 52: </a>  GridCtx        fine_ctx;
+<a name="line53"> 53: </a>  <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>            ksp;
+<a name="line54"> 54: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flg;
+
+<a name="line56"> 56: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(&amp;argc,&amp;argv,NULL,help);<font color="#4169E1">if</font> (ierr) <font color="#4169E1">return</font> ierr;
+<a name="line57"> 57: </a>  <font color="#B22222">/* set up discretization matrix for fine grid */</font>
+<a name="line58"> 58: </a>  <font color="#B22222">/* ML requires input of fine-grid matrix. It determines nlevels. */</font>
+<a name="line59"> 59: </a>  fine_ctx.mx = 9; fine_ctx.my = 9;
+<a name="line60"> 60: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetInt.html#PetscOptionsGetInt">PetscOptionsGetInt</a>(NULL,NULL,<font color="#666666">"-mx"</font>,&amp;mx,&amp;flg);
+<a name="line61"> 61: </a>  <font color="#4169E1">if</font> (flg) fine_ctx.mx = mx;
+<a name="line62"> 62: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetInt.html#PetscOptionsGetInt">PetscOptionsGetInt</a>(NULL,NULL,<font color="#666666">"-my"</font>,&amp;my,&amp;flg);
+<a name="line63"> 63: </a>  <font color="#4169E1">if</font> (flg) fine_ctx.my = my;
+<a name="line64"> 64: </a>  <a href="../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"Fine grid size %D by %D\n"</font>,fine_ctx.mx,fine_ctx.my);
+<a name="line65"> 65: </a>  n    = fine_ctx.mx*fine_ctx.my;
+
+<a name="line67"> 67: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;size);
+<a name="line68"> 68: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetInt.html#PetscOptionsGetInt">PetscOptionsGetInt</a>(NULL,NULL,<font color="#666666">"-Nx"</font>,&amp;Nx,NULL);
+<a name="line69"> 69: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetInt.html#PetscOptionsGetInt">PetscOptionsGetInt</a>(NULL,NULL,<font color="#666666">"-Ny"</font>,&amp;Ny,NULL);
+
+<a name="line71"> 71: </a>  <a href="../../../../../docs/manualpages/DMDA/DMDACreate2d.html#DMDACreate2d">DMDACreate2d</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, <a href="../../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_NONE</a>, <a href="../../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_NONE</a>,<a href="../../../../../docs/manualpages/DMDA/DMDAStencilType.html#DMDAStencilType">DMDA_STENCIL_STAR</a>,fine_ctx.mx,fine_ctx.my,Nx,Ny,1,1,NULL,NULL,&amp;fine_ctx.da);
+<a name="line72"> 72: </a>  <a href="../../../../../docs/manualpages/DM/DMSetFromOptions.html#DMSetFromOptions">DMSetFromOptions</a>(fine_ctx.da);
+<a name="line73"> 73: </a>  <a href="../../../../../docs/manualpages/DM/DMSetUp.html#DMSetUp">DMSetUp</a>(fine_ctx.da);
+<a name="line74"> 74: </a>  <a href="../../../../../docs/manualpages/DM/DMCreateGlobalVector.html#DMCreateGlobalVector">DMCreateGlobalVector</a>(fine_ctx.da,&amp;fine_ctx.x);
+<a name="line75"> 75: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(fine_ctx.x,&amp;fine_ctx.b);
+<a name="line76"> 76: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(fine_ctx.x,&amp;nlocal);
+<a name="line77"> 77: </a>  <a href="../../../../../docs/manualpages/DM/DMCreateLocalVector.html#DMCreateLocalVector">DMCreateLocalVector</a>(fine_ctx.da,&amp;fine_ctx.localX);
+<a name="line78"> 78: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(fine_ctx.localX,&amp;fine_ctx.localF);
+<a name="line79"> 79: </a>  <a href="../../../../../docs/manualpages/Mat/MatCreateAIJ.html#MatCreateAIJ">MatCreateAIJ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,nlocal,nlocal,n,n,5,NULL,3,NULL,&amp;A);
+<a name="line80"> 80: </a>  FormJacobian_Grid(&amp;fine_ctx,&amp;A);
+
+<a name="line82"> 82: </a>  <font color="#B22222">/* create linear solver */</font>
+<a name="line83"> 83: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;ksp);
+<a name="line84"> 84: </a>  <a href="../../../../../docs/manualpages/KSP/KSPGetPC.html#KSPGetPC">KSPGetPC</a>(ksp,&amp;pc);
+<a name="line85"> 85: </a>  <a href="../../../../../docs/manualpages/PC/PCSetType.html#PCSetType">PCSetType</a>(pc,<a href="../../../../../docs/manualpages/PC/PCML.html#PCML">PCML</a>);
+
+<a name="line87"> 87: </a>  <font color="#B22222">/* set options, then solve system */</font>
+<a name="line88"> 88: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(ksp); <font color="#B22222">/* calls PCSetFromOptions_MG/ML */</font>
+
+<a name="line90"> 90: </a>  <font color="#4169E1">for</font> (i=0; i&lt;3; i++) {
+<a name="line91"> 91: </a>    <font color="#4169E1">if</font> (i&lt;2) {
+<a name="line92"> 92: </a>      <font color="#B22222">/* set values for rhs vector */</font>
+<a name="line93"> 93: </a>      <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(fine_ctx.b,i+1.0);
+<a name="line94"> 94: </a>      <font color="#B22222">/* modify A */</font>
+<a name="line95"> 95: </a>      <a href="../../../../../docs/manualpages/Mat/MatShift.html#MatShift">MatShift</a>(A,1.0);
+<a name="line96"> 96: </a>      <a href="../../../../../docs/manualpages/Mat/MatScale.html#MatScale">MatScale</a>(A,2.0);
+<a name="line97"> 97: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(ksp,A,A);
+<a name="line98"> 98: </a>    } <font color="#4169E1">else</font> {  <font color="#B22222">/* test <a href="../../../../../docs/manualpages/Mat/MatStructure.html#MatStructure">SAME_NONZERO_PATTERN</a> */</font>
+<a name="line99"> 99: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(ksp,A,A);
+<a name="line100">100: </a>    }
+<a name="line101">101: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(ksp,fine_ctx.b,fine_ctx.x);
+<a name="line102">102: </a>    <a href="../../../../../docs/manualpages/KSP/KSPGetIterationNumber.html#KSPGetIterationNumber">KSPGetIterationNumber</a>(ksp,&amp;its);
+<a name="line103">103: </a>    <font color="#4169E1">if</font> (its &gt; 6) {
+<a name="line104">104: </a>      <a href="../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"Warning: Number of iterations = %D greater than expected\n"</font>,its);
+<a name="line105">105: </a>    }
+<a name="line106">106: </a>  }
+
+<a name="line108">108: </a>  <font color="#B22222">/* free data structures */</font>
+<a name="line109">109: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;fine_ctx.x);
+<a name="line110">110: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;fine_ctx.b);
+<a name="line111">111: </a>  <a href="../../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(&amp;fine_ctx.da);
+<a name="line112">112: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;fine_ctx.localX);
+<a name="line113">113: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;fine_ctx.localF);
+<a name="line114">114: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;A);
+<a name="line115">115: </a>  <a href="../../../../../docs/manualpages/KSP/KSPDestroy.html#KSPDestroy">KSPDestroy</a>(&amp;ksp);
+<a name="line116">116: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>();
+<a name="line117">117: </a>  <font color="#4169E1">return</font> ierr;
+<a name="line118">118: </a>}
+
+<a name="line120">120: </a><strong><font color="#4169E1"><a name="FormJacobian_Grid"></a>int FormJacobian_Grid(GridCtx *grid,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *J)</font></strong>
+<a name="line121">121: </a>{
+<a name="line122">122: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>                    jac = *J;
+<a name="line123">123: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+<a name="line124">124: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               i,j,row,mx,my,xs,ys,xm,ym,Xs,Ys,Xm,Ym,col[5];
+<a name="line125">125: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               grow;
+<a name="line126">126: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>         *ltog;
+<a name="line127">127: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>            two = 2.0,one = 1.0,v[5],hx,hy,hxdhy,hydhx,value;
+<a name="line128">128: </a>  <a href="../../../../../docs/manualpages/IS/ISLocalToGlobalMapping.html#ISLocalToGlobalMapping">ISLocalToGlobalMapping</a> ltogm;
+
+<a name="line130">130: </a>  mx    = grid-&gt;mx;               my = grid-&gt;my;
+<a name="line131">131: </a>  hx    = one/(<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)(mx-1);  hy = one/(<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)(my-1);
+<a name="line132">132: </a>  hxdhy = hx/hy;               hydhx = hy/hx;
+
+<a name="line134">134: </a>  <font color="#B22222">/* Get ghost points */</font>
+<a name="line135">135: </a>  <a href="../../../../../docs/manualpages/DMDA/DMDAGetCorners.html#DMDAGetCorners">DMDAGetCorners</a>(grid-&gt;da,&amp;xs,&amp;ys,0,&amp;xm,&amp;ym,0);
+<a name="line136">136: </a>  <a href="../../../../../docs/manualpages/DMDA/DMDAGetGhostCorners.html#DMDAGetGhostCorners">DMDAGetGhostCorners</a>(grid-&gt;da,&amp;Xs,&amp;Ys,0,&amp;Xm,&amp;Ym,0);
+<a name="line137">137: </a>  <a href="../../../../../docs/manualpages/DM/DMGetLocalToGlobalMapping.html#DMGetLocalToGlobalMapping">DMGetLocalToGlobalMapping</a>(grid-&gt;da,&amp;ltogm);
+<a name="line138">138: </a>  <a href="../../../../../docs/manualpages/IS/ISLocalToGlobalMappingGetIndices.html#ISLocalToGlobalMappingGetIndices">ISLocalToGlobalMappingGetIndices</a>(ltogm,&amp;ltog);
+
+<a name="line140">140: </a>  <font color="#B22222">/* Evaluate Jacobian of function */</font>
+<a name="line141">141: </a>  <font color="#4169E1">for</font> (j=ys; j&lt;ys+ym; j++) {
+<a name="line142">142: </a>    row = (j - Ys)*Xm + xs - Xs - 1;
+<a name="line143">143: </a>    <font color="#4169E1">for</font> (i=xs; i&lt;xs+xm; i++) {
+<a name="line144">144: </a>      row++;
+<a name="line145">145: </a>      grow = ltog[row];
+<a name="line146">146: </a>      <font color="#4169E1">if</font> (i &gt; 0 &amp;&amp; i &lt; mx-1 &amp;&amp; j &gt; 0 &amp;&amp; j &lt; my-1) {
+<a name="line147">147: </a>        v[0] = -hxdhy; col[0] = ltog[row - Xm];
+<a name="line148">148: </a>        v[1] = -hydhx; col[1] = ltog[row - 1];
+<a name="line149">149: </a>        v[2] = two*(hydhx + hxdhy); col[2] = grow;
+<a name="line150">150: </a>        v[3] = -hydhx; col[3] = ltog[row + 1];
+<a name="line151">151: </a>        v[4] = -hxdhy; col[4] = ltog[row + Xm];
+<a name="line152">152: </a>        <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(jac,1,&amp;grow,5,col,v,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line153">153: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> ((i &gt; 0 &amp;&amp; i &lt; mx-1) || (j &gt; 0 &amp;&amp; j &lt; my-1)) {
+<a name="line154">154: </a>        value = .5*two*(hydhx + hxdhy);
+<a name="line155">155: </a>        <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(jac,1,&amp;grow,1,&amp;grow,&amp;value,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line156">156: </a>      } <font color="#4169E1">else</font> {
+<a name="line157">157: </a>        value = .25*two*(hydhx + hxdhy);
+<a name="line158">158: </a>        <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(jac,1,&amp;grow,1,&amp;grow,&amp;value,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line159">159: </a>      }
+<a name="line160">160: </a>    }
+<a name="line161">161: </a>  }
+<a name="line162">162: </a>  <a href="../../../../../docs/manualpages/IS/ISLocalToGlobalMappingRestoreIndices.html#ISLocalToGlobalMappingRestoreIndices">ISLocalToGlobalMappingRestoreIndices</a>(ltogm,&amp;ltog);
+<a name="line163">163: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(jac,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line164">164: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(jac,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line165">165: </a>  <font color="#4169E1">return</font> 0;
+<a name="line166">166: </a>}
+
+<a name="line168">168: </a><font color="#B22222">/*TEST</font>
+
+<a name="line170">170: </a><font color="#B22222">    test:</font>
+<a name="line171">171: </a><font color="#B22222">      output_file: output/ex29.out</font>
+<a name="line172">172: </a><font color="#B22222">      args: -mat_no_inode</font>
+<a name="line173">173: </a><font color="#B22222">      requires: ml</font>
+
+<a name="line175">175: </a><font color="#B22222">    test:</font>
+<a name="line176">176: </a><font color="#B22222">      suffix: 2</font>
+<a name="line177">177: </a><font color="#B22222">      nsize: 3</font>
+<a name="line178">178: </a><font color="#B22222">      requires: ml</font>
+
+<a name="line180">180: </a><font color="#B22222">TEST*/</font>
+</pre>
+</body>
+
+</html>

@@ -1,0 +1,413 @@
+<center><a href="isutil.c">Actual source code: isutil.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/tao/bound/utils/isutil.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:35:06+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/tao/bound/utils/isutil.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a> #include <A href="../../../../include/petsctao.h.html">&lt;petsctao.h&gt;</A>
+<a name="line2">  2: </a> #include <A href="../../../../include/petsc/private/vecimpl.h.html">&lt;petsc/private/vecimpl.h&gt;</A>
+<a name="line3">  3: </a> #include <A href="../../../../include/petsc/private/taoimpl.h.html">&lt;petsc/private/taoimpl.h&gt;</A>
+<a name="line4">  4: </a> #include <A href="../../../../include/../src/tao/matrix/submatfree.h.html">&lt;../src/tao/matrix/submatfree.h&gt;</A>
+
+<a name="line6">  6: </a><font color="#B22222">/*@C</font>
+<a name="line7">  7: </a><font color="#B22222">  TaoVecGetSubVec - Gets a subvector using the <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a></font>
+
+<a name="line9">  9: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line10"> 10: </a><font color="#B22222">+ vfull - the full matrix</font>
+<a name="line11"> 11: </a><font color="#B22222">. is - the index set for the subvector</font>
+<a name="line12"> 12: </a><font color="#B22222">. reduced_type - the method TAO is using for subsetting (<a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_SUBVEC</a>, <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MASK</a>,  <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MATRIXFREE</a>)</font>
+<a name="line13"> 13: </a><font color="#B22222">- maskvalue - the value to set the unused vector elements to (for <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MASK</a> or <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MATRIXFREE</a>)</font>
+
+<a name="line15"> 15: </a><font color="#B22222">  Output Parameters:</font>
+<a name="line16"> 16: </a><font color="#B22222">. vreduced - the subvector</font>
+
+<a name="line18"> 18: </a><font color="#B22222">  Notes:</font>
+<a name="line19"> 19: </a><font color="#B22222">  maskvalue should usually be 0.0, unless a pointwise divide will be used.</font>
+
+<a name="line21"> 21: </a><font color="#B22222">@*/</font>
+<a name="line22"> 22: </a><strong><font color="#4169E1"><a name="TaoVecGetSubVec"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoVecGetSubVec(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vfull, <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> is, <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TaoSubsetType</a> reduced_type, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> maskvalue, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *vreduced)</font></strong>
+<a name="line23"> 23: </a>{
+<a name="line25"> 25: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       nfull,nreduced,nreduced_local,rlow,rhigh,flow,fhigh;
+<a name="line26"> 26: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,nlocal;
+<a name="line27"> 27: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      *fv,*rv;
+<a name="line28"> 28: </a>  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *s;
+<a name="line29"> 29: </a>  <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>             ident;
+<a name="line30"> 30: </a>  <a href="../../../../docs/manualpages/Vec/VecType.html#VecType">VecType</a>        vtype;
+<a name="line31"> 31: </a>  <a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>     scatter;
+<a name="line32"> 32: </a>  <a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>       comm;
+
+
+<a name="line38"> 38: </a>  <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(vfull, &amp;nfull);
+<a name="line39"> 39: </a>  <a href="../../../../docs/manualpages/IS/ISGetSize.html#ISGetSize">ISGetSize</a>(is, &amp;nreduced);
+
+<a name="line41"> 41: </a>  <font color="#4169E1">if</font> (nreduced == nfull) {
+<a name="line42"> 42: </a>    <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(vreduced);
+<a name="line43"> 43: </a>    <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(vfull,vreduced);
+<a name="line44"> 44: </a>    <a href="../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(vfull,*vreduced);
+<a name="line45"> 45: </a>  } <font color="#4169E1">else</font> {
+<a name="line46"> 46: </a>    <font color="#4169E1">switch</font> (reduced_type) {
+<a name="line47"> 47: </a>    <font color="#4169E1">case</font> <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_SUBVEC</a>:
+<a name="line48"> 48: </a>      <a href="../../../../docs/manualpages/Vec/VecGetType.html#VecGetType">VecGetType</a>(vfull,&amp;vtype);
+<a name="line49"> 49: </a>      <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(vfull,&amp;flow,&amp;fhigh);
+<a name="line50"> 50: </a>      <a href="../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(is,&amp;nreduced_local);
+<a name="line51"> 51: </a>      <a href="../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vfull,&amp;comm);
+<a name="line52"> 52: </a>      <font color="#4169E1">if</font> (*vreduced) {
+<a name="line53"> 53: </a>        <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(vreduced);
+<a name="line54"> 54: </a>      }
+<a name="line55"> 55: </a>      <a href="../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(comm,vreduced);
+<a name="line56"> 56: </a>      <a href="../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(*vreduced,vtype);
+
+<a name="line58"> 58: </a>      <a href="../../../../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a>(*vreduced,nreduced_local,nreduced);
+<a name="line59"> 59: </a>      <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(*vreduced,&amp;rlow,&amp;rhigh);
+<a name="line60"> 60: </a>      <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(comm,nreduced_local,rlow,1,&amp;ident);
+<a name="line61"> 61: </a>      <a href="../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(vfull,is,*vreduced,ident,&amp;scatter);
+<a name="line62"> 62: </a>      <a href="../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(scatter,vfull,*vreduced,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line63"> 63: </a>      <a href="../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(scatter,vfull,*vreduced,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line64"> 64: </a>      <a href="../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;scatter);
+<a name="line65"> 65: </a>      <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;ident);
+<a name="line66"> 66: </a>      <font color="#4169E1">break</font>;
+
+<a name="line68"> 68: </a>    <font color="#4169E1">case</font> <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MASK</a>:
+<a name="line69"> 69: </a>    <font color="#4169E1">case</font> <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MATRIXFREE</a>:
+<a name="line70"> 70: </a>      <font color="#B22222">/* vr[i] = vf[i]   if i in is</font>
+<a name="line71"> 71: </a><font color="#B22222">       vr[i] = 0       otherwise */</font>
+<a name="line72"> 72: </a>      <font color="#4169E1">if</font> (!*vreduced) {
+<a name="line73"> 73: </a>        <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(vfull,vreduced);
+<a name="line74"> 74: </a>      }
+
+<a name="line76"> 76: </a>      <a href="../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(*vreduced,maskvalue);
+<a name="line77"> 77: </a>      <a href="../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(is,&amp;nlocal);
+<a name="line78"> 78: </a>      <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(vfull,&amp;flow,&amp;fhigh);
+<a name="line79"> 79: </a>      <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(vfull,&amp;fv);
+<a name="line80"> 80: </a>      <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(*vreduced,&amp;rv);
+<a name="line81"> 81: </a>      <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(is,&amp;s);
+<a name="line82"> 82: </a>      <font color="#4169E1">if</font> (nlocal &gt; (fhigh-flow)) <a href="../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,1,<font color="#666666">"<a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> local size %d &gt; <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> local size %d"</font>,nlocal,fhigh-flow);
+<a name="line83"> 83: </a>      <font color="#4169E1">for</font> (i=0;i&lt;nlocal;++i) {
+<a name="line84"> 84: </a>        rv[s[i]-flow] = fv[s[i]-flow];
+<a name="line85"> 85: </a>      }
+<a name="line86"> 86: </a>      <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(is,&amp;s);
+<a name="line87"> 87: </a>      <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(vfull,&amp;fv);
+<a name="line88"> 88: </a>      <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(*vreduced,&amp;rv);
+<a name="line89"> 89: </a>      <font color="#4169E1">break</font>;
+<a name="line90"> 90: </a>    }
+<a name="line91"> 91: </a>  }
+<a name="line92"> 92: </a>  <font color="#4169E1">return</font>(0);
+<a name="line93"> 93: </a>}
+
+<a name="line95"> 95: </a><font color="#B22222">/*@C</font>
+<a name="line96"> 96: </a><font color="#B22222">  TaoMatGetSubMat - Gets a submatrix using the <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a></font>
+
+<a name="line98"> 98: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line99"> 99: </a><font color="#B22222">+ M - the full matrix (n x n)</font>
+<a name="line100">100: </a><font color="#B22222">. is - the index set for the submatrix (both row and column index sets need to be the same)</font>
+<a name="line101">101: </a><font color="#B22222">. v1 - work vector of dimension n, needed for <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MASK</a> option</font>
+<a name="line102">102: </a><font color="#B22222">- subset_type - the method TAO is using for subsetting (<a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_SUBVEC</a>, <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MASK</a>,</font>
+<a name="line103">103: </a><font color="#B22222">  <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MATRIXFREE</a>)</font>
+
+<a name="line105">105: </a><font color="#B22222">  Output Parameters:</font>
+<a name="line106">106: </a><font color="#B22222">. Msub - the submatrix</font>
+<a name="line107">107: </a><font color="#B22222">@*/</font>
+<a name="line108">108: </a><strong><font color="#4169E1"><a name="TaoMatGetSubMat"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoMatGetSubMat(<a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> M, <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> is, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v1, <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TaoSubsetType</a> subset_type, <a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *Msub)</font></strong>
+<a name="line109">109: </a>{
+<a name="line111">111: </a>  <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>             iscomp;
+<a name="line112">112: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flg = <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line117">117: </a>  <a href="../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(Msub);
+<a name="line118">118: </a>  <font color="#4169E1">switch</font> (subset_type) {
+<a name="line119">119: </a>  <font color="#4169E1">case</font> <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_SUBVEC</a>:
+<a name="line120">120: </a>    <a href="../../../../docs/manualpages/Mat/MatCreateSubMatrix.html#MatCreateSubMatrix">MatCreateSubMatrix</a>(M, is, is, <a href="../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>, Msub);
+<a name="line121">121: </a>    <font color="#4169E1">break</font>;
+
+<a name="line123">123: </a>  <font color="#4169E1">case</font> <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MASK</a>:
+<a name="line124">124: </a>    <font color="#B22222">/* Get Reduced Hessian</font>
+<a name="line125">125: </a><font color="#B22222">     Msub[i,j] = M[i,j] if i,j in Free_Local or i==j</font>
+<a name="line126">126: </a><font color="#B22222">     Msub[i,j] = 0      if i!=j and i or j not in Free_Local</font>
+<a name="line127">127: </a><font color="#B22222">     */</font>
+<a name="line128">128: </a>    <a href="../../../../docs/manualpages/Sys/PetscOptionsBegin.html#PetscOptionsBegin">PetscOptionsBegin</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)M),NULL,NULL,NULL);
+<a name="line129">129: </a>    <a href="../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-overwrite_hessian"</font>,<font color="#666666">"modify the existing hessian matrix when computing submatrices"</font>,<font color="#666666">"<a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TaoSubsetType</a>"</font>,flg,&amp;flg,NULL);
+<a name="line130">130: </a>    <a href="../../../../docs/manualpages/Sys/PetscOptionsEnd.html#PetscOptionsEnd">PetscOptionsEnd</a>();
+<a name="line131">131: </a>    <font color="#4169E1">if</font> (flg) {
+<a name="line132">132: </a>      <a href="../../../../docs/manualpages/Mat/MatDuplicate.html#MatDuplicate">MatDuplicate</a>(M, <a href="../../../../docs/manualpages/Mat/MatDuplicateOption.html#MatDuplicateOption">MAT_COPY_VALUES</a>, Msub);
+<a name="line133">133: </a>    } <font color="#4169E1">else</font> {
+<a name="line134">134: </a>      <font color="#B22222">/* Act on hessian directly (default) */</font>
+<a name="line135">135: </a>      <a href="../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)M);
+<a name="line136">136: </a>      *Msub = M;
+<a name="line137">137: </a>    }
+<a name="line138">138: </a>    <font color="#B22222">/* Save the diagonal to temporary vector */</font>
+<a name="line139">139: </a>    <a href="../../../../docs/manualpages/Mat/MatGetDiagonal.html#MatGetDiagonal">MatGetDiagonal</a>(*Msub,v1);
+
+<a name="line141">141: </a>    <font color="#B22222">/* Zero out rows and columns */</font>
+<a name="line142">142: </a>    <a href="../../../../docs/manualpages/Vec/ISComplementVec.html#ISComplementVec">ISComplementVec</a>(is,v1,&amp;iscomp);
+
+<a name="line144">144: </a>    <font color="#B22222">/* Use v1 instead of 0 here because of PETSc bug */</font>
+<a name="line145">145: </a>    <a href="../../../../docs/manualpages/Mat/MatZeroRowsColumnsIS.html#MatZeroRowsColumnsIS">MatZeroRowsColumnsIS</a>(*Msub,iscomp,1.0,v1,v1);
+
+<a name="line147">147: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;iscomp);
+<a name="line148">148: </a>    <font color="#4169E1">break</font>;
+<a name="line149">149: </a>  <font color="#4169E1">case</font> <a href="../../../../docs/manualpages/Tao/TaoSubsetType.html#TaoSubsetType">TAO_SUBSET_MATRIXFREE</a>:
+<a name="line150">150: </a>    <a href="../../../../docs/manualpages/Vec/ISComplementVec.html#ISComplementVec">ISComplementVec</a>(is,v1,&amp;iscomp);
+<a name="line151">151: </a>    <a href="../../../../docs/manualpages/Tao/MatCreateSubMatrixFree.html#MatCreateSubMatrixFree">MatCreateSubMatrixFree</a>(M,iscomp,iscomp,Msub);
+<a name="line152">152: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;iscomp);
+<a name="line153">153: </a>    <font color="#4169E1">break</font>;
+<a name="line154">154: </a>  }
+<a name="line155">155: </a>  <font color="#4169E1">return</font>(0);
+<a name="line156">156: </a>}
+
+<a name="line158">158: </a><font color="#B22222">/*@C</font>
+<a name="line159">159: </a><font color="#B22222">  TaoEstimateActiveBounds - Generates index sets for variables at the lower and upper </font>
+<a name="line160">160: </a><font color="#B22222">  bounds, as well as fixed variables where lower and upper bounds equal each other.</font>
+
+<a name="line162">162: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line163">163: </a><font color="#B22222">+ X - solution vector</font>
+<a name="line164">164: </a><font color="#B22222">. XL - lower bound vector</font>
+<a name="line165">165: </a><font color="#B22222">. XU - upper bound vector</font>
+<a name="line166">166: </a><font color="#B22222">. G - unprojected gradient</font>
+<a name="line167">167: </a><font color="#B22222">. S - step direction with which the active bounds will be estimated</font>
+<a name="line168">168: </a><font color="#B22222">- steplen - the step length at which the active bounds will be estimated (needs to be conservative)</font>
+
+<a name="line170">170: </a><font color="#B22222">  Output Parameters:</font>
+<a name="line171">171: </a><font color="#B22222">. bound_tol - tolerance for for the bound estimation</font>
+<a name="line172">172: </a><font color="#B22222">. active_lower - index set for active variables at the lower bound</font>
+<a name="line173">173: </a><font color="#B22222">. active_upper - index set for active variables at the upper bound</font>
+<a name="line174">174: </a><font color="#B22222">. active_fixed - index set for fixed variables</font>
+<a name="line175">175: </a><font color="#B22222">. active - index set for all active variables</font>
+<a name="line176">176: </a><font color="#B22222">. inactive - complementary index set for inactive variables</font>
+
+<a name="line178">178: </a><font color="#B22222">  Notes:</font>
+<a name="line179">179: </a><font color="#B22222">  This estimation is based on Bertsekas' method, with a built in diagonal scaling value of 1.0e-3.</font>
+<a name="line180">180: </a><font color="#B22222">  </font>
+<a name="line181">181: </a><font color="#B22222">@*/</font>
+<a name="line182">182: </a><strong><font color="#4169E1"><a name="TaoEstimateActiveBounds"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoEstimateActiveBounds(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> XL, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> XU, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> G, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> S, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> W, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> steplen, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *bound_tol, </font></strong>
+<a name="line183">183: </a><strong><font color="#4169E1">                                       <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> *active_lower, <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> *active_upper, <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> *active_fixed, <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> *active, <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> *inactive)</font></strong>
+<a name="line184">184: </a>{
+<a name="line185">185: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>               ierr;
+<a name="line186">186: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>                    wnorm;
+<a name="line187">187: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>                    zero = PetscPowReal(PETSC_MACHINE_EPSILON, 2.0/3.0);
+<a name="line188">188: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>                     i, n_isl=0, n_isu=0, n_isf=0, n_isa=0, n_isi=0;
+<a name="line189">189: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>                     N_isl, N_isu, N_isf, N_isa, N_isi;
+<a name="line190">190: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>                     n, low, high, nDiff;
+<a name="line191">191: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>                     *isl=NULL, *isu=NULL, *isf=NULL, *isa=NULL, *isi=NULL;
+<a name="line192">192: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>            *xl, *xu, *x, *g;
+<a name="line193">193: </a>  <a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>                     comm = <a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)X);
+
+<a name="line202">202: </a>
+<a name="line219">219: </a>  VecCheckSameSize(X,1,XL,2);
+<a name="line220">220: </a>  VecCheckSameSize(X,1,XU,3);
+<a name="line221">221: </a>  VecCheckSameSize(X,1,G,4);
+<a name="line222">222: </a>  VecCheckSameSize(X,1,S,5);
+<a name="line223">223: </a>  VecCheckSameSize(X,1,W,6);
+<a name="line224">224: </a>
+<a name="line225">225: </a>  <font color="#B22222">/* Update the tolerance for bound detection (this is based on Bertsekas' method) */</font>
+<a name="line226">226: </a>  <a href="../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(X, W);
+<a name="line227">227: </a>  <a href="../../../../docs/manualpages/Vec/VecAXPBY.html#VecAXPBY">VecAXPBY</a>(W, steplen, 1.0, S);
+<a name="line228">228: </a>  TaoBoundSolution(W, XL, XU, 0.0, &amp;nDiff, W);
+<a name="line229">229: </a>  <a href="../../../../docs/manualpages/Vec/VecAXPBY.html#VecAXPBY">VecAXPBY</a>(W, 1.0, -1.0, X);
+<a name="line230">230: </a>  <a href="../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(W, <a href="../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>, &amp;wnorm);
+<a name="line231">231: </a>  *bound_tol = <a href="../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(*bound_tol, wnorm);
+<a name="line232">232: </a>
+<a name="line233">233: </a>  <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(X, &amp;low, &amp;high);
+<a name="line234">234: </a>  <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(X, &amp;n);
+<a name="line235">235: </a>  <font color="#4169E1">if</font> (n&gt;0){
+<a name="line236">236: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(X, &amp;x);
+<a name="line237">237: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(XL, &amp;xl);
+<a name="line238">238: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(XU, &amp;xu);
+<a name="line239">239: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(G, &amp;g);
+<a name="line240">240: </a>
+<a name="line241">241: </a>    <font color="#B22222">/* Loop over variables and categorize the indexes */</font>
+<a name="line242">242: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n, &amp;isl);
+<a name="line243">243: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n, &amp;isu);
+<a name="line244">244: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n, &amp;isf);
+<a name="line245">245: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n, &amp;isa);
+<a name="line246">246: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n, &amp;isi);
+<a name="line247">247: </a>    <font color="#4169E1">for</font> (i=0; i&lt;n; ++i) {
+<a name="line248">248: </a>      <font color="#4169E1">if</font> (xl[i] == xu[i]) {
+<a name="line249">249: </a>        <font color="#B22222">/* Fixed variables */</font>
+<a name="line250">250: </a>        isf[n_isf]=low+i; ++n_isf;
+<a name="line251">251: </a>        isa[n_isa]=low+i; ++n_isa;
+<a name="line252">252: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> ((xl[i] &gt; PETSC_NINFINITY) &amp;&amp; (x[i] &lt;= xl[i] + *bound_tol) &amp;&amp; (g[i] &gt; zero)) {
+<a name="line253">253: </a>        <font color="#B22222">/* Lower bounded variables */</font>
+<a name="line254">254: </a>        isl[n_isl]=low+i; ++n_isl;
+<a name="line255">255: </a>        isa[n_isa]=low+i; ++n_isa;
+<a name="line256">256: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> ((xu[i] &lt; PETSC_INFINITY) &amp;&amp; (x[i] &gt;= xu[i] - *bound_tol) &amp;&amp; (g[i] &lt; zero)) {
+<a name="line257">257: </a>        <font color="#B22222">/* Upper bounded variables */</font>
+<a name="line258">258: </a>        isu[n_isu]=low+i; ++n_isu;
+<a name="line259">259: </a>        isa[n_isa]=low+i; ++n_isa;
+<a name="line260">260: </a>      } <font color="#4169E1">else</font> {
+<a name="line261">261: </a>        <font color="#B22222">/* Inactive variables */</font>
+<a name="line262">262: </a>        isi[n_isi]=low+i; ++n_isi;
+<a name="line263">263: </a>      }
+<a name="line264">264: </a>    }
+<a name="line265">265: </a>
+<a name="line266">266: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(X, &amp;x);
+<a name="line267">267: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(XL, &amp;xl);
+<a name="line268">268: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(XU, &amp;xu);
+<a name="line269">269: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(G, &amp;g);
+<a name="line270">270: </a>  }
+<a name="line271">271: </a>
+<a name="line272">272: </a>  <font color="#B22222">/* Clear all index sets */</font>
+<a name="line273">273: </a>  <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(active_lower);
+<a name="line274">274: </a>  <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(active_upper);
+<a name="line275">275: </a>  <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(active_fixed);
+<a name="line276">276: </a>  <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(active);
+<a name="line277">277: </a>  <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(inactive);
+<a name="line278">278: </a>
+<a name="line279">279: </a>  <font color="#B22222">/* Collect global sizes */</font>
+<a name="line280">280: </a>  <a href="../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;n_isl, &amp;N_isl, 1, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, MPI_SUM, comm);
+<a name="line281">281: </a>  <a href="../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;n_isu, &amp;N_isu, 1, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, MPI_SUM, comm);
+<a name="line282">282: </a>  <a href="../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;n_isf, &amp;N_isf, 1, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, MPI_SUM, comm);
+<a name="line283">283: </a>  <a href="../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;n_isa, &amp;N_isa, 1, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, MPI_SUM, comm);
+<a name="line284">284: </a>  <a href="../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;n_isi, &amp;N_isi, 1, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, MPI_SUM, comm);
+<a name="line285">285: </a>
+<a name="line286">286: </a>  <font color="#B22222">/* Create index set for lower bounded variables */</font>
+<a name="line287">287: </a>  <font color="#4169E1">if</font> (N_isl &gt; 0) {
+<a name="line288">288: </a>    <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm, n_isl, isl, <a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>, active_lower);
+<a name="line289">289: </a>  } <font color="#4169E1">else</font> {
+<a name="line290">290: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(isl);
+<a name="line291">291: </a>  }
+<a name="line292">292: </a>  <font color="#B22222">/* Create index set for upper bounded variables */</font>
+<a name="line293">293: </a>  <font color="#4169E1">if</font> (N_isu &gt; 0) {
+<a name="line294">294: </a>    <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm, n_isu, isu, <a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>, active_upper);
+<a name="line295">295: </a>  } <font color="#4169E1">else</font> {
+<a name="line296">296: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(isu);
+<a name="line297">297: </a>  }
+<a name="line298">298: </a>  <font color="#B22222">/* Create index set for fixed variables */</font>
+<a name="line299">299: </a>  <font color="#4169E1">if</font> (N_isf &gt; 0) {
+<a name="line300">300: </a>    <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm, n_isf, isf, <a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>, active_fixed);
+<a name="line301">301: </a>  } <font color="#4169E1">else</font> {
+<a name="line302">302: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(isf);
+<a name="line303">303: </a>  }
+<a name="line304">304: </a>  <font color="#B22222">/* Create index set for all actively bounded variables */</font>
+<a name="line305">305: </a>  <font color="#4169E1">if</font> (N_isa &gt; 0) {
+<a name="line306">306: </a>    <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm, n_isa, isa, <a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>, active);
+<a name="line307">307: </a>  } <font color="#4169E1">else</font> {
+<a name="line308">308: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(isa);
+<a name="line309">309: </a>  }
+<a name="line310">310: </a>  <font color="#B22222">/* Create index set for all inactive variables */</font>
+<a name="line311">311: </a>  <font color="#4169E1">if</font> (N_isi &gt; 0) {
+<a name="line312">312: </a>    <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm, n_isi, isi, <a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>, inactive);
+<a name="line313">313: </a>  } <font color="#4169E1">else</font> {
+<a name="line314">314: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(isi);
+<a name="line315">315: </a>  }
+
+<a name="line317">317: </a>  <font color="#B22222">/* Clean up and exit */</font>
+<a name="line318">318: </a>  <font color="#4169E1">return</font>(0);
+<a name="line319">319: </a>}
+
+<a name="line321">321: </a><font color="#B22222">/*@C</font>
+<a name="line322">322: </a><font color="#B22222">  TaoBoundStep - Ensures the correct zero or adjusted step direction </font>
+<a name="line323">323: </a><font color="#B22222">  values for active variables.</font>
+
+<a name="line325">325: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line326">326: </a><font color="#B22222">+ X - solution vector</font>
+<a name="line327">327: </a><font color="#B22222">. XL - lower bound vector</font>
+<a name="line328">328: </a><font color="#B22222">. XU - upper bound vector</font>
+<a name="line329">329: </a><font color="#B22222">. active_lower - index set for lower bounded active variables</font>
+<a name="line330">330: </a><font color="#B22222">. active_upper - index set for lower bounded active variables</font>
+<a name="line331">331: </a><font color="#B22222">- active_fixed - index set for fixed active variables</font>
+
+<a name="line333">333: </a><font color="#B22222">  Output Parameters:</font>
+<a name="line334">334: </a><font color="#B22222">. S - step direction to be modified</font>
+<a name="line335">335: </a><font color="#B22222">@*/</font>
+<a name="line336">336: </a><strong><font color="#4169E1"><a name="TaoBoundStep"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoBoundStep(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> XL, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> XU, <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> active_lower, <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> active_upper, <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> active_fixed, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> scale, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> S)</font></strong>
+<a name="line337">337: </a>{
+<a name="line338">338: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>               ierr;
+<a name="line339">339: </a>
+<a name="line340">340: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>                          step_lower, step_upper, step_fixed;
+<a name="line341">341: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>                          x_lower, x_upper;
+<a name="line342">342: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>                          bound_lower, bound_upper;
+<a name="line343">343: </a>
+<a name="line345">345: </a>  <font color="#B22222">/* Adjust step for variables at the estimated lower bound */</font>
+<a name="line346">346: </a>  <font color="#4169E1">if</font> (active_lower) {
+<a name="line347">347: </a>    <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(S, active_lower, &amp;step_lower);
+<a name="line348">348: </a>    <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(X, active_lower, &amp;x_lower);
+<a name="line349">349: </a>    <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(XL, active_lower, &amp;bound_lower);
+<a name="line350">350: </a>    <a href="../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(bound_lower, step_lower);
+<a name="line351">351: </a>    <a href="../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(step_lower, -1.0, x_lower);
+<a name="line352">352: </a>    <a href="../../../../docs/manualpages/Vec/VecScale.html#VecScale">VecScale</a>(step_lower, scale);
+<a name="line353">353: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(S, active_lower, &amp;step_lower);
+<a name="line354">354: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(X, active_lower, &amp;x_lower);
+<a name="line355">355: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(XL, active_lower, &amp;bound_lower);
+<a name="line356">356: </a>  }
+<a name="line357">357: </a>
+<a name="line358">358: </a>  <font color="#B22222">/* Adjust step for the variables at the estimated upper bound */</font>
+<a name="line359">359: </a>  <font color="#4169E1">if</font> (active_upper) {
+<a name="line360">360: </a>    <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(S, active_upper, &amp;step_upper);
+<a name="line361">361: </a>    <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(X, active_upper, &amp;x_upper);
+<a name="line362">362: </a>    <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(XU, active_upper, &amp;bound_upper);
+<a name="line363">363: </a>    <a href="../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(bound_upper, step_upper);
+<a name="line364">364: </a>    <a href="../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(step_upper, -1.0, x_upper);
+<a name="line365">365: </a>    <a href="../../../../docs/manualpages/Vec/VecScale.html#VecScale">VecScale</a>(step_upper, scale);
+<a name="line366">366: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(S, active_upper, &amp;step_upper);
+<a name="line367">367: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(X, active_upper, &amp;x_upper);
+<a name="line368">368: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(XU, active_upper, &amp;bound_upper);
+<a name="line369">369: </a>  }
+<a name="line370">370: </a>
+<a name="line371">371: </a>  <font color="#B22222">/* Zero out step for fixed variables */</font>
+<a name="line372">372: </a>  <font color="#4169E1">if</font> (active_fixed) {
+<a name="line373">373: </a>    <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(S, active_fixed, &amp;step_fixed);
+<a name="line374">374: </a>    <a href="../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(step_fixed, 0.0);
+<a name="line375">375: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(S, active_fixed, &amp;step_fixed);
+<a name="line376">376: </a>  }
+<a name="line377">377: </a>  <font color="#4169E1">return</font>(0);
+<a name="line378">378: </a>}
+
+<a name="line380">380: </a><font color="#B22222">/*@C</font>
+<a name="line381">381: </a><font color="#B22222">  TaoBoundSolution - Ensures that the solution vector is snapped into the bounds.</font>
+
+<a name="line383">383: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line384">384: </a><font color="#B22222">+ XL - lower bound vector</font>
+<a name="line385">385: </a><font color="#B22222">. XU - upper bound vector</font>
+<a name="line386">386: </a><font color="#B22222">. X - solution vector</font>
+<a name="line387">387: </a><font color="#B22222">.</font>
+<a name="line388">388: </a><font color="#B22222">-</font>
+
+<a name="line390">390: </a><font color="#B22222">  Output Parameters:</font>
+<a name="line391">391: </a><font color="#B22222">. X - modified solution vector</font>
+<a name="line392">392: </a><font color="#B22222">@*/</font>
+<a name="line393">393: </a><strong><font color="#4169E1"><a name="TaoBoundSolution"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoBoundSolution(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> XL, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> XU, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> bound_tol, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *nDiff, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> Xout)</font></strong>
+<a name="line394">394: </a>{
+<a name="line395">395: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line396">396: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i,n,low,high,nDiff_loc=0;
+<a name="line397">397: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *xout;
+<a name="line398">398: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x,*xl,*xu;
+
+
+<a name="line416">416: </a>  VecCheckSameSize(X,1,XL,2);
+<a name="line417">417: </a>  VecCheckSameSize(X,1,XU,3);
+<a name="line418">418: </a>  VecCheckSameSize(X,1,Xout,4);
+
+<a name="line420">420: </a>  <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(X,&amp;low,&amp;high);
+<a name="line421">421: </a>  <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(X,&amp;n);
+<a name="line422">422: </a>  <font color="#4169E1">if</font> (n&gt;0){
+<a name="line423">423: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(X, &amp;x);
+<a name="line424">424: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(XL, &amp;xl);
+<a name="line425">425: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(XU, &amp;xu);
+<a name="line426">426: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(Xout, &amp;xout);
+
+<a name="line428">428: </a>    <font color="#4169E1">for</font> (i=0;i&lt;n;++i){
+<a name="line429">429: </a>      <font color="#4169E1">if</font> ((xl[i] &gt; PETSC_NINFINITY) &amp;&amp; (x[i] &lt;= xl[i] + bound_tol)) {
+<a name="line430">430: </a>        xout[i] = xl[i]; ++nDiff_loc;
+<a name="line431">431: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> ((xu[i] &lt; PETSC_INFINITY) &amp;&amp; (x[i] &gt;= xu[i] - bound_tol)) {
+<a name="line432">432: </a>        xout[i] = xu[i]; ++nDiff_loc;
+<a name="line433">433: </a>      }
+<a name="line434">434: </a>    }
+
+<a name="line436">436: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(X, &amp;x);
+<a name="line437">437: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(XL, &amp;xl);
+<a name="line438">438: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(XU, &amp;xu);
+<a name="line439">439: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(Xout, &amp;xout);
+<a name="line440">440: </a>  }
+<a name="line441">441: </a>  <a href="../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;nDiff_loc, nDiff, 1, <a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, MPI_SUM, <a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)X));
+<a name="line442">442: </a>  <font color="#4169E1">return</font>(0);
+<a name="line443">443: </a>}
+</pre>
+</body>
+
+</html>

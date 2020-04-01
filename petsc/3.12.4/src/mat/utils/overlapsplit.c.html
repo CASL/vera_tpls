@@ -1,0 +1,194 @@
+<center><a href="overlapsplit.c">Actual source code: overlapsplit.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/mat/utils/overlapsplit.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:56:07+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/mat/utils/overlapsplit.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><font color="#B22222">/*</font>
+<a name="line2">  2: </a><font color="#B22222"> * overlapsplit.c: increase the overlap of a 'big' subdomain across several processor cores</font>
+<a name="line3">  3: </a><font color="#B22222"> *</font>
+<a name="line4">  4: </a><font color="#B22222"> * Author: Fande Kong &lt;fdkong.jd@gmail.com&gt;</font>
+<a name="line5">  5: </a><font color="#B22222"> */</font>
+
+<a name="line7">  7: </a> #include <A href="../../../include/petscsf.h.html">&lt;petscsf.h&gt;</A>
+<a name="line8">  8: </a> #include <A href="../../../include/petsc/private/matimpl.h.html">&lt;petsc/private/matimpl.h&gt;</A>
+
+<a name="line10"> 10: </a><font color="#B22222">/*</font>
+<a name="line11"> 11: </a><font color="#B22222"> * Increase overlap for the sub-matrix across sub communicator</font>
+<a name="line12"> 12: </a><font color="#B22222"> * sub-matrix could be a graph or numerical matrix</font>
+<a name="line13"> 13: </a><font color="#B22222"> * */</font>
+<a name="line14"> 14: </a><strong><font color="#4169E1"><a name="MatIncreaseOverlapSplit_Single"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  MatIncreaseOverlapSplit_Single(<a href="../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> mat,<a href="../../../docs/manualpages/IS/IS.html#IS">IS</a> *is,<a href="../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> ov)</font></strong>
+<a name="line15"> 15: </a>{
+<a name="line16"> 16: </a>  <a href="../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>         i,nindx,*indices_sc,*indices_ov,localsize,*localsizes_sc,localsize_tmp;
+<a name="line17"> 17: </a>  <a href="../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>         *indices_ov_rd,nroots,nleaves,*localoffsets,*indices_recv,*sources_sc,*sources_sc_rd;
+<a name="line18"> 18: </a>  const <a href="../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   *indices;
+<a name="line19"> 19: </a>  <a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>      srank,ssize,issamecomm,k,grank;
+<a name="line20"> 20: </a>  <a href="../../../docs/manualpages/IS/IS.html#IS">IS</a>               is_sc,allis_sc,partitioning;
+<a name="line21"> 21: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>         gcomm,dcomm,scomm;
+<a name="line22"> 22: </a>  <a href="../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>          sf;
+<a name="line23"> 23: </a>  <a href="../../../docs/manualpages/PetscSF/PetscSFNode.html#PetscSFNode">PetscSFNode</a>      *remote;
+<a name="line24"> 24: </a>  <a href="../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>              *smat;
+<a name="line25"> 25: </a>  <a href="../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>  part;
+<a name="line26"> 26: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>   ierr;
+
+<a name="line29"> 29: </a>  <font color="#B22222">/* get a sub communicator before call individual <a href="../../../docs/manualpages/Mat/MatIncreaseOverlap.html#MatIncreaseOverlap">MatIncreaseOverlap</a></font>
+<a name="line30"> 30: </a><font color="#B22222">   * since the sub communicator may be changed.</font>
+<a name="line31"> 31: </a><font color="#B22222">   * */</font>
+<a name="line32"> 32: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)(*is),&amp;dcomm);
+<a name="line33"> 33: </a>  <font color="#B22222">/* make a copy before the original one is deleted */</font>
+<a name="line34"> 34: </a>  <a href="../../../docs/manualpages/Sys/PetscCommDuplicate.html#PetscCommDuplicate">PetscCommDuplicate</a>(dcomm,&amp;scomm,NULL);
+<a name="line35"> 35: </a>  <font color="#B22222">/* get a global communicator, where mat should be a global matrix  */</font>
+<a name="line36"> 36: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat,&amp;gcomm);
+<a name="line37"> 37: </a>  (*mat-&gt;ops-&gt;increaseoverlap)(mat,1,is,ov);
+<a name="line38"> 38: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_compare.html#MPI_Comm_compare">MPI_Comm_compare</a>(gcomm,scomm,&amp;issamecomm);
+<a name="line39"> 39: </a>  <font color="#B22222">/* if the sub-communicator is the same as the global communicator,</font>
+<a name="line40"> 40: </a><font color="#B22222">   * user does not want to use a sub-communicator</font>
+<a name="line41"> 41: </a><font color="#B22222">   * */</font>
+<a name="line42"> 42: </a>  <font color="#4169E1">if</font>(issamecomm == MPI_IDENT || issamecomm == MPI_CONGRUENT){
+<a name="line43"> 43: </a>        <a href="../../../docs/manualpages/Sys/PetscCommDestroy.html#PetscCommDestroy">PetscCommDestroy</a>(&amp;scomm);
+<a name="line44"> 44: </a>        <font color="#4169E1">return</font>(0);
+<a name="line45"> 45: </a>  }
+<a name="line46"> 46: </a>  <font color="#B22222">/* if the sub-communicator is petsc_comm_self,</font>
+<a name="line47"> 47: </a><font color="#B22222">   * user also does not care the sub-communicator</font>
+<a name="line48"> 48: </a><font color="#B22222">   * */</font>
+<a name="line49"> 49: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_compare.html#MPI_Comm_compare">MPI_Comm_compare</a>(scomm,<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;issamecomm);
+<a name="line50"> 50: </a>  <font color="#4169E1">if</font> (issamecomm == MPI_IDENT || issamecomm == MPI_CONGRUENT){
+<a name="line51"> 51: </a>    <a href="../../../docs/manualpages/Sys/PetscCommDestroy.html#PetscCommDestroy">PetscCommDestroy</a>(&amp;scomm);
+<a name="line52"> 52: </a>    <font color="#4169E1">return</font>(0);
+<a name="line53"> 53: </a>  }
+<a name="line54"> 54: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(scomm,&amp;srank);
+<a name="line55"> 55: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(scomm,&amp;ssize);
+<a name="line56"> 56: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(gcomm,&amp;grank);
+<a name="line57"> 57: </a>  <font color="#B22222">/* create a new <a href="../../../docs/manualpages/IS/IS.html#IS">IS</a> based on sub-communicator</font>
+<a name="line58"> 58: </a><font color="#B22222">   * since the old <a href="../../../docs/manualpages/IS/IS.html#IS">IS</a> is often based on petsc_comm_self</font>
+<a name="line59"> 59: </a><font color="#B22222">   * */</font>
+<a name="line60"> 60: </a>  <a href="../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(*is,&amp;nindx);
+<a name="line61"> 61: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nindx,&amp;indices_sc);
+<a name="line62"> 62: </a>  <a href="../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(*is,&amp;indices);
+<a name="line63"> 63: </a>  <a href="../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(indices_sc,indices,nindx);
+<a name="line64"> 64: </a>  <a href="../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(*is,&amp;indices);
+<a name="line65"> 65: </a>  <font color="#B22222">/* we do not need any more */</font>
+<a name="line66"> 66: </a>  <a href="../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(is);
+<a name="line67"> 67: </a>  <font color="#B22222">/* create a index set based on the sub communicator  */</font>
+<a name="line68"> 68: </a>  <a href="../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(scomm,nindx,indices_sc,<a href="../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>,&amp;is_sc);
+<a name="line69"> 69: </a>  <font color="#B22222">/* gather all indices within  the sub communicator */</font>
+<a name="line70"> 70: </a>  <a href="../../../docs/manualpages/IS/ISAllGather.html#ISAllGather">ISAllGather</a>(is_sc,&amp;allis_sc);
+<a name="line71"> 71: </a>  <a href="../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;is_sc);
+<a name="line72"> 72: </a>  <font color="#B22222">/* gather local sizes */</font>
+<a name="line73"> 73: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ssize,&amp;localsizes_sc);
+<a name="line74"> 74: </a>  <font color="#B22222">/* get individual local sizes for all index sets */</font>
+<a name="line75"> 75: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Gather.html#MPI_Gather">MPI_Gather</a>(&amp;nindx,1,<a href="../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,localsizes_sc,1,<a href="../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,0,scomm);
+<a name="line76"> 76: </a>  <font color="#B22222">/* only root does these computations */</font>
+<a name="line77"> 77: </a>  <font color="#4169E1">if</font>(!srank){
+<a name="line78"> 78: </a>   <font color="#B22222">/* get local size for the big index set */</font>
+<a name="line79"> 79: </a>   <a href="../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(allis_sc,&amp;localsize);
+<a name="line80"> 80: </a>   <a href="../../../docs/manualpages/Sys/PetscCalloc2.html#PetscCalloc2">PetscCalloc2</a>(localsize,&amp;indices_ov,localsize,&amp;sources_sc);
+<a name="line81"> 81: </a>   <a href="../../../docs/manualpages/Sys/PetscCalloc2.html#PetscCalloc2">PetscCalloc2</a>(localsize,&amp;indices_ov_rd,localsize,&amp;sources_sc_rd);
+<a name="line82"> 82: </a>   <a href="../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(allis_sc,&amp;indices);
+<a name="line83"> 83: </a>   <a href="../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(indices_ov,indices,localsize);
+<a name="line84"> 84: </a>   <a href="../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(allis_sc,&amp;indices);
+<a name="line85"> 85: </a>   <a href="../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;allis_sc);
+<a name="line86"> 86: </a>   <font color="#B22222">/* assign corresponding sources */</font>
+<a name="line87"> 87: </a>   localsize_tmp = 0;
+<a name="line88"> 88: </a>   <font color="#4169E1">for</font>(k=0; k&lt;ssize; k++){
+<a name="line89"> 89: </a>     <font color="#4169E1">for</font>(i=0; i&lt;localsizes_sc[k]; i++){
+<a name="line90"> 90: </a>       sources_sc[localsize_tmp++] = k;
+<a name="line91"> 91: </a>     }
+<a name="line92"> 92: </a>   }
+<a name="line93"> 93: </a>   <font color="#B22222">/* record where indices come from */</font>
+<a name="line94"> 94: </a>   <a href="../../../docs/manualpages/Sys/PetscSortIntWithArray.html#PetscSortIntWithArray">PetscSortIntWithArray</a>(localsize,indices_ov,sources_sc);
+<a name="line95"> 95: </a>   <font color="#B22222">/* count local sizes for reduced indices */</font>
+<a name="line96"> 96: </a>   <a href="../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(localsizes_sc,ssize);
+<a name="line97"> 97: </a>   <font color="#B22222">/* initialize the first entity */</font>
+<a name="line98"> 98: </a>   <font color="#4169E1">if</font> (localsize){
+<a name="line99"> 99: </a>     indices_ov_rd[0] = indices_ov[0];
+<a name="line100">100: </a>     sources_sc_rd[0] = sources_sc[0];
+<a name="line101">101: </a>     localsizes_sc[sources_sc[0]]++;
+<a name="line102">102: </a>   }
+<a name="line103">103: </a>   localsize_tmp = 1;
+<a name="line104">104: </a>   <font color="#B22222">/* remove duplicate integers */</font>
+<a name="line105">105: </a>   <font color="#4169E1">for</font> (i=1; i&lt;localsize; i++){
+<a name="line106">106: </a>     <font color="#4169E1">if</font> (indices_ov[i] != indices_ov[i-1]){
+<a name="line107">107: </a>       indices_ov_rd[localsize_tmp]   = indices_ov[i];
+<a name="line108">108: </a>       sources_sc_rd[localsize_tmp++] = sources_sc[i];
+<a name="line109">109: </a>       localsizes_sc[sources_sc[i]]++;
+<a name="line110">110: </a>     }
+<a name="line111">111: </a>   }
+<a name="line112">112: </a>   <a href="../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(indices_ov,sources_sc);
+<a name="line113">113: </a>   <a href="../../../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(ssize+1,&amp;localoffsets);
+<a name="line114">114: </a>   <font color="#4169E1">for</font> (k=0; k&lt;ssize; k++){
+<a name="line115">115: </a>     localoffsets[k+1] = localoffsets[k] + localsizes_sc[k];
+<a name="line116">116: </a>   }
+<a name="line117">117: </a>   nleaves = localoffsets[ssize];
+<a name="line118">118: </a>   <a href="../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(localoffsets,ssize+1);
+<a name="line119">119: </a>   nroots  = localsizes_sc[srank];
+<a name="line120">120: </a>   <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nleaves,&amp;remote);
+<a name="line121">121: </a>   <font color="#4169E1">for</font> (i=0; i&lt;nleaves; i++){
+<a name="line122">122: </a>     remote[i].rank  = sources_sc_rd[i];
+<a name="line123">123: </a>     remote[i].index = localoffsets[sources_sc_rd[i]]++;
+<a name="line124">124: </a>   }
+<a name="line125">125: </a>   <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(localoffsets);
+<a name="line126">126: </a>  } <font color="#4169E1">else</font> {
+<a name="line127">127: </a>   <a href="../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;allis_sc);
+<a name="line128">128: </a>   <font color="#B22222">/* Allocate a 'zero' pointer to avoid using uninitialized variable  */</font>
+<a name="line129">129: </a>   <a href="../../../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(0,&amp;remote);
+<a name="line130">130: </a>   nleaves       = 0;
+<a name="line131">131: </a>   indices_ov_rd = 0;
+<a name="line132">132: </a>   sources_sc_rd = 0;
+<a name="line133">133: </a>  }
+<a name="line134">134: </a>  <font color="#B22222">/* scatter sizes to everybody */</font>
+<a name="line135">135: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Scatter.html#MPI_Scatter">MPI_Scatter</a>(localsizes_sc,1, <a href="../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,&amp;nroots,1, <a href="../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,0,scomm);
+<a name="line136">136: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(localsizes_sc);
+<a name="line137">137: </a>  <a href="../../../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(nroots,&amp;indices_recv);
+<a name="line138">138: </a>  <font color="#B22222">/* set data back to every body */</font>
+<a name="line139">139: </a>  <a href="../../../docs/manualpages/PetscSF/PetscSFCreate.html#PetscSFCreate">PetscSFCreate</a>(scomm,&amp;sf);
+<a name="line140">140: </a>  <a href="../../../docs/manualpages/PetscSF/PetscSFSetType.html#PetscSFSetType">PetscSFSetType</a>(sf,PETSCSFBASIC);
+<a name="line141">141: </a>  <a href="../../../docs/manualpages/PetscSF/PetscSFSetFromOptions.html#PetscSFSetFromOptions">PetscSFSetFromOptions</a>(sf);
+<a name="line142">142: </a>  <a href="../../../docs/manualpages/PetscSF/PetscSFSetGraph.html#PetscSFSetGraph">PetscSFSetGraph</a>(sf,nroots,nleaves,NULL,<a href="../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>,remote,<a href="../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>);
+<a name="line143">143: </a>  <a href="../../../docs/manualpages/PetscSF/PetscSFReduceBegin.html#PetscSFReduceBegin">PetscSFReduceBegin</a>(sf,<a href="../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,indices_ov_rd,indices_recv,MPIU_REPLACE);
+<a name="line144">144: </a>  <a href="../../../docs/manualpages/PetscSF/PetscSFReduceEnd.html#PetscSFReduceEnd">PetscSFReduceEnd</a>(sf,<a href="../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,indices_ov_rd,indices_recv,MPIU_REPLACE);
+<a name="line145">145: </a>  <a href="../../../docs/manualpages/PetscSF/PetscSFDestroy.html#PetscSFDestroy">PetscSFDestroy</a>(&amp;sf);
+<a name="line146">146: </a>  <a href="../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(indices_ov_rd,sources_sc_rd);
+<a name="line147">147: </a>  <a href="../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(scomm,nroots,indices_recv,<a href="../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>,&amp;is_sc);
+<a name="line148">148: </a>  <a href="../../../docs/manualpages/Mat/MatCreateSubMatricesMPI.html#MatCreateSubMatricesMPI">MatCreateSubMatricesMPI</a>(mat,1,&amp;is_sc,&amp;is_sc,<a href="../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;smat);
+<a name="line149">149: </a>  <a href="../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;allis_sc);
+<a name="line150">150: </a>  <font color="#B22222">/* create a partitioner to repartition the sub-matrix */</font>
+<a name="line151">151: </a>  <a href="../../../docs/manualpages/MatOrderings/MatPartitioningCreate.html#MatPartitioningCreate">MatPartitioningCreate</a>(scomm,&amp;part);
+<a name="line152">152: </a>  <a href="../../../docs/manualpages/MatOrderings/MatPartitioningSetAdjacency.html#MatPartitioningSetAdjacency">MatPartitioningSetAdjacency</a>(part,smat[0]);
+<a name="line153">153: </a><font color="#A020F0">#if defined(PETSC_HAVE_PARMETIS)</font>
+<a name="line154">154: </a>  <font color="#B22222">/* if there exists a ParMETIS installation, we try to use ParMETIS</font>
+<a name="line155">155: </a><font color="#B22222">   * because a repartition routine possibly work better</font>
+<a name="line156">156: </a><font color="#B22222">   * */</font>
+<a name="line157">157: </a>  <a href="../../../docs/manualpages/MatOrderings/MatPartitioningSetType.html#MatPartitioningSetType">MatPartitioningSetType</a>(part,<a href="../../../docs/manualpages/MatOrderings/MATPARTITIONINGPARMETIS.html#MATPARTITIONINGPARMETIS">MATPARTITIONINGPARMETIS</a>);
+<a name="line158">158: </a>  <font color="#B22222">/* try to use reparition function, instead of partition function */</font>
+<a name="line159">159: </a>  <a href="../../../docs/manualpages/MatOrderings/MatPartitioningParmetisSetRepartition.html#MatPartitioningParmetisSetRepartition">MatPartitioningParmetisSetRepartition</a>(part);
+<a name="line160">160: </a><font color="#A020F0">#else</font>
+<a name="line161">161: </a>  <font color="#B22222">/* we at least provide a default partitioner to rebalance the computation  */</font>
+<a name="line162">162: </a>  <a href="../../../docs/manualpages/MatOrderings/MatPartitioningSetType.html#MatPartitioningSetType">MatPartitioningSetType</a>(part,MATPARTITIONINGAVERAGE);
+<a name="line163">163: </a><font color="#A020F0">#endif</font>
+<a name="line164">164: </a>  <font color="#B22222">/* user can pick up any partitioner by using an option */</font>
+<a name="line165">165: </a>  <a href="../../../docs/manualpages/MatOrderings/MatPartitioningSetFromOptions.html#MatPartitioningSetFromOptions">MatPartitioningSetFromOptions</a>(part);
+<a name="line166">166: </a>  <a href="../../../docs/manualpages/MatOrderings/MatPartitioningApply.html#MatPartitioningApply">MatPartitioningApply</a>(part,&amp;partitioning);
+<a name="line167">167: </a>  <a href="../../../docs/manualpages/MatOrderings/MatPartitioningDestroy.html#MatPartitioningDestroy">MatPartitioningDestroy</a>(&amp;part);
+<a name="line168">168: </a>  <a href="../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;(smat[0]));
+<a name="line169">169: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(smat);
+<a name="line170">170: </a>  <font color="#B22222">/* get local rows including  overlap */</font>
+<a name="line171">171: </a>  <a href="../../../docs/manualpages/IS/ISBuildTwoSided.html#ISBuildTwoSided">ISBuildTwoSided</a>(partitioning,is_sc,is);
+<a name="line172">172: </a>  <a href="../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;is_sc);
+<a name="line173">173: </a>  <a href="../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;partitioning);
+<a name="line174">174: </a>  <a href="../../../docs/manualpages/Sys/PetscCommDestroy.html#PetscCommDestroy">PetscCommDestroy</a>(&amp;scomm);
+<a name="line175">175: </a>  <font color="#4169E1">return</font>(0);
+<a name="line176">176: </a>}
+
+
+</pre>
+</body>
+
+</html>

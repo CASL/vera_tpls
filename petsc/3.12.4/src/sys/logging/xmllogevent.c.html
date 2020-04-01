@@ -1,0 +1,1420 @@
+<center><a href="xmllogevent.c">Actual source code: xmllogevent.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/sys/logging/xmllogevent.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:32:50+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/sys/logging/xmllogevent.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><font color="#B22222">/*************************************************************************************</font>
+<a name="line2">  2: </a><font color="#B22222"> *    M A R I T I M E  R E S E A R C H  I N S T I T U T E  N E T H E R L A N D S     *</font>
+<a name="line3">  3: </a><font color="#B22222"> *************************************************************************************</font>
+<a name="line4">  4: </a><font color="#B22222"> *    authors: Bas van 't Hof, Koos Huijssen, Christiaan M. Klaij                    *</font>
+<a name="line5">  5: </a><font color="#B22222"> *************************************************************************************</font>
+<a name="line6">  6: </a><font color="#B22222"> *    content: Support for nested PetscTimers                                        *</font>
+<a name="line7">  7: </a><font color="#B22222"> *************************************************************************************/</font>
+<a name="line8">  8: </a> #include <A href="../../../include/petsclog.h.html">&lt;petsclog.h&gt;</A>
+<a name="line9">  9: </a> #include <A href="../../../include/petsc/private/logimpl.h.html">&lt;petsc/private/logimpl.h&gt;</A>
+<a name="line10"> 10: </a> #include <A href="../../../include/petsctime.h.html">&lt;petsctime.h&gt;</A>
+<a name="line11"> 11: </a> #include <A href="../../../include/petscviewer.h.html">&lt;petscviewer.h&gt;</A>
+<a name="line12"> 12: </a><font color="#A020F0">#include </font><font color="#666666">"../src/sys/logging/xmlviewer.h"</font><font color="#A020F0"></font>
+
+<a name="line14"> 14: </a><font color="#A020F0">#if defined(PETSC_USE_LOG)</font>
+
+<a name="line16"> 16: </a><font color="#B22222">/*</font>
+<a name="line17"> 17: </a><font color="#B22222"> * Support for nested PetscTimers</font>
+<a name="line18"> 18: </a><font color="#B22222"> *</font>
+<a name="line19"> 19: </a><font color="#B22222"> * PetscTimers keep track of a lot of useful information: Wall clock times,</font>
+<a name="line20"> 20: </a><font color="#B22222"> * message passing statistics, flop counts.  Information about the nested structure</font>
+<a name="line21"> 21: </a><font color="#B22222"> * of the timers is lost. Example:</font>
+<a name="line22"> 22: </a><font color="#B22222"> *</font>
+<a name="line23"> 23: </a><font color="#B22222"> * 7:30   Start: awake</font>
+<a name="line24"> 24: </a><font color="#B22222"> * 7:30      Start: morning routine</font>
+<a name="line25"> 25: </a><font color="#B22222"> * 7:40         Start: eat</font>
+<a name="line26"> 26: </a><font color="#B22222"> * 7:49         Done:  eat</font>
+<a name="line27"> 27: </a><font color="#B22222"> * 7:43      Done:  morning routine</font>
+<a name="line28"> 28: </a><font color="#B22222"> * 8:15      Start: work</font>
+<a name="line29"> 29: </a><font color="#B22222"> * 12:15        Start: eat</font>
+<a name="line30"> 30: </a><font color="#B22222"> * 12:45        Done:  eat</font>
+<a name="line31"> 31: </a><font color="#B22222"> * 16:00     Done:  work</font>
+<a name="line32"> 32: </a><font color="#B22222"> * 16:30     Start: evening routine</font>
+<a name="line33"> 33: </a><font color="#B22222"> * 18:30        Start: eat</font>
+<a name="line34"> 34: </a><font color="#B22222"> * 19:15        Done:  eat</font>
+<a name="line35"> 35: </a><font color="#B22222"> * 22:00     Done:  evening routine</font>
+<a name="line36"> 36: </a><font color="#B22222"> * 22:00  Done:  awake</font>
+<a name="line37"> 37: </a><font color="#B22222"> *</font>
+<a name="line38"> 38: </a><font color="#B22222"> * Petsc timers provide the following timer results:</font>
+<a name="line39"> 39: </a><font color="#B22222"> *</font>
+<a name="line40"> 40: </a><font color="#B22222"> *    awake:              1 call    14:30 hours</font>
+<a name="line41"> 41: </a><font color="#B22222"> *    morning routine:    1 call     0:13 hours</font>
+<a name="line42"> 42: </a><font color="#B22222"> *    eat:                3 calls    1:24 hours</font>
+<a name="line43"> 43: </a><font color="#B22222"> *    work:               1 call     7:45 hours</font>
+<a name="line44"> 44: </a><font color="#B22222"> *    evening routine     1 call     5:30 hours</font>
+<a name="line45"> 45: </a><font color="#B22222"> *</font>
+<a name="line46"> 46: </a><font color="#B22222"> * Nested timers can be used to get the following table:</font>
+<a name="line47"> 47: </a><font color="#B22222"> *</font>
+<a name="line48"> 48: </a><font color="#B22222"> *   [1 call]: awake                14:30 hours</font>
+<a name="line49"> 49: </a><font color="#B22222"> *   [1 call]:    morning routine         0:13 hours         ( 2 % of awake)</font>
+<a name="line50"> 50: </a><font color="#B22222"> *   [1 call]:       eat                       0:09 hours         (69 % of morning routine)</font>
+<a name="line51"> 51: </a><font color="#B22222"> *                   rest (morning routine)    0:04 hours         (31 % of morning routine)</font>
+<a name="line52"> 52: </a><font color="#B22222"> *   [1 call]:    work                    7:45 hours         (53 % of awake)</font>
+<a name="line53"> 53: </a><font color="#B22222"> *   [1 call]:       eat                       0:30 hours         ( 6 % of work)</font>
+<a name="line54"> 54: </a><font color="#B22222"> *                   rest (work)               7:15 hours         (94 % of work)</font>
+<a name="line55"> 55: </a><font color="#B22222"> *   [1 call]:    evening routine         5:30 hours         (38 % of awake)</font>
+<a name="line56"> 56: </a><font color="#B22222"> *   [1 call]:       eat                       0:45 hours         (14 % of evening routine)</font>
+<a name="line57"> 57: </a><font color="#B22222"> *                   rest (evening routine)    4:45 hours         (86 % of morning routine)</font>
+<a name="line58"> 58: </a><font color="#B22222"> *</font>
+<a name="line59"> 59: </a><font color="#B22222"> * We ignore the concept of 'stages', because these seem to be conflicting notions, or at least,</font>
+<a name="line60"> 60: </a><font color="#B22222"> * the nested timers make the stages unnecessary.</font>
+<a name="line61"> 61: </a><font color="#B22222"> *</font>
+<a name="line62"> 62: </a><font color="#B22222"> */</font>
+
+<a name="line64"> 64: </a><font color="#B22222">/*</font>
+<a name="line65"> 65: </a><font color="#B22222"> * Data structures for keeping track of nested timers:</font>
+<a name="line66"> 66: </a><font color="#B22222"> *</font>
+<a name="line67"> 67: </a><font color="#B22222"> *   nestedEvents: information about the timers that have actually been activated</font>
+<a name="line68"> 68: </a><font color="#B22222"> *   dftParentActive: if a timer is started now, it is part of (nested inside) the dftParentActive</font>
+<a name="line69"> 69: </a><font color="#B22222"> *</font>
+<a name="line70"> 70: </a><font color="#B22222"> * The Default-timers are used to time the nested timers. Every nested timer corresponds to</font>
+<a name="line71"> 71: </a><font color="#B22222"> * (one or more) default timers, where one of the default timers has the same event-id as the</font>
+<a name="line72"> 72: </a><font color="#B22222"> * nested one.</font>
+<a name="line73"> 73: </a><font color="#B22222"> *</font>
+<a name="line74"> 74: </a><font color="#B22222"> * Because of the risk of confusion between nested timer ids and default timer ids, we</font>
+<a name="line75"> 75: </a><font color="#B22222"> * introduce a typedef for nested events (NestedEventId) and use the existing type <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a></font>
+<a name="line76"> 76: </a><font color="#B22222"> * only for default events. Also, all nested event variables are prepended with 'nst', and</font>
+<a name="line77"> 77: </a><font color="#B22222"> * default timers with 'dft'.</font>
+<a name="line78"> 78: </a><font color="#B22222"> */</font>
+
+<a name="line80"> 80: </a><strong><font color="#228B22">#define DFT_ID_AWAKE -1</font></strong>
+
+<a name="line82"> 82: </a><font color="#4169E1">typedef <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> NestedEventId;</font>
+<a name="line83"> 83: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line84"> 84: </a>  NestedEventId   nstEvent;         <font color="#B22222">/* event-code for this nested event, argument 'event' in PetscLogEventStartNested */</font>
+<a name="line85"> 85: </a>  int             nParents;         <font color="#B22222">/* number of 'dftParents': the default timer which was the dftParentActive when this nested timer was activated */</font>
+<a name="line86"> 86: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>  *dftParentsSorted; <font color="#B22222">/* The default timers which were the dftParentActive when this nested event was started */</font>
+<a name="line87"> 87: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>  *dftEvents;        <font color="#B22222">/* The default timers which represent the different 'instances' of this nested event */</font>
+
+<a name="line89"> 89: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>  *dftParents;       <font color="#B22222">/* The default timers which were the dftParentActive when this nested event was started */</font>
+<a name="line90"> 90: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>  *dftEventsSorted;  <font color="#B22222">/* The default timers which represent the different 'instances' of this nested event */</font>
+<a name="line91"> 91: </a>} PetscNestedEvent;
+
+<a name="line93"> 93: </a>static <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>    dftParentActive        = DFT_ID_AWAKE;
+<a name="line94"> 94: </a>static int              nNestedEvents          = 0;
+<a name="line95"> 95: </a>static int              nNestedEventsAllocated = 0;
+<a name="line96"> 96: </a>static PetscNestedEvent *nestedEvents          = NULL;
+<a name="line97"> 97: </a>static <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>   thresholdTime          = 0.01; <font color="#B22222">/* initial value was 0.1 */</font>
+
+<a name="line99"> 99: </a><strong><font color="#228B22">#define THRESHOLD (thresholdTime/100.0+1e-12)</font></strong>
+
+<a name="line101">101: </a><strong><font color="#4169E1">static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogEventBeginNested(NestedEventId nstEvent, int t, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o1, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o2, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o3, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o4)</font></strong>;
+<a name="line102">102: </a><strong><font color="#4169E1">static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogEventEndNested(NestedEventId nstEvent, int t, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o1, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o2, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o3, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o4)</font></strong>;
+<a name="line103">103: </a><strong><font color="#4169E1">PETSC_INTERN <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogView_Nested(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>)</font></strong>;
+
+
+<a name="line106">106: </a><font color="#B22222">/*@C</font>
+<a name="line107">107: </a><font color="#B22222">  <a href="../../../docs/manualpages/Profiling/PetscLogNestedBegin.html#PetscLogNestedBegin">PetscLogNestedBegin</a> - Turns on nested logging of objects and events. This logs flop</font>
+<a name="line108">108: </a><font color="#B22222">  rates and object creation and should not slow programs down too much.</font>
+
+<a name="line110">110: </a><font color="#B22222">  Logically Collective over <a href="../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a></font>
+
+<a name="line112">112: </a><font color="#B22222">  Options Database Keys:</font>
+<a name="line113">113: </a><font color="#B22222">. -log_view :filename.xml:ascii_xml - Prints an XML summary of flop and timing information to the file</font>
+
+<a name="line115">115: </a><font color="#B22222">  Usage:</font>
+<a name="line116">116: </a><font color="#B22222">.vb</font>
+<a name="line117">117: </a><font color="#B22222">      <a href="../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(...);</font>
+<a name="line118">118: </a><font color="#B22222">      <a href="../../../docs/manualpages/Profiling/PetscLogNestedBegin.html#PetscLogNestedBegin">PetscLogNestedBegin</a>();</font>
+<a name="line119">119: </a><font color="#B22222">       ... code ...</font>
+<a name="line120">120: </a><font color="#B22222">      <a href="../../../docs/manualpages/Profiling/PetscLogView.html#PetscLogView">PetscLogView</a>(viewer);</font>
+<a name="line121">121: </a><font color="#B22222">      <a href="../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>();</font>
+<a name="line122">122: </a><font color="#B22222">.ve</font>
+
+<a name="line124">124: </a><font color="#B22222">  Level: advanced</font>
+
+<a name="line126">126: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Profiling/PetscLogDump.html#PetscLogDump">PetscLogDump</a>(), <a href="../../../docs/manualpages/Profiling/PetscLogAllBegin.html#PetscLogAllBegin">PetscLogAllBegin</a>(), <a href="../../../docs/manualpages/Profiling/PetscLogView.html#PetscLogView">PetscLogView</a>(), <a href="../../../docs/manualpages/Profiling/PetscLogTraceBegin.html#PetscLogTraceBegin">PetscLogTraceBegin</a>(), <a href="../../../docs/manualpages/Profiling/PetscLogDefaultBegin.html#PetscLogDefaultBegin">PetscLogDefaultBegin</a>()</font>
+<a name="line127">127: </a><font color="#B22222">@*/</font>
+<a name="line128">128: </a><strong><font color="#4169E1"><a name="PetscLogNestedBegin"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../docs/manualpages/Profiling/PetscLogNestedBegin.html#PetscLogNestedBegin">PetscLogNestedBegin</a>(void)</font></strong>
+<a name="line129">129: </a>{
+
+<a name="line133">133: </a>  <font color="#4169E1">if</font> (nestedEvents) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_COR,<font color="#666666">"nestedEvents already allocated"</font>);
+
+<a name="line135">135: </a>  nNestedEventsAllocated = 10;
+<a name="line136">136: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nNestedEventsAllocated,&amp;nestedEvents);
+<a name="line137">137: </a>  dftParentActive = DFT_ID_AWAKE;
+<a name="line138">138: </a>  nNestedEvents =1;
+
+<a name="line140">140: </a>  <font color="#B22222">/* 'Awake' is nested event 0. It has no parents */</font>
+<a name="line141">141: </a>  nestedEvents[0].nstEvent          = 0;
+<a name="line142">142: </a>  nestedEvents[0].nParents          = 0;
+<a name="line143">143: </a>  nestedEvents[0].dftParentsSorted  = NULL;
+<a name="line144">144: </a>  nestedEvents[0].dftEvents         = NULL;
+<a name="line145">145: </a>  nestedEvents[0].dftParents        = NULL;
+<a name="line146">146: </a>  nestedEvents[0].dftEventsSorted   = NULL;
+
+<a name="line148">148: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogSet.html#PetscLogSet">PetscLogSet</a>(PetscLogEventBeginNested,PetscLogEventEndNested);
+<a name="line149">149: </a>  <font color="#4169E1">return</font>(0);
+<a name="line150">150: </a>}
+
+<a name="line152">152: </a><font color="#B22222">/* Delete the data structures for the nested timers */</font>
+<a name="line153">153: </a><strong><font color="#4169E1"><a name="PetscLogNestedEnd"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogNestedEnd(void)</font></strong>
+<a name="line154">154: </a>{
+<a name="line156">156: </a>  int            i;
+
+<a name="line159">159: </a>  <font color="#4169E1">if</font> (!nestedEvents) <font color="#4169E1">return</font>(0);
+<a name="line160">160: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nNestedEvents; i++) {
+<a name="line161">161: </a>    <a href="../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(nestedEvents[i].dftParentsSorted,nestedEvents[i].dftEventsSorted,nestedEvents[i].dftParents,nestedEvents[i].dftEvents);
+<a name="line162">162: </a>  }
+<a name="line163">163: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(nestedEvents);
+<a name="line164">164: </a>  nestedEvents           = NULL;
+<a name="line165">165: </a>  nNestedEvents          = 0;
+<a name="line166">166: </a>  nNestedEventsAllocated = 0;
+<a name="line167">167: </a>  <font color="#4169E1">return</font>(0);
+<a name="line168">168: </a>}
+
+
+<a name="line171">171: </a><font color="#B22222">/*</font>
+<a name="line172">172: </a><font color="#B22222"> UTILITIES: FIND STUFF IN SORTED ARRAYS</font>
+
+<a name="line174">174: </a><font color="#B22222">    dftIndex - index to be found</font>
+<a name="line175">175: </a><font color="#B22222">    dftArray - sorted array of <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>-ids</font>
+<a name="line176">176: </a><font color="#B22222">    narray - dimension of dftArray </font>
+<a name="line177">177: </a><font color="#B22222">    entry - entry in the array where dftIndex may be found;</font>
+
+<a name="line179">179: </a><font color="#B22222">     if dftArray[entry] != dftIndex, then dftIndex is not part of dftArray</font>
+<a name="line180">180: </a><font color="#B22222">     In that case, the dftIndex can be inserted at this entry. </font>
+<a name="line181">181: </a><font color="#B22222">*/</font>
+<a name="line182">182: </a><strong><font color="#4169E1"><a name="PetscLogEventFindDefaultTimer"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogEventFindDefaultTimer(<a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> dftIndex,const <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftArray,int narray,int *entry)</font></strong>
+<a name="line183">183: </a>{
+<a name="line185">185: </a>  <font color="#4169E1">if</font> (narray==0 || dftIndex &lt;= dftArray[0]) {
+<a name="line186">186: </a>    *entry = 0;
+<a name="line187">187: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (dftIndex &gt; dftArray[narray-1]) {
+<a name="line188">188: </a>    *entry = narray;
+<a name="line189">189: </a>  } <font color="#4169E1">else</font> {
+<a name="line190">190: </a>    int ihigh = narray-1, ilow=0;
+<a name="line191">191: </a>    <font color="#4169E1">while</font> (ihigh&gt;ilow) {
+<a name="line192">192: </a>      const int imiddle = (ihigh+ilow)/2;
+<a name="line193">193: </a>      <font color="#4169E1">if</font> (dftArray[imiddle] &gt; dftIndex) {
+<a name="line194">194: </a>        ihigh = imiddle;
+<a name="line195">195: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (dftArray[imiddle]&lt;dftIndex) {
+<a name="line196">196: </a>        ilow = imiddle+1;
+<a name="line197">197: </a>      } <font color="#4169E1">else</font> {
+<a name="line198">198: </a>        ihigh = imiddle;
+<a name="line199">199: </a>        ilow  = imiddle;
+<a name="line200">200: </a>      }
+<a name="line201">201: </a>    }
+<a name="line202">202: </a>    *entry = ihigh;
+<a name="line203">203: </a>  }
+<a name="line204">204: </a>  <font color="#4169E1">return</font>(0);
+<a name="line205">205: </a>}
+
+<a name="line207">207: </a><font color="#B22222">/*</font>
+<a name="line208">208: </a><font color="#B22222">    Utility: find the nested event with given identification</font>
+
+<a name="line210">210: </a><font color="#B22222">    nstEvent - Nested event to be found</font>
+<a name="line211">211: </a><font color="#B22222">    entry - entry in the nestedEvents where nstEvent may be found;</font>
+
+<a name="line213">213: </a><font color="#B22222">    if nestedEvents[entry].nstEvent != nstEvent, then index is not part of iarray</font>
+<a name="line214">214: </a><font color="#B22222">*/</font>
+<a name="line215">215: </a><strong><font color="#4169E1"><a name="PetscLogEventFindNestedTimer"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogEventFindNestedTimer(NestedEventId nstEvent,int *entry)</font></strong>
+<a name="line216">216: </a>{
+<a name="line218">218: </a>  <font color="#4169E1">if</font> (nNestedEvents==0 || nstEvent &lt;= nestedEvents[0].nstEvent) {
+<a name="line219">219: </a>    *entry = 0;
+<a name="line220">220: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nstEvent &gt; nestedEvents[nNestedEvents-1].nstEvent) {
+<a name="line221">221: </a>    *entry = nNestedEvents;
+<a name="line222">222: </a>  } <font color="#4169E1">else</font> {
+<a name="line223">223: </a>    int ihigh = nNestedEvents-1,  ilow = 0;
+<a name="line224">224: </a>    <font color="#4169E1">while</font> (ihigh&gt;ilow) {
+<a name="line225">225: </a>      const int imiddle = (ihigh+ilow)/2;
+<a name="line226">226: </a>      <font color="#4169E1">if</font> (nestedEvents[imiddle].nstEvent &gt; nstEvent) {
+<a name="line227">227: </a>        ihigh = imiddle;
+<a name="line228">228: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nestedEvents[imiddle].nstEvent&lt;nstEvent) {
+<a name="line229">229: </a>        ilow = imiddle+1;
+<a name="line230">230: </a>      } <font color="#4169E1">else</font> {
+<a name="line231">231: </a>        ihigh = imiddle;
+<a name="line232">232: </a>        ilow  = imiddle;
+<a name="line233">233: </a>      }
+<a name="line234">234: </a>    }
+<a name="line235">235: </a>    *entry = ihigh;
+<a name="line236">236: </a>  }
+<a name="line237">237: </a>  <font color="#4169E1">return</font>(0);
+<a name="line238">238: </a>}
+
+<a name="line240">240: </a><font color="#B22222">/*</font>
+<a name="line241">241: </a><font color="#B22222"> Nested logging is not prepared yet to support user-defined logging stages, so for now we force logging on the main stage.</font>
+<a name="line242">242: </a><font color="#B22222"> Using <a href="../../../docs/manualpages/Profiling/PetscLogStage.html#PetscLogStage">PetscLogStage</a>{Push/Pop}() would be more appropriate, but these two calls do extra bookkeeping work we don't need.</font>
+<a name="line243">243: </a><font color="#B22222">*/</font>
+
+<a name="line245">245: </a><strong><font color="#228B22">#define MAINSTAGE 0</font></strong>
+
+<a name="line247">247: </a>static <a href="../../../docs/manualpages/Profiling/PetscLogStage.html#PetscLogStage">PetscLogStage</a> savedStage = 0;
+
+<a name="line249">249: </a><strong><font color="#4169E1"><a name="PetscLogStageOverride"></a>PETSC_STATIC_INLINE <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogStageOverride(void)</font></strong>
+<a name="line250">250: </a>{
+<a name="line251">251: </a>  PetscStageLog  stageLog = petsc_stageLog;
+
+<a name="line255">255: </a>  <font color="#4169E1">if</font> (stageLog-&gt;curStage == MAINSTAGE) <font color="#4169E1">return</font>(0);
+<a name="line256">256: </a>  savedStage = stageLog-&gt;curStage;
+<a name="line257">257: </a>  stageLog-&gt;curStage = MAINSTAGE;
+<a name="line258">258: </a>  <a href="../../../docs/manualpages/Profiling/PetscIntStackPush.html#PetscIntStackPush">PetscIntStackPush</a>(stageLog-&gt;stack, MAINSTAGE);
+<a name="line259">259: </a>  <font color="#4169E1">return</font>(0);
+<a name="line260">260: </a>}
+
+<a name="line262">262: </a><strong><font color="#4169E1"><a name="PetscLogStageRestore"></a>PETSC_STATIC_INLINE <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogStageRestore(void)</font></strong>
+<a name="line263">263: </a>{
+<a name="line264">264: </a>  PetscStageLog  stageLog = petsc_stageLog;
+
+<a name="line268">268: </a>  <font color="#4169E1">if</font> (savedStage == MAINSTAGE) <font color="#4169E1">return</font>(0);
+<a name="line269">269: </a>  stageLog-&gt;curStage = savedStage;
+<a name="line270">270: </a>  <a href="../../../docs/manualpages/Profiling/PetscIntStackPop.html#PetscIntStackPop">PetscIntStackPop</a>(stageLog-&gt;stack, &amp;savedStage);
+<a name="line271">271: </a>  <font color="#4169E1">return</font>(0);
+<a name="line272">272: </a>}
+
+<a name="line274">274: </a><font color="#B22222">/******************************************************************************************/</font>
+<a name="line275">275: </a><font color="#B22222">/* Start a nested event */</font>
+<a name="line276">276: </a><strong><font color="#4169E1"><a name="PetscLogEventBeginNested"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogEventBeginNested(NestedEventId nstEvent, int t, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o1, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o2, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o3, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o4)</font></strong>
+<a name="line277">277: </a>{
+<a name="line278">278: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line279">279: </a>  int             entry, pentry, tentry,i;
+<a name="line280">280: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>   dftEvent;
+
+<a name="line283">283: </a>  PetscLogEventFindNestedTimer(nstEvent, &amp;entry);
+<a name="line284">284: </a>  <font color="#4169E1">if</font> (entry&gt;=nNestedEvents || nestedEvents[entry].nstEvent != nstEvent) {
+<a name="line285">285: </a>    <font color="#B22222">/* Nested event doesn't exist yet: create it */</font>
+
+<a name="line287">287: </a>    <font color="#4169E1">if</font> (nNestedEvents==nNestedEventsAllocated) {
+<a name="line288">288: </a>      <font color="#B22222">/* Enlarge and re-allocate nestedEvents if needed */</font>
+<a name="line289">289: </a>      PetscNestedEvent *tmp = nestedEvents;
+<a name="line290">290: </a>      <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(2*nNestedEvents,&amp;nestedEvents);
+<a name="line291">291: </a>      nNestedEventsAllocated*=2;
+<a name="line292">292: </a>      <a href="../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(nestedEvents, tmp, nNestedEvents);
+<a name="line293">293: </a>      <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(tmp);
+<a name="line294">294: </a>    }
+
+<a name="line296">296: </a>    <font color="#B22222">/* Clear space in nestedEvents for new nested event */</font>
+<a name="line297">297: </a>    nNestedEvents++;
+<a name="line298">298: </a>    <font color="#4169E1">for</font> (i = nNestedEvents-1; i&gt;entry; i--) {
+<a name="line299">299: </a>      nestedEvents[i] = nestedEvents[i-1];
+<a name="line300">300: </a>    }
+
+<a name="line302">302: </a>    <font color="#B22222">/* Create event in nestedEvents */</font>
+<a name="line303">303: </a>    nestedEvents[entry].nstEvent = nstEvent;
+<a name="line304">304: </a>    nestedEvents[entry].nParents=1;
+<a name="line305">305: </a>    <a href="../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(1,&amp;nestedEvents[entry].dftParentsSorted,1,&amp;nestedEvents[entry].dftEventsSorted,1,&amp;nestedEvents[entry].dftParents,1,&amp;nestedEvents[entry].dftEvents);
+
+<a name="line307">307: </a>    <font color="#B22222">/* Fill in new event */</font>
+<a name="line308">308: </a>    pentry = 0;
+<a name="line309">309: </a>    dftEvent = (<a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>) nstEvent;
+
+<a name="line311">311: </a>    nestedEvents[entry].nstEvent                 = nstEvent;
+<a name="line312">312: </a>    nestedEvents[entry].dftParents[pentry]       = dftParentActive;
+<a name="line313">313: </a>    nestedEvents[entry].dftEvents[pentry]        = dftEvent;
+<a name="line314">314: </a>    nestedEvents[entry].dftParentsSorted[pentry] = dftParentActive;
+<a name="line315">315: </a>    nestedEvents[entry].dftEventsSorted[pentry]  = dftEvent;
+
+<a name="line317">317: </a>  } <font color="#4169E1">else</font> {
+<a name="line318">318: </a>    <font color="#B22222">/* Nested event exists: find current dftParentActive among parents */</font>
+<a name="line319">319: </a>    <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftParentsSorted = nestedEvents[entry].dftParentsSorted;
+<a name="line320">320: </a>    <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftEvents        = nestedEvents[entry].dftEvents;
+<a name="line321">321: </a>    int           nParents          = nestedEvents[entry].nParents;
+
+<a name="line323">323: </a>    PetscLogEventFindDefaultTimer( dftParentActive, dftParentsSorted, nParents, &amp;pentry);
+
+<a name="line325">325: </a>    <font color="#4169E1">if</font> (pentry&gt;=nParents || dftParentActive != dftParentsSorted[pentry]) {
+<a name="line326">326: </a>      <font color="#B22222">/* dftParentActive not in the list: add it to the list */</font>
+<a name="line327">327: </a>      int           i;
+<a name="line328">328: </a>      <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftParents      = nestedEvents[entry].dftParents;
+<a name="line329">329: </a>      <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftEventsSorted = nestedEvents[entry].dftEventsSorted;
+<a name="line330">330: </a>      char          name[100];
+
+<a name="line332">332: </a>      <font color="#B22222">/* Register a new default timer */</font>
+<a name="line333">333: </a>      sprintf(name, <font color="#666666">"%d -&gt; %d"</font>, (int) dftParentActive, (int) nstEvent);
+<a name="line334">334: </a>      <a href="../../../docs/manualpages/Profiling/PetscLogEventRegister.html#PetscLogEventRegister">PetscLogEventRegister</a>(name, 0, &amp;dftEvent);
+<a name="line335">335: </a>      PetscLogEventFindDefaultTimer( dftEvent, dftEventsSorted, nParents, &amp;tentry);
+
+<a name="line337">337: </a>      <font color="#B22222">/* Reallocate parents and dftEvents to make space for new parent */</font>
+<a name="line338">338: </a>      <a href="../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(1+nParents,&amp;nestedEvents[entry].dftParentsSorted,1+nParents,&amp;nestedEvents[entry].dftEventsSorted,1+nParents,&amp;nestedEvents[entry].dftParents,1+nParents,&amp;nestedEvents[entry].dftEvents);
+<a name="line339">339: </a>      <a href="../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(nestedEvents[entry].dftParentsSorted, dftParentsSorted, nParents);
+<a name="line340">340: </a>      <a href="../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(nestedEvents[entry].dftEventsSorted,  dftEventsSorted,  nParents);
+<a name="line341">341: </a>      <a href="../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(nestedEvents[entry].dftParents,       dftParents,       nParents);
+<a name="line342">342: </a>      <a href="../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(nestedEvents[entry].dftEvents,        dftEvents,        nParents);
+<a name="line343">343: </a>      <a href="../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(dftParentsSorted,dftEventsSorted,dftParents,dftEvents);
+
+<a name="line345">345: </a>      dftParents       = nestedEvents[entry].dftParents;
+<a name="line346">346: </a>      dftEvents        = nestedEvents[entry].dftEvents;
+<a name="line347">347: </a>      dftParentsSorted = nestedEvents[entry].dftParentsSorted;
+<a name="line348">348: </a>      dftEventsSorted  = nestedEvents[entry].dftEventsSorted;
+
+<a name="line350">350: </a>      nestedEvents[entry].nParents++;
+<a name="line351">351: </a>      nParents++;
+
+<a name="line353">353: </a>      <font color="#4169E1">for</font> (i = nParents-1; i&gt;pentry; i--) {
+<a name="line354">354: </a>        dftParentsSorted[i] = dftParentsSorted[i-1];
+<a name="line355">355: </a>        dftEvents[i]        = dftEvents[i-1];
+<a name="line356">356: </a>      }
+<a name="line357">357: </a>      <font color="#4169E1">for</font> (i = nParents-1; i&gt;tentry; i--) {
+<a name="line358">358: </a>        dftParents[i]      = dftParents[i-1];
+<a name="line359">359: </a>        dftEventsSorted[i] = dftEventsSorted[i-1];
+<a name="line360">360: </a>      }
+
+<a name="line362">362: </a>      <font color="#B22222">/* Fill in the new default timer */</font>
+<a name="line363">363: </a>      dftParentsSorted[pentry] = dftParentActive;
+<a name="line364">364: </a>      dftEvents[pentry]        = dftEvent;
+<a name="line365">365: </a>      dftParents[tentry]       = dftParentActive;
+<a name="line366">366: </a>      dftEventsSorted[tentry]  = dftEvent;
+
+<a name="line368">368: </a>    } <font color="#4169E1">else</font> {
+<a name="line369">369: </a>      <font color="#B22222">/* dftParentActive was found: find the corresponding default 'dftEvent'-timer */</font>
+<a name="line370">370: </a>      dftEvent = nestedEvents[entry].dftEvents[pentry];
+<a name="line371">371: </a>    }
+<a name="line372">372: </a>  }
+
+<a name="line374">374: </a>  <font color="#B22222">/* Start the default 'dftEvent'-timer and update the dftParentActive */</font>
+<a name="line375">375: </a>  PetscLogStageOverride();
+<a name="line376">376: </a>  PetscLogEventBeginDefault(dftEvent,t,o1,o2,o3,o4);
+<a name="line377">377: </a>  PetscLogStageRestore();
+<a name="line378">378: </a>  dftParentActive = dftEvent;
+<a name="line379">379: </a>  <font color="#4169E1">return</font>(0);
+<a name="line380">380: </a>}
+
+<a name="line382">382: </a><font color="#B22222">/* End a nested event */</font>
+<a name="line383">383: </a><strong><font color="#4169E1"><a name="PetscLogEventEndNested"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogEventEndNested(NestedEventId nstEvent, int t, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o1, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o2, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o3, <a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> o4)</font></strong>
+<a name="line384">384: </a>{
+<a name="line385">385: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line386">386: </a>  int             entry, pentry, nParents;
+<a name="line387">387: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>  *dftEventsSorted;
+
+<a name="line390">390: </a>  <font color="#B22222">/* Find the nested event */</font>
+<a name="line391">391: </a>  PetscLogEventFindNestedTimer(nstEvent, &amp;entry);
+<a name="line392">392: </a>  <font color="#4169E1">if</font> (entry&gt;=nNestedEvents) <a href="../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE, <font color="#666666">"Logging event %d larger than number of events %d"</font>,entry,nNestedEvents);
+<a name="line393">393: </a>  <font color="#4169E1">if</font> (nestedEvents[entry].nstEvent != nstEvent) <a href="../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE, <font color="#666666">"Logging event %d had unbalanced begin/end pairs does not match %d"</font>,entry,nstEvent);
+<a name="line394">394: </a>  dftEventsSorted = nestedEvents[entry].dftEventsSorted;
+<a name="line395">395: </a>  nParents        = nestedEvents[entry].nParents;
+
+<a name="line397">397: </a>  <font color="#B22222">/* Find the current default timer among the 'dftEvents' of this event */</font>
+<a name="line398">398: </a>  PetscLogEventFindDefaultTimer( dftParentActive, dftEventsSorted, nParents, &amp;pentry);
+
+<a name="line400">400: </a>  <font color="#4169E1">if</font> (pentry&gt;=nParents) <a href="../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE, <font color="#666666">"Entry %d is larger than number of parents %d"</font>,pentry,nParents);
+<a name="line401">401: </a>  <font color="#4169E1">if</font> (dftEventsSorted[pentry] != dftParentActive) <a href="../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE, <font color="#666666">"Active parent is %d, but we seem to be closing %d"</font>,dftParentActive,dftEventsSorted[pentry]);
+
+<a name="line403">403: </a>  <font color="#B22222">/* Stop the default timer and update the dftParentActive */</font>
+<a name="line404">404: </a>  PetscLogStageOverride();
+<a name="line405">405: </a>  PetscLogEventEndDefault(dftParentActive,t,o1,o2,o3,o4);
+<a name="line406">406: </a>  PetscLogStageRestore();
+<a name="line407">407: </a>  dftParentActive = nestedEvents[entry].dftParents[pentry];
+<a name="line408">408: </a>  <font color="#4169E1">return</font>(0);
+<a name="line409">409: </a>}
+
+<a name="line411">411: </a><font color="#B22222">/*@</font>
+<a name="line412">412: </a><font color="#B22222">   <a href="../../../docs/manualpages/Profiling/PetscLogSetThreshold.html#PetscLogSetThreshold">PetscLogSetThreshold</a> - Set the threshold time for logging the events; this is a percentage out of 100, so 1. means any event</font>
+<a name="line413">413: </a><font color="#B22222">          that takes 1 or more percent of the time.</font>
+
+<a name="line415">415: </a><font color="#B22222">  Logically Collective over <a href="../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a></font>
+
+<a name="line417">417: </a><font color="#B22222">  Input Parameter:</font>
+<a name="line418">418: </a><font color="#B22222">.   newThresh - the threshold to use</font>
+
+<a name="line420">420: </a><font color="#B22222">  Output Parameter:</font>
+<a name="line421">421: </a><font color="#B22222">.   oldThresh - the previously set threshold value</font>
+
+<a name="line423">423: </a><font color="#B22222">  Options Database Keys:</font>
+<a name="line424">424: </a><font color="#B22222">. -log_view :filename.xml:ascii_xml - Prints an XML summary of flop and timing information to the file</font>
+
+<a name="line426">426: </a><font color="#B22222">  Usage:</font>
+<a name="line427">427: </a><font color="#B22222">.vb</font>
+<a name="line428">428: </a><font color="#B22222">      <a href="../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(...);</font>
+<a name="line429">429: </a><font color="#B22222">      <a href="../../../docs/manualpages/Profiling/PetscLogNestedBegin.html#PetscLogNestedBegin">PetscLogNestedBegin</a>();</font>
+<a name="line430">430: </a><font color="#B22222">      <a href="../../../docs/manualpages/Profiling/PetscLogSetThreshold.html#PetscLogSetThreshold">PetscLogSetThreshold</a>(0.1,&amp;oldthresh);</font>
+<a name="line431">431: </a><font color="#B22222">       ... code ...</font>
+<a name="line432">432: </a><font color="#B22222">      <a href="../../../docs/manualpages/Profiling/PetscLogView.html#PetscLogView">PetscLogView</a>(viewer);</font>
+<a name="line433">433: </a><font color="#B22222">      <a href="../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>();</font>
+<a name="line434">434: </a><font color="#B22222">.ve</font>
+
+<a name="line436">436: </a><font color="#B22222">  Level: advanced</font>
+
+<a name="line438">438: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Profiling/PetscLogDump.html#PetscLogDump">PetscLogDump</a>(), <a href="../../../docs/manualpages/Profiling/PetscLogAllBegin.html#PetscLogAllBegin">PetscLogAllBegin</a>(), <a href="../../../docs/manualpages/Profiling/PetscLogView.html#PetscLogView">PetscLogView</a>(), <a href="../../../docs/manualpages/Profiling/PetscLogTraceBegin.html#PetscLogTraceBegin">PetscLogTraceBegin</a>(), <a href="../../../docs/manualpages/Profiling/PetscLogDefaultBegin.html#PetscLogDefaultBegin">PetscLogDefaultBegin</a>(),</font>
+<a name="line439">439: </a><font color="#B22222">          <a href="../../../docs/manualpages/Profiling/PetscLogNestedBegin.html#PetscLogNestedBegin">PetscLogNestedBegin</a>()</font>
+<a name="line440">440: </a><font color="#B22222">@*/</font>
+<a name="line441">441: </a><strong><font color="#4169E1"><a name="PetscLogSetThreshold"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../docs/manualpages/Profiling/PetscLogSetThreshold.html#PetscLogSetThreshold">PetscLogSetThreshold</a>(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> newThresh, <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> *oldThresh)</font></strong>
+<a name="line442">442: </a>{
+<a name="line444">444: </a>  <font color="#4169E1">if</font> (oldThresh) *oldThresh = thresholdTime;
+<a name="line445">445: </a>  <font color="#4169E1">if</font> (newThresh == <a href="../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>)  newThresh = 0.01;
+<a name="line446">446: </a>  <font color="#4169E1">if</font> (newThresh == <a href="../../../docs/manualpages/Sys/PETSC_DEFAULT.html#PETSC_DEFAULT">PETSC_DEFAULT</a>) newThresh = 0.01;
+<a name="line447">447: </a>  thresholdTime = <a href="../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(newThresh, 0.0);
+<a name="line448">448: </a>  <font color="#4169E1">return</font>(0);
+<a name="line449">449: </a>}
+
+<a name="line451">451: </a><strong><font color="#4169E1"><a name="PetscPrintExeSpecs"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscPrintExeSpecs(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line452">452: </a>{
+<a name="line453">453: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line454">454: </a>  char               arch[128],hostname[128],username[128],pname[PETSC_MAX_PATH_LEN],date[128];
+<a name="line455">455: </a>  char               version[256], buildoptions[128] = <font color="#666666">""</font>;
+<a name="line456">456: </a>  <a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>        size;
+<a name="line457">457: </a>  size_t             len;
+
+<a name="line460">460: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),&amp;size);
+<a name="line461">461: </a>  <a href="../../../docs/manualpages/Sys/PetscGetArchType.html#PetscGetArchType">PetscGetArchType</a>(arch,<font color="#4169E1">sizeof</font>(arch));
+<a name="line462">462: </a>  <a href="../../../docs/manualpages/Sys/PetscGetHostName.html#PetscGetHostName">PetscGetHostName</a>(hostname,<font color="#4169E1">sizeof</font>(hostname));
+<a name="line463">463: </a>  <a href="../../../docs/manualpages/Sys/PetscGetUserName.html#PetscGetUserName">PetscGetUserName</a>(username,<font color="#4169E1">sizeof</font>(username));
+<a name="line464">464: </a>  <a href="../../../docs/manualpages/Sys/PetscGetProgramName.html#PetscGetProgramName">PetscGetProgramName</a>(pname,<font color="#4169E1">sizeof</font>(pname));
+<a name="line465">465: </a>  <a href="../../../docs/manualpages/Sys/PetscGetDate.html#PetscGetDate">PetscGetDate</a>(date,<font color="#4169E1">sizeof</font>(date));
+<a name="line466">466: </a>  <a href="../../../docs/manualpages/Sys/PetscGetVersion.html#PetscGetVersion">PetscGetVersion</a>(version,<font color="#4169E1">sizeof</font>(version));
+
+<a name="line468">468: </a>  PetscViewerXMLStartSection(viewer, <font color="#666666">"runspecification"</font>, <font color="#666666">"Run Specification"</font>);
+<a name="line469">469: </a>  PetscViewerXMLPutString(   viewer, <font color="#666666">"executable"</font>  , <font color="#666666">"Executable"</font>   , pname );
+<a name="line470">470: </a>  PetscViewerXMLPutString(   viewer, <font color="#666666">"architecture"</font>, <font color="#666666">"Architecture"</font> , arch );
+<a name="line471">471: </a>  PetscViewerXMLPutString(   viewer, <font color="#666666">"hostname"</font>    , <font color="#666666">"Host"</font>         , hostname);
+<a name="line472">472: </a>  PetscViewerXMLPutInt(      viewer, <font color="#666666">"nprocesses"</font>  , <font color="#666666">"Number of processes"</font>, size );
+<a name="line473">473: </a>  PetscViewerXMLPutString(   viewer, <font color="#666666">"user"</font>        , <font color="#666666">"Run by user"</font>  , username);
+<a name="line474">474: </a>  PetscViewerXMLPutString(   viewer, <font color="#666666">"date"</font>        , <font color="#666666">"Started at"</font>   , date);
+<a name="line475">475: </a>  PetscViewerXMLPutString(   viewer, <font color="#666666">"petscrelease"</font>, <font color="#666666">"Petsc Release"</font>, version);
+
+<a name="line477">477: </a><font color="#A020F0">#if defined(PETSC_USE_DEBUG)</font>
+<a name="line478">478: </a>  <a href="../../../docs/manualpages/Sys/PetscStrlcat.html#PetscStrlcat">PetscStrlcat</a>(buildoptions, <font color="#666666">"Debug "</font>, <font color="#4169E1">sizeof</font>(buildoptions));
+<a name="line479">479: </a><font color="#A020F0">#endif</font>
+<a name="line480">480: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line481">481: </a>  <a href="../../../docs/manualpages/Sys/PetscStrlcat.html#PetscStrlcat">PetscStrlcat</a>(buildoptions, <font color="#666666">"Complex "</font>, <font color="#4169E1">sizeof</font>(buildoptions));
+<a name="line482">482: </a><font color="#A020F0">#endif</font>
+<a name="line483">483: </a><font color="#A020F0">#if defined(PETSC_USE_REAL_SINGLE)</font>
+<a name="line484">484: </a>  <a href="../../../docs/manualpages/Sys/PetscStrlcat.html#PetscStrlcat">PetscStrlcat</a>(buildoptions, <font color="#666666">"Single "</font>, <font color="#4169E1">sizeof</font>(buildoptions));
+<a name="line485">485: </a><font color="#A020F0">#elif defined(PETSC_USE_REAL___FLOAT128)</font>
+<a name="line486">486: </a>  <a href="../../../docs/manualpages/Sys/PetscStrlcat.html#PetscStrlcat">PetscStrlcat</a>(buildoptions, <font color="#666666">"Quadruple "</font>, <font color="#4169E1">sizeof</font>(buildoptions));
+<a name="line487">487: </a><font color="#A020F0">#elif defined(PETSC_USE_REAL___FP16)</font>
+<a name="line488">488: </a>  <a href="../../../docs/manualpages/Sys/PetscStrlcat.html#PetscStrlcat">PetscStrlcat</a>(buildoptions, <font color="#666666">"Half "</font>, <font color="#4169E1">sizeof</font>(buildoptions));
+<a name="line489">489: </a><font color="#A020F0">#endif</font>
+<a name="line490">490: </a><font color="#A020F0">#if defined(PETSC_USE_64BIT_INDICES)</font>
+<a name="line491">491: </a>  <a href="../../../docs/manualpages/Sys/PetscStrlcat.html#PetscStrlcat">PetscStrlcat</a>(buildoptions, <font color="#666666">"Int64 "</font>, <font color="#4169E1">sizeof</font>(buildoptions));
+<a name="line492">492: </a><font color="#A020F0">#endif</font>
+<a name="line493">493: </a><font color="#A020F0">#if defined(__cplusplus)</font>
+<a name="line494">494: </a>  <a href="../../../docs/manualpages/Sys/PetscStrlcat.html#PetscStrlcat">PetscStrlcat</a>(buildoptions, <font color="#666666">"C++ "</font>, <font color="#4169E1">sizeof</font>(buildoptions));
+<a name="line495">495: </a><font color="#A020F0">#endif</font>
+<a name="line496">496: </a>  <a href="../../../docs/manualpages/Sys/PetscStrlen.html#PetscStrlen">PetscStrlen</a>(buildoptions,&amp;len);
+<a name="line497">497: </a>  <font color="#4169E1">if</font> (len) {
+<a name="line498">498: </a>    PetscViewerXMLPutString(viewer, <font color="#666666">"petscbuildoptions"</font>, <font color="#666666">"Petsc build options"</font>, buildoptions);
+<a name="line499">499: </a>  }
+<a name="line500">500: </a>  PetscViewerXMLEndSection(viewer, <font color="#666666">"runspecification"</font>);
+<a name="line501">501: </a>  <font color="#4169E1">return</font>(0);
+<a name="line502">502: </a>}
+
+<a name="line504">504: </a><font color="#B22222">/* Print the global performance: max, max/min, average and total of</font>
+<a name="line505">505: </a><font color="#B22222"> *      time, objects, flops, flops/sec, memory, MPI messages, MPI message lengths, MPI reductions.</font>
+<a name="line506">506: </a><font color="#B22222"> */</font>
+<a name="line507">507: </a><strong><font color="#4169E1"><a name="PetscPrintXMLGlobalPerformanceElement"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscPrintXMLGlobalPerformanceElement(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer, const char *name, const char *desc, <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> local_val, const <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> print_average, const <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> print_total)</font></strong>
+<a name="line508">508: </a>{
+<a name="line509">509: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line510">510: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>  min, tot, ratio, avg;
+<a name="line511">511: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>        comm;
+<a name="line512">512: </a>  <a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>     rank, size;
+<a name="line513">513: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>  valrank[2], max[2];
+
+<a name="line516">516: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+<a name="line517">517: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer),&amp;size);
+<a name="line518">518: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(comm, &amp;rank);
+
+<a name="line520">520: </a>  valrank[0] = local_val;
+<a name="line521">521: </a>  valrank[1] = (<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>) rank;
+<a name="line522">522: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;local_val, &amp;min, 1, MPIU_PETSCLOGDOUBLE,  MPI_MIN,    comm);
+<a name="line523">523: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(valrank,    &amp;max, 1, MPIU_2PETSCLOGDOUBLE, MPI_MAXLOC, comm);
+<a name="line524">524: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;local_val, &amp;tot, 1, MPIU_PETSCLOGDOUBLE,  MPI_SUM,    comm);
+<a name="line525">525: </a>  avg  = tot/((<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>) size);
+<a name="line526">526: </a>  <font color="#4169E1">if</font> (min != 0.0) ratio = max[0]/min;
+<a name="line527">527: </a>  <font color="#4169E1">else</font> ratio = 0.0;
+
+<a name="line529">529: </a>  PetscViewerXMLStartSection(viewer, name, desc);
+<a name="line530">530: </a>  PetscViewerXMLPutDouble(viewer, <font color="#666666">"max"</font>, NULL, max[0], <font color="#666666">"%e"</font>);
+<a name="line531">531: </a>  PetscViewerXMLPutInt(   viewer, <font color="#666666">"maxrank"</font>  , <font color="#666666">"rank at which max was found"</font> , (<a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>) max[1] );
+<a name="line532">532: </a>  PetscViewerXMLPutDouble(viewer, <font color="#666666">"ratio"</font>, NULL, ratio, <font color="#666666">"%f"</font>);
+<a name="line533">533: </a>  <font color="#4169E1">if</font> (print_average) {
+<a name="line534">534: </a>    PetscViewerXMLPutDouble(viewer, <font color="#666666">"average"</font>, NULL, avg, <font color="#666666">"%e"</font>);
+<a name="line535">535: </a>  }
+<a name="line536">536: </a>  <font color="#4169E1">if</font> (print_total) {
+<a name="line537">537: </a>    PetscViewerXMLPutDouble(viewer, <font color="#666666">"total"</font>, NULL, tot, <font color="#666666">"%e"</font>);
+<a name="line538">538: </a>  }
+<a name="line539">539: </a>  PetscViewerXMLEndSection(viewer, name);
+<a name="line540">540: </a>  <font color="#4169E1">return</font>(0);
+<a name="line541">541: </a>}
+
+<a name="line543">543: </a><font color="#B22222">/* Print the global performance: max, max/min, average and total of</font>
+<a name="line544">544: </a><font color="#B22222"> *      time, objects, flops, flops/sec, memory, MPI messages, MPI message lengths, MPI reductions.</font>
+<a name="line545">545: </a><font color="#B22222"> */</font>
+<a name="line546">546: </a><strong><font color="#4169E1"><a name="PetscPrintGlobalPerformance"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscPrintGlobalPerformance(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer, <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> locTotalTime)</font></strong>
+<a name="line547">547: </a>{
+<a name="line548">548: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line549">549: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>  flops, mem, red, mess;
+<a name="line550">550: </a>  const <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> print_total_yes   = <a href="../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>,
+<a name="line551">551: </a>                  print_total_no    = <a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,
+<a name="line552">552: </a>                  print_average_no  = <a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,
+<a name="line553">553: </a>                  print_average_yes = <a href="../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line556">556: </a>  <font color="#B22222">/* Must preserve reduction count before we go on */</font>
+<a name="line557">557: </a>  red = petsc_allreduce_ct + petsc_gather_ct + petsc_scatter_ct;
+
+<a name="line559">559: </a>  <font color="#B22222">/* Calculate summary information */</font>
+<a name="line560">560: </a>  PetscViewerXMLStartSection(viewer, <font color="#666666">"globalperformance"</font>, <font color="#666666">"Global performance"</font>);
+
+<a name="line562">562: </a>  <font color="#B22222">/*   Time */</font>
+<a name="line563">563: </a>  PetscPrintXMLGlobalPerformanceElement(viewer, <font color="#666666">"time"</font>, <font color="#666666">"Time (sec)"</font>, locTotalTime, print_average_yes, print_total_no);
+
+<a name="line565">565: </a>  <font color="#B22222">/*   Objects */</font>
+<a name="line566">566: </a>  PetscPrintXMLGlobalPerformanceElement(viewer, <font color="#666666">"objects"</font>, <font color="#666666">"Objects"</font>, (<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>) petsc_numObjects, print_average_yes, print_total_no);
+
+<a name="line568">568: </a>  <font color="#B22222">/*   Flop */</font>
+<a name="line569">569: </a>  PetscPrintXMLGlobalPerformanceElement(viewer, <font color="#666666">"mflop"</font>, <font color="#666666">"MFlop"</font>, petsc_TotalFlops/1.0E6, print_average_yes, print_total_yes);
+
+<a name="line571">571: </a>  <font color="#B22222">/*   Flop/sec -- Must talk to Barry here */</font>
+<a name="line572">572: </a>  <font color="#4169E1">if</font> (locTotalTime != 0.0) flops = petsc_TotalFlops/locTotalTime;
+<a name="line573">573: </a>  <font color="#4169E1">else</font> flops = 0.0;
+<a name="line574">574: </a>  PetscPrintXMLGlobalPerformanceElement(viewer, <font color="#666666">"mflops"</font>, <font color="#666666">"MFlop/sec"</font>, flops/1.0E6, print_average_yes, print_total_yes);
+
+<a name="line576">576: </a>  <font color="#B22222">/*   Memory */</font>
+<a name="line577">577: </a>  <a href="../../../docs/manualpages/Sys/PetscMallocGetMaximumUsage.html#PetscMallocGetMaximumUsage">PetscMallocGetMaximumUsage</a>(&amp;mem);
+<a name="line578">578: </a>  <font color="#4169E1">if</font> (mem &gt; 0.0) {
+<a name="line579">579: </a>    PetscPrintXMLGlobalPerformanceElement(viewer, <font color="#666666">"memory"</font>, <font color="#666666">"Memory (MiB)"</font>, mem/1024.0/1024.0, print_average_yes, print_total_yes);
+<a name="line580">580: </a>  }
+<a name="line581">581: </a>  <font color="#B22222">/*   Messages */</font>
+<a name="line582">582: </a>  mess = 0.5*(petsc_irecv_ct + petsc_isend_ct + petsc_recv_ct + petsc_send_ct);
+<a name="line583">583: </a>  PetscPrintXMLGlobalPerformanceElement(viewer, <font color="#666666">"messagetransfers"</font>, <font color="#666666">"MPI Message Transfers"</font>, mess, print_average_yes, print_total_yes);
+
+<a name="line585">585: </a>  <font color="#B22222">/*   Message Volume */</font>
+<a name="line586">586: </a>  mess = 0.5*(petsc_irecv_len + petsc_isend_len + petsc_recv_len + petsc_send_len);
+<a name="line587">587: </a>  PetscPrintXMLGlobalPerformanceElement(viewer, <font color="#666666">"messagevolume"</font>, <font color="#666666">"MPI Message Volume (MiB)"</font>, mess/1024.0/1024.0, print_average_yes, print_total_yes);
+
+<a name="line589">589: </a>  <font color="#B22222">/*   Reductions */</font>
+<a name="line590">590: </a>  PetscPrintXMLGlobalPerformanceElement(viewer, <font color="#666666">"reductions"</font>, <font color="#666666">"MPI Reductions"</font>, red , print_average_no, print_total_no);
+<a name="line591">591: </a>  PetscViewerXMLEndSection(viewer, <font color="#666666">"globalperformance"</font>);
+<a name="line592">592: </a>  <font color="#4169E1">return</font>(0);
+<a name="line593">593: </a>}
+
+<a name="line595">595: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line596">596: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>  dftEvent;
+<a name="line597">597: </a>  NestedEventId  nstEvent;
+<a name="line598">598: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>  dftParent;
+<a name="line599">599: </a>  NestedEventId  nstParent;
+<a name="line600">600: </a>  <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      own;
+<a name="line601">601: </a>  int            depth;
+<a name="line602">602: </a>  NestedEventId* nstPath;
+<a name="line603">603: </a>} PetscNestedEventTree;
+
+<a name="line605">605: </a><font color="#B22222">/* Compare timers to sort them in the tree */</font>
+<a name="line606">606: </a><strong><font color="#4169E1"><a name="compareTreeItems"></a>static int compareTreeItems(const void *item1_, const void *item2_)</font></strong>
+<a name="line607">607: </a>{
+<a name="line608">608: </a>  int                  i;
+<a name="line609">609: </a>  PetscNestedEventTree *item1 = (PetscNestedEventTree *) item1_;
+<a name="line610">610: </a>  PetscNestedEventTree *item2 = (PetscNestedEventTree *) item2_;
+
+<a name="line612">612: </a>  <font color="#4169E1">for</font> (i=0; i&lt;<a href="../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(item1-&gt;depth,item2-&gt;depth); i++) {
+<a name="line613">613: </a>    <font color="#4169E1">if</font> (item1-&gt;nstPath[i]&lt;item2-&gt;nstPath[i]) <font color="#4169E1">return</font> -1;
+<a name="line614">614: </a>    <font color="#4169E1">if</font> (item1-&gt;nstPath[i]&gt;item2-&gt;nstPath[i]) <font color="#4169E1">return</font> +1;
+<a name="line615">615: </a>  }
+<a name="line616">616: </a>  <font color="#4169E1">if</font> (item1-&gt;depth &lt; item2-&gt;depth) <font color="#4169E1">return</font> -1;
+<a name="line617">617: </a>  <font color="#4169E1">if</font> (item1-&gt;depth &gt; item2-&gt;depth) <font color="#4169E1">return</font> 1;
+<a name="line618">618: </a>  <font color="#4169E1">return</font> 0;
+<a name="line619">619: </a>}
+<a name="line620">620: </a><font color="#B22222">/*</font>
+<a name="line621">621: </a><font color="#B22222"> * Do MPI communication to get the complete, nested calling tree for all processes: there may be</font>
+<a name="line622">622: </a><font color="#B22222"> * calls that happen in some processes, but not in others.</font>
+<a name="line623">623: </a><font color="#B22222"> *</font>
+<a name="line624">624: </a><font color="#B22222"> * The output, tree[nTimers] is an array of PetscNestedEventTree-structs.</font>
+<a name="line625">625: </a><font color="#B22222"> * The tree is sorted so that the timers can be printed in the order of appearance.</font>
+<a name="line626">626: </a><font color="#B22222"> *</font>
+<a name="line627">627: </a><font color="#B22222"> * For tree-items which appear in the trees of multiple processes (which will be most items), the</font>
+<a name="line628">628: </a><font color="#B22222"> * following rule is followed:</font>
+<a name="line629">629: </a><font color="#B22222"> * + if information from my own process is available, then that is the information stored in tree.</font>
+<a name="line630">630: </a><font color="#B22222"> *   otherwise it is some other process's information.</font>
+<a name="line631">631: </a><font color="#B22222"> */</font>
+<a name="line632">632: </a><strong><font color="#4169E1"><a name="PetscLogNestedTreeCreate"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogNestedTreeCreate(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer, PetscNestedEventTree **p_tree, int *p_nTimers)</font></strong>
+<a name="line633">633: </a>{
+<a name="line634">634: </a>  PetscNestedEventTree *tree = NULL, *newTree;
+<a name="line635">635: </a>  int                  *treeIndices;
+<a name="line636">636: </a>  int                  nTimers, totalNTimers, i, j, iTimer0, maxDefaultTimer;
+<a name="line637">637: </a>  int                  yesno;
+<a name="line638">638: </a>  <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>            done;
+<a name="line639">639: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>       ierr;
+<a name="line640">640: </a>  int                  maxdepth;
+<a name="line641">641: </a>  int                  depth;
+<a name="line642">642: </a>  int                  illegalEvent;
+<a name="line643">643: </a>  int                  iextra;
+<a name="line644">644: </a>  NestedEventId        *nstPath, *nstMyPath;
+<a name="line645">645: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>             comm;
+
+<a name="line648">648: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+
+<a name="line650">650: </a>  <font color="#B22222">/* Calculate memory needed to store everybody's information and allocate tree */</font>
+<a name="line651">651: </a>  nTimers = 0;
+<a name="line652">652: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nNestedEvents; i++) nTimers += nestedEvents[i].nParents;
+
+<a name="line654">654: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nTimers,&amp;tree);
+
+<a name="line656">656: </a>  <font color="#B22222">/* Fill tree with readily available information */</font>
+<a name="line657">657: </a>  iTimer0 = 0;
+<a name="line658">658: </a>  maxDefaultTimer =0;
+<a name="line659">659: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nNestedEvents; i++) {
+<a name="line660">660: </a>    int           nParents          = nestedEvents[i].nParents;
+<a name="line661">661: </a>    NestedEventId nstEvent          = nestedEvents[i].nstEvent;
+<a name="line662">662: </a>    <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftParentsSorted = nestedEvents[i].dftParentsSorted;
+<a name="line663">663: </a>    <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftEvents        = nestedEvents[i].dftEvents;
+<a name="line664">664: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nParents; j++) {
+<a name="line665">665: </a>      maxDefaultTimer = <a href="../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(dftEvents[j],maxDefaultTimer);
+
+<a name="line667">667: </a>      tree[iTimer0+j].dftEvent   = dftEvents[j];
+<a name="line668">668: </a>      tree[iTimer0+j].nstEvent   = nstEvent;
+<a name="line669">669: </a>      tree[iTimer0+j].dftParent  = dftParentsSorted[j];
+<a name="line670">670: </a>      tree[iTimer0+j].own        = <a href="../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line672">672: </a>      tree[iTimer0+j].nstParent  = 0;
+<a name="line673">673: </a>      tree[iTimer0+j].depth      = 0;
+<a name="line674">674: </a>      tree[iTimer0+j].nstPath    = NULL;
+<a name="line675">675: </a>    }
+<a name="line676">676: </a>    iTimer0 += nParents;
+<a name="line677">677: </a>  }
+
+<a name="line679">679: </a>  <font color="#B22222">/* Calculate the global maximum for the default timer index, so array treeIndices can</font>
+<a name="line680">680: </a><font color="#B22222">   * be allocated only once */</font>
+<a name="line681">681: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;maxDefaultTimer, &amp;j, 1, MPI_INT, MPI_MAX, comm);
+<a name="line682">682: </a>  maxDefaultTimer = j;
+
+<a name="line684">684: </a>  <font color="#B22222">/* Find default timer's place in the tree */</font>
+<a name="line685">685: </a>  <a href="../../../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(maxDefaultTimer+1,&amp;treeIndices);
+<a name="line686">686: </a>  treeIndices[0] = 0;
+<a name="line687">687: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nTimers; i++) {
+<a name="line688">688: </a>    <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> dftEvent = tree[i].dftEvent;
+<a name="line689">689: </a>    treeIndices[dftEvent] = i;
+<a name="line690">690: </a>  }
+
+<a name="line692">692: </a>  <font color="#B22222">/* Find each dftParent's nested identification */</font>
+<a name="line693">693: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nTimers; i++) {
+<a name="line694">694: </a>    <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> dftParent = tree[i].dftParent;
+<a name="line695">695: </a>    <font color="#4169E1">if</font> (dftParent!= DFT_ID_AWAKE) {
+<a name="line696">696: </a>      int j = treeIndices[dftParent];
+<a name="line697">697: </a>      tree[i].nstParent = tree[j].nstEvent;
+<a name="line698">698: </a>    }
+<a name="line699">699: </a>  }
+
+<a name="line701">701: </a>  <font color="#B22222">/* Find depths for each timer path */</font>
+<a name="line702">702: </a>  done = <a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line703">703: </a>  maxdepth = 0;
+<a name="line704">704: </a>  <font color="#4169E1">while</font> (!done) {
+<a name="line705">705: </a>    done = <a href="../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line706">706: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nTimers; i++) {
+<a name="line707">707: </a>      <font color="#4169E1">if</font> (tree[i].dftParent == DFT_ID_AWAKE) {
+<a name="line708">708: </a>        tree[i].depth = 1;
+<a name="line709">709: </a>        maxdepth = <a href="../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(1,maxdepth);
+<a name="line710">710: </a>      } <font color="#4169E1">else</font> {
+<a name="line711">711: </a>        int j = treeIndices[tree[i].dftParent];
+<a name="line712">712: </a>        depth = 1+tree[j].depth;
+<a name="line713">713: </a>        <font color="#4169E1">if</font> (depth&gt;tree[i].depth) {
+<a name="line714">714: </a>          done          = <a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line715">715: </a>          tree[i].depth = depth;
+<a name="line716">716: </a>          maxdepth      = <a href="../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(depth,maxdepth);
+<a name="line717">717: </a>        }
+<a name="line718">718: </a>      }
+<a name="line719">719: </a>    }
+<a name="line720">720: </a>  }
+
+<a name="line722">722: </a>  <font color="#B22222">/* Allocate the paths in the entire tree */</font>
+<a name="line723">723: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nTimers; i++) {
+<a name="line724">724: </a>    depth = tree[i].depth;
+<a name="line725">725: </a>    <a href="../../../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(depth,&amp;tree[i].nstPath);
+<a name="line726">726: </a>  }
+
+<a name="line728">728: </a>  <font color="#B22222">/* Calculate the paths for all timers */</font>
+<a name="line729">729: </a>  <font color="#4169E1">for</font> (depth=1; depth&lt;=maxdepth; depth++) {
+<a name="line730">730: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nTimers; i++) {
+<a name="line731">731: </a>      <font color="#4169E1">if</font> (tree[i].depth==depth) {
+<a name="line732">732: </a>        <font color="#4169E1">if</font> (depth&gt;1) {
+<a name="line733">733: </a>          int    j = treeIndices[tree[i].dftParent];
+<a name="line734">734: </a>          <a href="../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(tree[i].nstPath,tree[j].nstPath,depth-1);
+<a name="line735">735: </a>        }
+<a name="line736">736: </a>        tree[i].nstPath[depth-1] = tree[i].nstEvent;
+<a name="line737">737: </a>      }
+<a name="line738">738: </a>    }
+<a name="line739">739: </a>  }
+<a name="line740">740: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(treeIndices);
+
+<a name="line742">742: </a>  <font color="#B22222">/* Sort the tree on basis of the paths */</font>
+<a name="line743">743: </a>  qsort(tree, nTimers, <font color="#4169E1">sizeof</font>(PetscNestedEventTree), compareTreeItems);
+
+<a name="line745">745: </a>  <font color="#B22222">/* Allocate an array to store paths */</font>
+<a name="line746">746: </a>  depth = maxdepth;
+<a name="line747">747: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;depth, &amp;maxdepth, 1, MPI_INT, MPI_MAX, comm);
+<a name="line748">748: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(maxdepth+1, &amp;nstPath);
+<a name="line749">749: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(maxdepth+1, &amp;nstMyPath);
+
+<a name="line751">751: </a>  <font color="#B22222">/* Find an illegal nested event index (1+largest nested event index) */</font>
+<a name="line752">752: </a>  illegalEvent = 1+nestedEvents[nNestedEvents-1].nstEvent;
+<a name="line753">753: </a>  i = illegalEvent;
+<a name="line754">754: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;i, &amp;illegalEvent, 1, MPI_INT, MPI_MAX, comm);
+
+<a name="line756">756: </a>  <font color="#B22222">/* First, detect timers which are not available in this process, but are available in others</font>
+<a name="line757">757: </a><font color="#B22222">   *        Allocate a new tree, that can contain all timers</font>
+<a name="line758">758: </a><font color="#B22222">   * Then,  fill the new tree with all (own and not-own) timers */</font>
+<a name="line759">759: </a>  newTree= NULL;
+<a name="line760">760: </a>  <font color="#4169E1">for</font> (yesno=0; yesno&lt;=1; yesno++) {
+<a name="line761">761: </a>    depth  = 1;
+<a name="line762">762: </a>    i      = 0;
+<a name="line763">763: </a>    iextra = 0;
+<a name="line764">764: </a>    <font color="#4169E1">while</font> (depth&gt;0) {
+<a name="line765">765: </a>      int       j;
+<a name="line766">766: </a>      <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> same;
+
+<a name="line768">768: </a>      <font color="#B22222">/* Construct the next path in this process's tree:</font>
+<a name="line769">769: </a><font color="#B22222">       * if necessary, supplement with invalid path entries */</font>
+<a name="line770">770: </a>      depth++;
+<a name="line771">771: </a>      <font color="#4169E1">if</font> (depth &gt; maxdepth + 1) <a href="../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_PLIB,<font color="#666666">"Depth %d &gt; maxdepth+1 %d"</font>,depth,maxdepth+1);
+<a name="line772">772: </a>      <font color="#4169E1">if</font> (i&lt;nTimers) {
+<a name="line773">773: </a>        <font color="#4169E1">for</font> (j=0;             j&lt;tree[i].depth; j++) nstMyPath[j] = tree[i].nstPath[j];
+<a name="line774">774: </a>        <font color="#4169E1">for</font> (j=tree[i].depth; j&lt;depth;         j++) nstMyPath[j] = illegalEvent;
+<a name="line775">775: </a>      } <font color="#4169E1">else</font> {
+<a name="line776">776: </a>        <font color="#4169E1">for</font> (j=0;             j&lt;depth;         j++) nstMyPath[j] = illegalEvent;
+<a name="line777">777: </a>      }
+
+<a name="line779">779: </a>      <font color="#B22222">/* Communicate with other processes to obtain the next path and its depth */</font>
+<a name="line780">780: </a>      <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(nstMyPath, nstPath, depth, MPI_INT, MPI_MIN, comm);
+<a name="line781">781: </a>      <font color="#4169E1">for</font> (j=depth-1; (int) j&gt;=0; j--) {
+<a name="line782">782: </a>        <font color="#4169E1">if</font> (nstPath[j]==illegalEvent) depth=j;
+<a name="line783">783: </a>      }
+
+<a name="line785">785: </a>      <font color="#4169E1">if</font> (depth&gt;0) {
+<a name="line786">786: </a>        <font color="#B22222">/* If the path exists */</font>
+
+<a name="line788">788: </a>        <font color="#B22222">/* check whether the next path is the same as this process's next path */</font>
+<a name="line789">789: </a>        same = <a href="../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line790">790: </a>        <font color="#4169E1">for</font> (j=0; same &amp;&amp; j&lt;depth; j++) { same = (same &amp;&amp;  nstMyPath[j] == nstPath[j]) ? <a href="../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;}
+
+<a name="line792">792: </a>        <font color="#4169E1">if</font> (same) {
+<a name="line793">793: </a>          <font color="#B22222">/* Register 'own path' */</font>
+<a name="line794">794: </a>          <font color="#4169E1">if</font> (newTree) newTree[i+iextra] = tree[i];
+<a name="line795">795: </a>          i++;
+<a name="line796">796: </a>        } <font color="#4169E1">else</font> {
+<a name="line797">797: </a>          <font color="#B22222">/* Register 'not an own path' */</font>
+<a name="line798">798: </a>          <font color="#4169E1">if</font> (newTree) {
+<a name="line799">799: </a>            newTree[i+iextra].nstEvent   = nstPath[depth-1];
+<a name="line800">800: </a>            newTree[i+iextra].own        = <a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line801">801: </a>            newTree[i+iextra].depth      = depth;
+<a name="line802">802: </a>            <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(depth, &amp;newTree[i+iextra].nstPath);
+<a name="line803">803: </a>            <font color="#4169E1">for</font> (j=0; j&lt;depth; j++) {newTree[i+iextra].nstPath[j] = nstPath[j];}
+
+<a name="line805">805: </a>            newTree[i+iextra].dftEvent  = 0;
+<a name="line806">806: </a>            newTree[i+iextra].dftParent = 0;
+<a name="line807">807: </a>            newTree[i+iextra].nstParent = 0;
+<a name="line808">808: </a>          }
+<a name="line809">809: </a>          iextra++;
+<a name="line810">810: </a>        }
+
+<a name="line812">812: </a>      }
+<a name="line813">813: </a>    }
+
+<a name="line815">815: </a>    <font color="#B22222">/* Determine the size of the complete tree (with own and not-own timers) and allocate the new tree */</font>
+<a name="line816">816: </a>    totalNTimers = nTimers + iextra;
+<a name="line817">817: </a>    <font color="#4169E1">if</font> (!newTree) {
+<a name="line818">818: </a>      <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(totalNTimers, &amp;newTree);
+<a name="line819">819: </a>    }
+<a name="line820">820: </a>  }
+<a name="line821">821: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(nstPath);
+<a name="line822">822: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(nstMyPath);
+<a name="line823">823: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(tree);
+<a name="line824">824: </a>  tree = newTree;
+<a name="line825">825: </a>  newTree = NULL;
+
+<a name="line827">827: </a>  <font color="#B22222">/* Set return value and return */</font>
+<a name="line828">828: </a>  *p_tree    = tree;
+<a name="line829">829: </a>  *p_nTimers = totalNTimers;
+<a name="line830">830: </a>  <font color="#4169E1">return</font>(0);
+<a name="line831">831: </a>}
+
+<a name="line833">833: </a><font color="#B22222">/*</font>
+<a name="line834">834: </a><font color="#B22222"> * Delete the nested timer tree</font>
+<a name="line835">835: </a><font color="#B22222"> */</font>
+<a name="line836">836: </a><strong><font color="#4169E1"><a name="PetscLogNestedTreeDestroy"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogNestedTreeDestroy(PetscNestedEventTree *tree, int nTimers)</font></strong>
+<a name="line837">837: </a>{
+<a name="line838">838: </a>  int             i;
+<a name="line839">839: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line842">842: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nTimers; i++) {
+<a name="line843">843: </a>    <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(tree[i].nstPath);
+<a name="line844">844: </a>  }
+<a name="line845">845: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(tree);
+<a name="line846">846: </a>  <font color="#4169E1">return</font>(0);
+<a name="line847">847: </a>}
+
+<a name="line849">849: </a><font color="#B22222">/* Print the global performance: max, max/min, average and total of</font>
+<a name="line850">850: </a><font color="#B22222"> *      time, objects, flops, flops/sec, memory, MPI messages, MPI message lengths, MPI reductions.</font>
+<a name="line851">851: </a><font color="#B22222"> */</font>
+<a name="line852">852: </a><strong><font color="#4169E1"><a name="PetscPrintXMLNestedLinePerfResults"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscPrintXMLNestedLinePerfResults(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,const char *name,<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> value,<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> minthreshold,<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> maxthreshold,<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> minmaxtreshold)</font></strong>
+<a name="line853">853: </a>{
+<a name="line854">854: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>       comm;                          <font color="#B22222">/* MPI communicator in reduction */</font>
+<a name="line855">855: </a>  <a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    rank;                          <font color="#B22222">/* rank of this process */</font>
+<a name="line856">856: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> val_in[2], max[2], min[2];
+<a name="line857">857: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> minvalue, maxvalue, tot;
+<a name="line858">858: </a>  <a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+<a name="line859">859: </a>  <a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    minLoc, maxLoc;
+
+<a name="line863">863: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+<a name="line864">864: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm, &amp;size);
+<a name="line865">865: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(comm, &amp;rank);
+<a name="line866">866: </a>  val_in[0] = value;
+<a name="line867">867: </a>  val_in[1] = (<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>) rank;
+<a name="line868">868: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(val_in, max,  1, MPIU_2PETSCLOGDOUBLE, MPI_MAXLOC, comm);
+<a name="line869">869: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(val_in, min,  1, MPIU_2PETSCLOGDOUBLE, MPI_MINLOC, comm);
+<a name="line870">870: </a>  maxvalue = max[0];
+<a name="line871">871: </a>  maxLoc   = (<a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>) max[1];
+<a name="line872">872: </a>  minvalue = min[0];
+<a name="line873">873: </a>  minLoc   = (<a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>) min[1];
+<a name="line874">874: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;value, &amp;tot, 1, MPIU_PETSCLOGDOUBLE,  MPI_SUM,    comm);
+
+<a name="line876">876: </a>  <font color="#4169E1">if</font> (maxvalue&lt;maxthreshold &amp;&amp; minvalue&gt;=minthreshold) {
+<a name="line877">877: </a>    <font color="#B22222">/* One call per parent or NO value: don't print */</font>
+<a name="line878">878: </a>  } <font color="#4169E1">else</font> {
+<a name="line879">879: </a>     PetscViewerXMLStartSection(viewer, name, NULL);
+<a name="line880">880: </a>     <font color="#4169E1">if</font> (maxvalue&gt;minvalue*minmaxtreshold) {
+<a name="line881">881: </a>       PetscViewerXMLPutDouble(viewer, <font color="#666666">"avgvalue"</font>, NULL, tot/size, <font color="#666666">"%g"</font>);
+<a name="line882">882: </a>       PetscViewerXMLPutDouble(viewer, <font color="#666666">"minvalue"</font>, NULL, minvalue, <font color="#666666">"%g"</font>);
+<a name="line883">883: </a>       PetscViewerXMLPutDouble(viewer, <font color="#666666">"maxvalue"</font>, NULL, maxvalue, <font color="#666666">"%g"</font>);
+<a name="line884">884: </a>       PetscViewerXMLPutInt(   viewer, <font color="#666666">"minloc"</font>  , NULL, minLoc);
+<a name="line885">885: </a>       PetscViewerXMLPutInt(   viewer, <font color="#666666">"maxloc"</font>  , NULL, maxLoc);
+<a name="line886">886: </a>     } <font color="#4169E1">else</font> {
+<a name="line887">887: </a>       PetscViewerXMLPutDouble(viewer, <font color="#666666">"value"</font>, NULL, tot/size, <font color="#666666">"%g"</font>);
+<a name="line888">888: </a>     }
+<a name="line889">889: </a>     PetscViewerXMLEndSection(viewer, name);
+<a name="line890">890: </a>  }
+<a name="line891">891: </a>  <font color="#4169E1">return</font>(0);
+<a name="line892">892: </a>}
+
+<a name="line894">894: </a><strong><font color="#228B22">#define N_COMM 8</font></strong>
+<a name="line895">895: </a><strong><font color="#4169E1"><a name="PetscLogNestedTreePrintLine"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogNestedTreePrintLine(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,PetscEventPerfInfo perfInfo,<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> countsPerCall,int parentCount,int depth,const char *name,<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> totalTime,<a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *isPrinted)</font></strong>
+<a name="line896">896: </a>{
+<a name="line897">897: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> time = perfInfo.time;
+<a name="line898">898: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> timeMx;
+<a name="line900">900: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>       comm;
+
+<a name="line903">903: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+<a name="line904">904: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;time, &amp;timeMx, 1, MPIU_PETSCLOGDOUBLE, MPI_MAX, comm);
+<a name="line905">905: </a>  *isPrinted = ((timeMx/totalTime) &gt;= THRESHOLD) ? <a href="../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line906">906: </a>  <font color="#4169E1">if</font> (*isPrinted) {
+<a name="line907">907: </a>    PetscViewerXMLStartSection(viewer, <font color="#666666">"event"</font>, NULL);
+<a name="line908">908: </a>    PetscViewerXMLPutString(viewer, <font color="#666666">"name"</font>, NULL, name);
+<a name="line909">909: </a>    PetscPrintXMLNestedLinePerfResults(viewer, <font color="#666666">"time"</font>, time/totalTime*100.0, 0, 0, 1.02);
+<a name="line910">910: </a>    PetscPrintXMLNestedLinePerfResults(viewer, <font color="#666666">"ncalls"</font>, parentCount&gt;0 ? countsPerCall : 0, 0.99, 1.01, 1.02);
+<a name="line911">911: </a>    PetscPrintXMLNestedLinePerfResults(viewer, <font color="#666666">"mflops"</font>, time&gt;=timeMx*0.001 ? 1e-6*perfInfo.flops/time : 0, 0, 0.01, 1.05);
+<a name="line912">912: </a>    PetscPrintXMLNestedLinePerfResults(viewer, <font color="#666666">"mbps"</font>,time&gt;=timeMx*0.001 ? perfInfo.messageLength/(1024*1024*time) : 0, 0, 0.01, 1.05);
+<a name="line913">913: </a>    PetscPrintXMLNestedLinePerfResults(viewer, <font color="#666666">"nreductsps"</font>, time&gt;=timeMx*0.001 ? perfInfo.numReductions/time : 0, 0, 0.01, 1.05);
+<a name="line914">914: </a>  }
+<a name="line915">915: </a>  <font color="#4169E1">return</font>(0);
+<a name="line916">916: </a>}
+
+<a name="line918">918: </a><font color="#B22222">/* Count the number of times the parent event was called */</font>
+
+<a name="line920">920: </a><strong><font color="#4169E1"><a name="countParents"></a>static int countParents( const PetscNestedEventTree *tree, PetscEventPerfInfo *eventPerfInfo, int i)</font></strong>
+<a name="line921">921: </a>{
+<a name="line922">922: </a>  <font color="#4169E1">if</font> (tree[i].depth&lt;=1) {
+<a name="line923">923: </a>    <font color="#4169E1">return</font> 1;  <font color="#B22222">/* Main event: only once */</font>
+<a name="line924">924: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (!tree[i].own) {
+<a name="line925">925: </a>    <font color="#4169E1">return</font> 1;  <font color="#B22222">/* This event didn't happen in this process, but did in another */</font>
+<a name="line926">926: </a>  } <font color="#4169E1">else</font> {
+<a name="line927">927: </a>    int iParent;
+<a name="line928">928: </a>    <font color="#4169E1">for</font> (iParent=i-1; iParent&gt;=0; iParent--) {
+<a name="line929">929: </a>      <font color="#4169E1">if</font> (tree[iParent].depth == tree[i].depth-1) <font color="#4169E1">break</font>;
+<a name="line930">930: </a>    }
+<a name="line931">931: </a>    <font color="#4169E1">if</font> (tree[iParent].depth != tree[i].depth-1) {
+<a name="line932">932: </a>      <font color="#B22222">/* *****  Internal error: cannot find parent */</font>
+<a name="line933">933: </a>      <font color="#4169E1">return</font> -2;
+<a name="line934">934: </a>    } <font color="#4169E1">else</font> {
+<a name="line935">935: </a>      <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> dftEvent  = tree[iParent].dftEvent;
+<a name="line936">936: </a>      <font color="#4169E1">return</font> eventPerfInfo[dftEvent].count;
+<a name="line937">937: </a>    }
+<a name="line938">938: </a>  }
+<a name="line939">939: </a>}
+
+<a name="line941">941: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line942">942: </a>  int             id;
+<a name="line943">943: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>  val;
+<a name="line944">944: </a>} PetscSortItem;
+
+<a name="line946">946: </a><strong><font color="#4169E1"><a name="compareSortItems"></a>static int compareSortItems(const void *item1_, const void *item2_)</font></strong>
+<a name="line947">947: </a>{
+<a name="line948">948: </a>  PetscSortItem *item1 = (PetscSortItem *) item1_;
+<a name="line949">949: </a>  PetscSortItem *item2 = (PetscSortItem *) item2_;
+<a name="line950">950: </a>  <font color="#4169E1">if</font> (item1-&gt;val &gt; item2-&gt;val) <font color="#4169E1">return</font> -1;
+<a name="line951">951: </a>  <font color="#4169E1">if</font> (item1-&gt;val &lt; item2-&gt;val) <font color="#4169E1">return</font> +1;
+<a name="line952">952: </a>  <font color="#4169E1">return</font> 0;
+<a name="line953">953: </a>}
+
+<a name="line955">955: </a><strong><font color="#4169E1"><a name="PetscLogNestedTreePrint"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogNestedTreePrint(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer, PetscNestedEventTree *tree, int nTimers, int iStart, <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> totalTime)</font></strong>
+<a name="line956">956: </a>{
+<a name="line957">957: </a>  int                depth = tree[iStart].depth;
+<a name="line958">958: </a>  const char         *name;
+<a name="line959">959: </a>  int                parentCount, nChildren;
+<a name="line960">960: </a>  PetscSortItem      *children;
+<a name="line961">961: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line962">962: </a>  const int          stage = MAINSTAGE;
+<a name="line963">963: </a>  PetscStageLog      stageLog;
+<a name="line964">964: </a>  PetscEventRegInfo  *eventRegInfo;
+<a name="line965">965: </a>  PetscEventPerfInfo *eventPerfInfo;
+<a name="line966">966: </a>  PetscEventPerfInfo myPerfInfo,  otherPerfInfo, selfPerfInfo;
+<a name="line967">967: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>     countsPerCall;
+<a name="line968">968: </a>  <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>          wasPrinted;
+<a name="line969">969: </a>  <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>          childWasPrinted;
+<a name="line970">970: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>           comm;
+
+<a name="line973">973: </a>  <font color="#B22222">/* Look up the name of the event and its PerfInfo */</font>
+<a name="line974">974: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogGetStageLog.html#PetscLogGetStageLog">PetscLogGetStageLog</a>(&amp;stageLog);
+<a name="line975">975: </a>  eventRegInfo  = stageLog-&gt;eventLog-&gt;eventInfo;
+<a name="line976">976: </a>  eventPerfInfo = stageLog-&gt;stageInfo[stage].eventLog-&gt;eventInfo;
+<a name="line977">977: </a>  name = eventRegInfo[(<a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>)tree[iStart].nstEvent].name;
+<a name="line978">978: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+
+<a name="line980">980: </a>  <font color="#B22222">/* Count the number of child processes */</font>
+<a name="line981">981: </a>  nChildren = 0;
+<a name="line982">982: </a>  {
+<a name="line983">983: </a>    int i;
+<a name="line984">984: </a>    <font color="#4169E1">for</font> (i=iStart+1; i&lt;nTimers; i++) {
+<a name="line985">985: </a>      <font color="#4169E1">if</font> (tree[i].depth &lt;= depth) <font color="#4169E1">break</font>;
+<a name="line986">986: </a>      <font color="#4169E1">if</font> (tree[i].depth == depth + 1) nChildren++;
+<a name="line987">987: </a>    }
+<a name="line988">988: </a>  }
+
+<a name="line990">990: </a>  <font color="#4169E1">if</font> (nChildren&gt;0) {
+<a name="line991">991: </a>    <font color="#B22222">/* Create an array for the id-s and maxTimes of the children,</font>
+<a name="line992">992: </a><font color="#B22222">     *  leaving 2 spaces for self-time and other-time */</font>
+<a name="line993">993: </a>    int            i;
+<a name="line994">994: </a>    <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> *times, *maxTimes;
+
+<a name="line996">996: </a>    <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nChildren+2,&amp;children);
+<a name="line997">997: </a>    nChildren = 0;
+<a name="line998">998: </a>    <font color="#4169E1">for</font> (i=iStart+1; i&lt;nTimers; i++) {
+<a name="line999">999: </a>      <font color="#4169E1">if</font> (tree[i].depth&lt;=depth) <font color="#4169E1">break</font>;
+<a name="line1000">1000: </a>      <font color="#4169E1">if</font> (tree[i].depth == depth + 1) {
+<a name="line1001">1001: </a>        children[nChildren].id  = i;
+<a name="line1002">1002: </a>        children[nChildren].val = eventPerfInfo[tree[i].dftEvent].time ;
+<a name="line1003">1003: </a>        nChildren++;
+<a name="line1004">1004: </a>      }
+<a name="line1005">1005: </a>    }
+
+<a name="line1007">1007: </a>    <font color="#B22222">/* Calculate the children's maximum times, to see whether children will be ignored or printed */</font>
+<a name="line1008">1008: </a>    <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nChildren,&amp;times);
+<a name="line1009">1009: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nChildren; i++) { times[i] = children[i].val; }
+
+<a name="line1011">1011: </a>    <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nChildren,&amp;maxTimes);
+<a name="line1012">1012: </a>    <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(times, maxTimes, nChildren, MPIU_PETSCLOGDOUBLE, MPI_MAX, comm);
+<a name="line1013">1013: </a>    <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(times);
+
+<a name="line1015">1015: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nChildren; i++) { children[i].val = maxTimes[i]; }
+<a name="line1016">1016: </a>    <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(maxTimes);
+<a name="line1017">1017: </a>  }
+
+<a name="line1019">1019: </a>  <font color="#4169E1">if</font> (!tree[iStart].own) {
+<a name="line1020">1020: </a>  <font color="#B22222">/* Set values for a timer that was not activated in this process</font>
+<a name="line1021">1021: </a><font color="#B22222">   * (but was, in other processes of this run) */</font>
+<a name="line1022">1022: </a>    <a href="../../../docs/manualpages/Sys/PetscMemzero.html#PetscMemzero">PetscMemzero</a>(&amp;myPerfInfo,<font color="#4169E1">sizeof</font>(myPerfInfo));
+
+<a name="line1024">1024: </a>    selfPerfInfo  = myPerfInfo;
+<a name="line1025">1025: </a>    otherPerfInfo = myPerfInfo;
+
+<a name="line1027">1027: </a>    parentCount   = 1;
+<a name="line1028">1028: </a>    countsPerCall = 0;
+<a name="line1029">1029: </a>  } <font color="#4169E1">else</font> {
+<a name="line1030">1030: </a>  <font color="#B22222">/* Set the values for a timer that was activated in this process */</font>
+<a name="line1031">1031: </a>    int           i;
+<a name="line1032">1032: </a>    <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> dftEvent   = tree[iStart].dftEvent;
+
+<a name="line1034">1034: </a>    parentCount    = countParents( tree, eventPerfInfo, iStart);
+<a name="line1035">1035: </a>    myPerfInfo     = eventPerfInfo[dftEvent];
+<a name="line1036">1036: </a>    countsPerCall  = (<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>) myPerfInfo.count / (<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>) parentCount;
+
+<a name="line1038">1038: </a>    selfPerfInfo                = myPerfInfo;
+<a name="line1039">1039: </a>    otherPerfInfo.time          = 0;
+<a name="line1040">1040: </a>    otherPerfInfo.flops         = 0;
+<a name="line1041">1041: </a>    otherPerfInfo.numMessages   = 0;
+<a name="line1042">1042: </a>    otherPerfInfo.messageLength = 0;
+<a name="line1043">1043: </a>    otherPerfInfo.numReductions = 0;
+
+<a name="line1045">1045: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nChildren; i++) {
+<a name="line1046">1046: </a>      <font color="#B22222">/* For all child counters: subtract the child values from self-timers */</font>
+
+<a name="line1048">1048: </a>      <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>      dftChild  = tree[children[i].id].dftEvent;
+<a name="line1049">1049: </a>      PetscEventPerfInfo childPerfInfo = eventPerfInfo[dftChild];
+
+<a name="line1051">1051: </a>      selfPerfInfo.time          -= childPerfInfo.time;
+<a name="line1052">1052: </a>      selfPerfInfo.flops         -= childPerfInfo.flops;
+<a name="line1053">1053: </a>      selfPerfInfo.numMessages   -= childPerfInfo.numMessages;
+<a name="line1054">1054: </a>      selfPerfInfo.messageLength -= childPerfInfo.messageLength;
+<a name="line1055">1055: </a>      selfPerfInfo.numReductions -= childPerfInfo.numReductions;
+
+<a name="line1057">1057: </a>      <font color="#4169E1">if</font> ((children[i].val/totalTime) &lt; THRESHOLD) {
+<a name="line1058">1058: </a>        <font color="#B22222">/* Add them to 'other' if the time is ignored in the output */</font>
+<a name="line1059">1059: </a>        otherPerfInfo.time          += childPerfInfo.time;
+<a name="line1060">1060: </a>        otherPerfInfo.flops         += childPerfInfo.flops;
+<a name="line1061">1061: </a>        otherPerfInfo.numMessages   += childPerfInfo.numMessages;
+<a name="line1062">1062: </a>        otherPerfInfo.messageLength += childPerfInfo.messageLength;
+<a name="line1063">1063: </a>        otherPerfInfo.numReductions += childPerfInfo.numReductions;
+<a name="line1064">1064: </a>      }
+<a name="line1065">1065: </a>    }
+<a name="line1066">1066: </a>  }
+
+<a name="line1068">1068: </a>  <font color="#B22222">/* Main output for this timer */</font>
+<a name="line1069">1069: </a>  PetscLogNestedTreePrintLine(viewer, myPerfInfo, countsPerCall, parentCount, depth, name, totalTime, &amp;wasPrinted);
+
+<a name="line1071">1071: </a>  <font color="#B22222">/* Now print the lines for the children */</font>
+<a name="line1072">1072: </a>  <font color="#4169E1">if</font> (nChildren &gt; 0) {
+<a name="line1073">1073: </a>    <font color="#B22222">/* Calculate max-times for 'self' and 'other' */</font>
+<a name="line1074">1074: </a>    int            i;
+<a name="line1075">1075: </a>    <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> times[2], maxTimes[2];
+<a name="line1076">1076: </a>    times[0] = selfPerfInfo.time;   times[1] = otherPerfInfo.time;
+<a name="line1077">1077: </a>    <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(times, maxTimes, 2, MPIU_PETSCLOGDOUBLE, MPI_MAX, comm);
+<a name="line1078">1078: </a>    children[nChildren+0].id = -1;
+<a name="line1079">1079: </a>    children[nChildren+0].val = maxTimes[0];
+<a name="line1080">1080: </a>    children[nChildren+1].id = -2;
+<a name="line1081">1081: </a>    children[nChildren+1].val = maxTimes[1];
+
+<a name="line1083">1083: </a>    <font color="#B22222">/* Now sort the children (including 'self' and 'other') on total time */</font>
+<a name="line1084">1084: </a>    qsort(children, nChildren+2, <font color="#4169E1">sizeof</font>(PetscSortItem), compareSortItems);
+
+<a name="line1086">1086: </a>    <font color="#B22222">/* Print (or ignore) the children in ascending order of total time */</font>
+<a name="line1087">1087: </a>    PetscViewerXMLStartSection(viewer,<font color="#666666">"events"</font>, NULL);
+<a name="line1088">1088: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nChildren+2; i++) {
+<a name="line1089">1089: </a>      <font color="#4169E1">if</font> ((children[i].val/totalTime) &lt; THRESHOLD) {
+<a name="line1090">1090: </a>        <font color="#B22222">/* ignored: no output */</font>
+<a name="line1091">1091: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (children[i].id==-1) {
+<a name="line1092">1092: </a>        PetscLogNestedTreePrintLine(viewer, selfPerfInfo, 1, parentCount, depth+1, <font color="#666666">"self"</font>, totalTime, &amp;childWasPrinted);
+<a name="line1093">1093: </a>        <font color="#4169E1">if</font> (childWasPrinted) {
+<a name="line1094">1094: </a>          PetscViewerXMLEndSection(viewer,<font color="#666666">"event"</font>);
+<a name="line1095">1095: </a>        }
+<a name="line1096">1096: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (children[i].id==-2) {
+<a name="line1097">1097: </a>        size_t  len;
+<a name="line1098">1098: </a>        char    *otherName;
+
+<a name="line1100">1100: </a>        <a href="../../../docs/manualpages/Sys/PetscStrlen.html#PetscStrlen">PetscStrlen</a>(name,&amp;len);
+<a name="line1101">1101: </a>        <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(len+16,&amp;otherName);
+<a name="line1102">1102: </a>        <a href="../../../docs/manualpages/Sys/PetscSNPrintf.html#PetscSNPrintf">PetscSNPrintf</a>(otherName,len+16,<font color="#666666">"%s: other-timed"</font>,name);
+<a name="line1103">1103: </a>        PetscLogNestedTreePrintLine(viewer, otherPerfInfo, 1, 1, depth+1, otherName, totalTime, &amp;childWasPrinted);
+<a name="line1104">1104: </a>        <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(otherName);
+<a name="line1105">1105: </a>        <font color="#4169E1">if</font> (childWasPrinted) {
+<a name="line1106">1106: </a>          PetscViewerXMLEndSection(viewer,<font color="#666666">"event"</font>);
+<a name="line1107">1107: </a>        }
+<a name="line1108">1108: </a>      } <font color="#4169E1">else</font> {
+<a name="line1109">1109: </a>        <font color="#B22222">/* Print the child with a recursive call to this function */</font>
+<a name="line1110">1110: </a>        PetscLogNestedTreePrint(viewer, tree, nTimers, children[i].id, totalTime);
+<a name="line1111">1111: </a>      }
+<a name="line1112">1112: </a>    }
+<a name="line1113">1113: </a>    PetscViewerXMLEndSection(viewer,<font color="#666666">"events"</font>);
+<a name="line1114">1114: </a>    <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(children);
+<a name="line1115">1115: </a>  }
+
+<a name="line1117">1117: </a>  <font color="#4169E1">if</font> (wasPrinted) {
+<a name="line1118">1118: </a>    PetscViewerXMLEndSection(viewer, <font color="#666666">"event"</font>);
+<a name="line1119">1119: </a>  }
+<a name="line1120">1120: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1121">1121: </a>}
+
+<a name="line1123">1123: </a><strong><font color="#4169E1"><a name="PetscLogNestedTreePrintTop"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogNestedTreePrintTop(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer, PetscNestedEventTree *tree, int nTimers, <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> totalTime)</font></strong>
+<a name="line1124">1124: </a>{
+<a name="line1125">1125: </a>  int                i, nChildren;
+<a name="line1126">1126: </a>  PetscSortItem      *children;
+<a name="line1127">1127: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1128">1128: </a>  const int          stage = MAINSTAGE;
+<a name="line1129">1129: </a>  PetscStageLog      stageLog;
+<a name="line1130">1130: </a>  PetscEventPerfInfo *eventPerfInfo;
+<a name="line1131">1131: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>           comm;
+
+<a name="line1134">1134: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+
+<a name="line1136">1136: </a>  <font color="#B22222">/* Look up the PerfInfo */</font>
+<a name="line1137">1137: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogGetStageLog.html#PetscLogGetStageLog">PetscLogGetStageLog</a>(&amp;stageLog);
+<a name="line1138">1138: </a>  eventPerfInfo = stageLog-&gt;stageInfo[stage].eventLog-&gt;eventInfo;
+
+<a name="line1140">1140: </a>  <font color="#B22222">/* Count the number of child processes, and count total time */</font>
+<a name="line1141">1141: </a>  nChildren = 0;
+<a name="line1142">1142: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nTimers; i++)
+<a name="line1143">1143: </a>    <font color="#4169E1">if</font> (tree[i].depth==1) nChildren++;
+
+<a name="line1145">1145: </a>  <font color="#4169E1">if</font> (nChildren&gt;0) {
+<a name="line1146">1146: </a>    <font color="#B22222">/* Create an array for the id-s and maxTimes of the children,</font>
+<a name="line1147">1147: </a><font color="#B22222">     *  leaving 2 spaces for self-time and other-time */</font>
+<a name="line1148">1148: </a>    <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> *times, *maxTimes;
+
+<a name="line1150">1150: </a>    <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nChildren,&amp;children);
+<a name="line1151">1151: </a>    nChildren = 0;
+<a name="line1152">1152: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nTimers; i++) {
+<a name="line1153">1153: </a>      <font color="#4169E1">if</font> (tree[i].depth == 1) {
+<a name="line1154">1154: </a>        children[nChildren].id  = i;
+<a name="line1155">1155: </a>        children[nChildren].val = eventPerfInfo[tree[i].dftEvent].time ;
+<a name="line1156">1156: </a>        nChildren++;
+<a name="line1157">1157: </a>      }
+<a name="line1158">1158: </a>    }
+
+<a name="line1160">1160: </a>    <font color="#B22222">/* Calculate the children's maximum times, to sort them */</font>
+<a name="line1161">1161: </a>    <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nChildren,&amp;times);
+<a name="line1162">1162: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nChildren; i++) { times[i] = children[i].val; }
+
+<a name="line1164">1164: </a>    <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nChildren,&amp;maxTimes);
+<a name="line1165">1165: </a>    <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(times, maxTimes, nChildren, MPIU_PETSCLOGDOUBLE, MPI_MAX, comm);
+<a name="line1166">1166: </a>    <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(times);
+
+<a name="line1168">1168: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nChildren; i++) { children[i].val = maxTimes[i]; }
+<a name="line1169">1169: </a>    <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(maxTimes);
+
+<a name="line1171">1171: </a>    <font color="#B22222">/* Now sort the children on total time */</font>
+<a name="line1172">1172: </a>    qsort(children, nChildren, <font color="#4169E1">sizeof</font>(PetscSortItem), compareSortItems);
+<a name="line1173">1173: </a>    <font color="#B22222">/* Print (or ignore) the children in ascending order of total time */</font>
+<a name="line1174">1174: </a>    PetscViewerXMLStartSection(viewer, <font color="#666666">"timertree"</font>, <font color="#666666">"Timings tree"</font>);
+<a name="line1175">1175: </a>    PetscViewerXMLPutDouble(viewer, <font color="#666666">"totaltime"</font>, NULL, totalTime, <font color="#666666">"%f"</font>);
+<a name="line1176">1176: </a>    PetscViewerXMLPutDouble(viewer, <font color="#666666">"timethreshold"</font>, NULL, thresholdTime, <font color="#666666">"%f"</font>);
+
+<a name="line1178">1178: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nChildren; i++) {
+<a name="line1179">1179: </a>      <font color="#4169E1">if</font> ((children[i].val/totalTime) &lt; THRESHOLD) {
+<a name="line1180">1180: </a>        <font color="#B22222">/* ignored: no output */</font>
+<a name="line1181">1181: </a>      } <font color="#4169E1">else</font> {
+<a name="line1182">1182: </a>        <font color="#B22222">/* Print the child with a recursive call to this function */</font>
+<a name="line1183">1183: </a>        PetscLogNestedTreePrint(viewer, tree, nTimers, children[i].id, totalTime);
+<a name="line1184">1184: </a>      }
+<a name="line1185">1185: </a>    }
+<a name="line1186">1186: </a>    PetscViewerXMLEndSection(viewer, <font color="#666666">"timertree"</font>);
+<a name="line1187">1187: </a>    <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(children);
+<a name="line1188">1188: </a>  }
+<a name="line1189">1189: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1190">1190: </a>}
+
+<a name="line1192">1192: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line1193">1193: </a>  char           *name;
+<a name="line1194">1194: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> time;
+<a name="line1195">1195: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> flops;
+<a name="line1196">1196: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> numMessages;
+<a name="line1197">1197: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> messageLength;
+<a name="line1198">1198: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> numReductions;
+<a name="line1199">1199: </a>} PetscSelfTimer;
+
+<a name="line1201">1201: </a><strong><font color="#4169E1"><a name="PetscCalcSelfTime"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscCalcSelfTime(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer, PetscSelfTimer **p_self, int *p_nstMax)</font></strong>
+<a name="line1202">1202: </a>{
+<a name="line1203">1203: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1204">1204: </a>  const int          stage = MAINSTAGE;
+<a name="line1205">1205: </a>  PetscStageLog      stageLog;
+<a name="line1206">1206: </a>  PetscEventRegInfo  *eventRegInfo;
+<a name="line1207">1207: </a>  PetscEventPerfInfo *eventPerfInfo;
+<a name="line1208">1208: </a>  PetscSelfTimer     *selftimes;
+<a name="line1209">1209: </a>  PetscSelfTimer     *totaltimes;
+<a name="line1210">1210: </a>  NestedEventId      *nstEvents;
+<a name="line1211">1211: </a>  int                i, j, maxDefaultTimer;
+<a name="line1212">1212: </a>  NestedEventId      nst;
+<a name="line1213">1213: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>      dft;
+<a name="line1214">1214: </a>  int                nstMax, nstMax_local;
+<a name="line1215">1215: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>           comm;
+
+<a name="line1218">1218: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+<a name="line1219">1219: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogGetStageLog.html#PetscLogGetStageLog">PetscLogGetStageLog</a>(&amp;stageLog);
+<a name="line1220">1220: </a>  eventRegInfo  = stageLog-&gt;eventLog-&gt;eventInfo;
+<a name="line1221">1221: </a>  eventPerfInfo = stageLog-&gt;stageInfo[stage].eventLog-&gt;eventInfo;
+
+<a name="line1223">1223: </a>  <font color="#B22222">/* For each default timer, calculate the (one) nested timer that it corresponds to. */</font>
+<a name="line1224">1224: </a>  maxDefaultTimer =0;
+<a name="line1225">1225: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nNestedEvents; i++) {
+<a name="line1226">1226: </a>    int           nParents   = nestedEvents[i].nParents;
+<a name="line1227">1227: </a>    <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftEvents = nestedEvents[i].dftEvents;
+<a name="line1228">1228: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nParents; j++) maxDefaultTimer = <a href="../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(dftEvents[j],maxDefaultTimer);
+<a name="line1229">1229: </a>  }
+<a name="line1230">1230: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(maxDefaultTimer+1,&amp;nstEvents);
+<a name="line1231">1231: </a>  <font color="#4169E1">for</font> (dft=0; dft&lt;maxDefaultTimer; dft++) {nstEvents[dft] = 0;}
+<a name="line1232">1232: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nNestedEvents; i++) {
+<a name="line1233">1233: </a>    int           nParents   = nestedEvents[i].nParents;
+<a name="line1234">1234: </a>    NestedEventId nstEvent   = nestedEvents[i].nstEvent;
+<a name="line1235">1235: </a>    <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftEvents = nestedEvents[i].dftEvents;
+<a name="line1236">1236: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nParents; j++) nstEvents[dftEvents[j]] = nstEvent;
+<a name="line1237">1237: </a>  }
+
+<a name="line1239">1239: </a>  <font color="#B22222">/* Calculate largest nested event-ID */</font>
+<a name="line1240">1240: </a>  nstMax_local = 0;
+<a name="line1241">1241: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nNestedEvents; i++) nstMax_local = <a href="../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(nestedEvents[i].nstEvent,nstMax_local);
+<a name="line1242">1242: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;nstMax_local, &amp;nstMax, 1, MPI_INT, MPI_MAX, comm);
+
+<a name="line1244">1244: </a>  <font color="#B22222">/* Initialize all total-times with zero */</font>
+<a name="line1245">1245: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nstMax+1,&amp;selftimes);
+<a name="line1246">1246: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nstMax+1,&amp;totaltimes);
+<a name="line1247">1247: </a>  <font color="#4169E1">for</font> (nst=0; nst&lt;=nstMax; nst++) {
+<a name="line1248">1248: </a>    totaltimes[nst].time          = 0;
+<a name="line1249">1249: </a>    totaltimes[nst].flops         = 0;
+<a name="line1250">1250: </a>    totaltimes[nst].numMessages   = 0;
+<a name="line1251">1251: </a>    totaltimes[nst].messageLength = 0;
+<a name="line1252">1252: </a>    totaltimes[nst].numReductions = 0;
+<a name="line1253">1253: </a>    totaltimes[nst].name          = NULL;
+<a name="line1254">1254: </a>  }
+
+<a name="line1256">1256: </a>  <font color="#B22222">/* Calculate total-times */</font>
+<a name="line1257">1257: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nNestedEvents; i++) {
+<a name="line1258">1258: </a>    const int            nParents  = nestedEvents[i].nParents;
+<a name="line1259">1259: </a>    const NestedEventId  nstEvent  = nestedEvents[i].nstEvent;
+<a name="line1260">1260: </a>    const <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftEvents = nestedEvents[i].dftEvents;
+<a name="line1261">1261: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nParents; j++) {
+<a name="line1262">1262: </a>      const <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> dftEvent = dftEvents[j];
+<a name="line1263">1263: </a>      totaltimes[nstEvent].time          += eventPerfInfo[dftEvent].time;
+<a name="line1264">1264: </a>      totaltimes[nstEvent].flops         += eventPerfInfo[dftEvent].flops;
+<a name="line1265">1265: </a>      totaltimes[nstEvent].numMessages   += eventPerfInfo[dftEvent].numMessages;
+<a name="line1266">1266: </a>      totaltimes[nstEvent].messageLength += eventPerfInfo[dftEvent].messageLength;
+<a name="line1267">1267: </a>      totaltimes[nstEvent].numReductions += eventPerfInfo[dftEvent].numReductions;
+<a name="line1268">1268: </a>    }
+<a name="line1269">1269: </a>    totaltimes[nstEvent].name = eventRegInfo[(<a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>)nstEvent].name;
+<a name="line1270">1270: </a>  }
+
+<a name="line1272">1272: </a>  <font color="#B22222">/* Initialize: self-times := totaltimes */</font>
+<a name="line1273">1273: </a>  <font color="#4169E1">for</font> (nst=0; nst&lt;=nstMax; nst++) { selftimes[nst] = totaltimes[nst]; }
+
+<a name="line1275">1275: </a>  <font color="#B22222">/* Subtract timed subprocesses from self-times */</font>
+<a name="line1276">1276: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nNestedEvents; i++) {
+<a name="line1277">1277: </a>    const int           nParents          = nestedEvents[i].nParents;
+<a name="line1278">1278: </a>    const <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> *dftEvents        = nestedEvents[i].dftEvents;
+<a name="line1279">1279: </a>    const NestedEventId *dftParentsSorted = nestedEvents[i].dftParentsSorted;
+<a name="line1280">1280: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nParents; j++) {
+<a name="line1281">1281: </a>      <font color="#4169E1">if</font> (dftParentsSorted[j] != DFT_ID_AWAKE) {
+<a name="line1282">1282: </a>        const <a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> dftEvent  = dftEvents[j];
+<a name="line1283">1283: </a>        const NestedEventId nstParent = nstEvents[dftParentsSorted[j]];
+<a name="line1284">1284: </a>        selftimes[nstParent].time          -= eventPerfInfo[dftEvent].time;
+<a name="line1285">1285: </a>        selftimes[nstParent].flops         -= eventPerfInfo[dftEvent].flops;
+<a name="line1286">1286: </a>        selftimes[nstParent].numMessages   -= eventPerfInfo[dftEvent].numMessages;
+<a name="line1287">1287: </a>        selftimes[nstParent].messageLength -= eventPerfInfo[dftEvent].messageLength;
+<a name="line1288">1288: </a>        selftimes[nstParent].numReductions -= eventPerfInfo[dftEvent].numReductions;
+<a name="line1289">1289: </a>      }
+<a name="line1290">1290: </a>    }
+<a name="line1291">1291: </a>  }
+
+<a name="line1293">1293: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(nstEvents);
+<a name="line1294">1294: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(totaltimes);
+
+<a name="line1296">1296: </a>  <font color="#B22222">/* Set outputs */</font>
+<a name="line1297">1297: </a>  *p_self  = selftimes;
+<a name="line1298">1298: </a>  *p_nstMax = nstMax;
+<a name="line1299">1299: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1300">1300: </a>}
+
+<a name="line1302">1302: </a><strong><font color="#4169E1"><a name="PetscPrintSelfTime"></a>static <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscPrintSelfTime(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer, const PetscSelfTimer *selftimes, int nstMax, <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> totalTime)</font></strong>
+<a name="line1303">1303: </a>{
+<a name="line1304">1304: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1305">1305: </a>  int                i;
+<a name="line1306">1306: </a>  NestedEventId      nst;
+<a name="line1307">1307: </a>  PetscSortItem      *sortSelfTimes;
+<a name="line1308">1308: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>     *times, *maxTimes;
+<a name="line1309">1309: </a>  PetscStageLog      stageLog;
+<a name="line1310">1310: </a>  PetscEventRegInfo  *eventRegInfo;
+<a name="line1311">1311: </a>  const int          dum_depth = 1, dum_count=1, dum_parentcount=1;
+<a name="line1312">1312: </a>  <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>          wasPrinted;
+<a name="line1313">1313: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>           comm;
+
+<a name="line1316">1316: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+<a name="line1317">1317: </a>  <a href="../../../docs/manualpages/Profiling/PetscLogGetStageLog.html#PetscLogGetStageLog">PetscLogGetStageLog</a>(&amp;stageLog);
+<a name="line1318">1318: </a>  eventRegInfo  = stageLog-&gt;eventLog-&gt;eventInfo;
+
+<a name="line1320">1320: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nstMax+1,&amp;times);
+<a name="line1321">1321: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nstMax+1,&amp;maxTimes);
+<a name="line1322">1322: </a>  <font color="#4169E1">for</font> (nst=0; nst&lt;=nstMax; nst++) { times[nst] = selftimes[nst].time;}
+<a name="line1323">1323: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(times, maxTimes, nstMax+1, MPIU_PETSCLOGDOUBLE, MPI_MAX, comm);
+<a name="line1324">1324: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(times);
+
+<a name="line1326">1326: </a>  <a href="../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nstMax+1,&amp;sortSelfTimes);
+
+<a name="line1328">1328: </a>  <font color="#B22222">/* Sort the self-timers on basis of the largest time needed */</font>
+<a name="line1329">1329: </a>  <font color="#4169E1">for</font> (nst=0; nst&lt;=nstMax; nst++) {
+<a name="line1330">1330: </a>    sortSelfTimes[nst].id  = nst;
+<a name="line1331">1331: </a>    sortSelfTimes[nst].val = maxTimes[nst];
+<a name="line1332">1332: </a>  }
+<a name="line1333">1333: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(maxTimes);
+<a name="line1334">1334: </a>  qsort(sortSelfTimes, nstMax+1, <font color="#4169E1">sizeof</font>(PetscSortItem), compareSortItems);
+
+<a name="line1336">1336: </a>  PetscViewerXMLStartSection(viewer, <font color="#666666">"selftimertable"</font>, <font color="#666666">"Self-timings"</font>);
+<a name="line1337">1337: </a>  PetscViewerXMLPutDouble(viewer, <font color="#666666">"totaltime"</font>, NULL, totalTime, <font color="#666666">"%f"</font>);
+
+<a name="line1339">1339: </a>  <font color="#4169E1">for</font> (i=0; i&lt;=nstMax; i++) {
+<a name="line1340">1340: </a>    <font color="#4169E1">if</font> ((sortSelfTimes[i].val/totalTime) &gt;= THRESHOLD) {
+<a name="line1341">1341: </a>      NestedEventId      nstEvent = sortSelfTimes[i].id;
+<a name="line1342">1342: </a>      const char         *name    = eventRegInfo[(<a href="../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a>)nstEvent].name;
+<a name="line1343">1343: </a>      PetscEventPerfInfo selfPerfInfo;
+
+<a name="line1345">1345: </a>      selfPerfInfo.time          = selftimes[nstEvent].time ;
+<a name="line1346">1346: </a>      selfPerfInfo.flops         = selftimes[nstEvent].flops;
+<a name="line1347">1347: </a>      selfPerfInfo.numMessages   = selftimes[nstEvent].numMessages;
+<a name="line1348">1348: </a>      selfPerfInfo.messageLength = selftimes[nstEvent].messageLength;
+<a name="line1349">1349: </a>      selfPerfInfo.numReductions = selftimes[nstEvent].numReductions;
+
+<a name="line1351">1351: </a>      PetscLogNestedTreePrintLine(viewer, selfPerfInfo, dum_count, dum_parentcount, dum_depth, name, totalTime, &amp;wasPrinted);
+<a name="line1352">1352: </a>      <font color="#4169E1">if</font> (wasPrinted){
+<a name="line1353">1353: </a>        PetscViewerXMLEndSection(viewer, <font color="#666666">"event"</font>);
+<a name="line1354">1354: </a>      }
+<a name="line1355">1355: </a>    }
+<a name="line1356">1356: </a>  }
+<a name="line1357">1357: </a>  PetscViewerXMLEndSection(viewer, <font color="#666666">"selftimertable"</font>);
+<a name="line1358">1358: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(sortSelfTimes);
+<a name="line1359">1359: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1360">1360: </a>}
+
+<a name="line1362">1362: </a><strong><font color="#4169E1"><a name="PetscLogView_Nested"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscLogView_Nested(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line1363">1363: </a>{
+<a name="line1364">1364: </a>  <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>       ierr;
+<a name="line1365">1365: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>       locTotalTime, globTotalTime;
+<a name="line1366">1366: </a>  PetscNestedEventTree *tree = NULL;
+<a name="line1367">1367: </a>  PetscSelfTimer       *selftimers = NULL;
+<a name="line1368">1368: </a>  int                  nTimers = 0, nstMax = 0;
+<a name="line1369">1369: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>             comm;
+
+<a name="line1372">1372: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+<a name="line1373">1373: </a>  PetscViewerInitASCII_XML(viewer);
+<a name="line1374">1374: </a>  <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer, <font color="#666666">"&lt;!-- PETSc Performance Summary: --&gt;\n"</font>);
+<a name="line1375">1375: </a>  PetscViewerXMLStartSection(viewer, <font color="#666666">"petscroot"</font>, NULL);
+
+<a name="line1377">1377: </a>  <font color="#B22222">/* Get the total elapsed time, local and global maximum */</font>
+<a name="line1378">1378: </a>  <a href="../../../docs/manualpages/Sys/PetscTime.html#PetscTime">PetscTime</a>(&amp;locTotalTime);  locTotalTime -= petsc_BaseTime;
+<a name="line1379">1379: </a>  <a href="../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;locTotalTime, &amp;globTotalTime, 1, MPIU_PETSCLOGDOUBLE, MPI_MAX, comm);
+
+<a name="line1381">1381: </a>  <font color="#B22222">/* Print global information about this run */</font>
+<a name="line1382">1382: </a>  PetscPrintExeSpecs(viewer);
+<a name="line1383">1383: </a>  PetscPrintGlobalPerformance(viewer, locTotalTime);
+
+<a name="line1385">1385: </a>  <font color="#B22222">/* Collect nested timer tree info from all processes */</font>
+<a name="line1386">1386: </a>  PetscLogNestedTreeCreate(viewer, &amp;tree, &amp;nTimers);
+<a name="line1387">1387: </a>  PetscLogNestedTreePrintTop(viewer, tree, nTimers, globTotalTime);
+<a name="line1388">1388: </a>  PetscLogNestedTreeDestroy(tree, nTimers);
+
+<a name="line1390">1390: </a>  <font color="#B22222">/* Calculate self-time for all (not-nested) events */</font>
+<a name="line1391">1391: </a>  PetscCalcSelfTime(viewer, &amp;selftimers, &amp;nstMax);
+<a name="line1392">1392: </a>  PetscPrintSelfTime(viewer, selftimers, nstMax, globTotalTime);
+<a name="line1393">1393: </a>  <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(selftimers);
+
+<a name="line1395">1395: </a>  PetscViewerXMLEndSection(viewer, <font color="#666666">"petscroot"</font>);
+<a name="line1396">1396: </a>  PetscViewerFinalASCII_XML(viewer);
+<a name="line1397">1397: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1398">1398: </a>}
+
+<a name="line1400">1400: </a><strong><font color="#4169E1"><a name="PetscASend"></a>PETSC_EXTERN <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscASend(int count, int datatype)</font></strong>
+<a name="line1401">1401: </a>{
+<a name="line1402">1402: </a><font color="#A020F0">#if !defined(MPIUNI_H) &amp;&amp; !defined(PETSC_HAVE_BROKEN_RECURSIVE_MACRO) &amp;&amp; !defined(PETSC_HAVE_MPI_MISSING_TYPESIZE)</font>
+<a name="line1404">1404: </a><font color="#A020F0">#endif</font>
+
+<a name="line1407">1407: </a>  petsc_send_ct++;
+<a name="line1408">1408: </a><font color="#A020F0">#if !defined(MPIUNI_H) &amp;&amp; !defined(PETSC_HAVE_BROKEN_RECURSIVE_MACRO) &amp;&amp; !defined(PETSC_HAVE_MPI_MISSING_TYPESIZE)</font>
+<a name="line1409">1409: </a>  PetscMPITypeSize(count,MPI_Type_f2c((MPI_Fint) datatype),&amp;petsc_send_len);
+<a name="line1410">1410: </a><font color="#A020F0">#endif</font>
+<a name="line1411">1411: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1412">1412: </a>}
+
+<a name="line1414">1414: </a><strong><font color="#4169E1"><a name="PetscARecv"></a>PETSC_EXTERN <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscARecv(int count, int datatype)</font></strong>
+<a name="line1415">1415: </a>{
+<a name="line1416">1416: </a><font color="#A020F0">#if !defined(MPIUNI_H) &amp;&amp; !defined(PETSC_HAVE_BROKEN_RECURSIVE_MACRO) &amp;&amp; !defined(PETSC_HAVE_MPI_MISSING_TYPESIZE)</font>
+<a name="line1418">1418: </a><font color="#A020F0">#endif</font>
+
+<a name="line1421">1421: </a>  petsc_recv_ct++;
+<a name="line1422">1422: </a><font color="#A020F0">#if !defined(MPIUNI_H) &amp;&amp; !defined(PETSC_HAVE_BROKEN_RECURSIVE_MACRO) &amp;&amp; !defined(PETSC_HAVE_MPI_MISSING_TYPESIZE)</font>
+<a name="line1423">1423: </a>  PetscMPITypeSize(count,MPI_Type_f2c((MPI_Fint) datatype),&amp;petsc_recv_len);
+<a name="line1424">1424: </a><font color="#A020F0">#endif</font>
+<a name="line1425">1425: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1426">1426: </a>}
+
+<a name="line1428">1428: </a><strong><font color="#4169E1"><a name="PetscAReduce"></a>PETSC_EXTERN <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscAReduce()</font></strong>
+<a name="line1429">1429: </a>{
+<a name="line1431">1431: </a>  petsc_allreduce_ct++;
+<a name="line1432">1432: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1433">1433: </a>}
+
+<a name="line1435">1435: </a><font color="#A020F0">#endif</font>
+</pre>
+</body>
+
+</html>

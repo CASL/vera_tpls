@@ -1,0 +1,1221 @@
+<center><a href="veccuda2.cu">Actual source code: veccuda2.cu</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/vec/vec/impls/seq/seqcuda/veccuda2.cu.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:35:36+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/vec/vec/impls/seq/seqcuda/veccuda2.cu.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><font color="#B22222">/*</font>
+<a name="line2">  2: </a><font color="#B22222">   Implements the sequential cuda vectors.</font>
+<a name="line3">  3: </a><font color="#B22222">*/</font>
+
+<a name="line5">  5: </a><strong><font color="#228B22">#define PETSC_SKIP_SPINLOCK</font></strong>
+<a name="line6">  6: </a><strong><font color="#228B22">#define PETSC_SKIP_CXX_COMPLEX_FIX</font></strong>
+
+<a name="line8">  8: </a><font color="#A020F0">#include &lt;petscconf.h&gt;</font>
+<a name="line9">  9: </a> #include <A href="../../../../../../include/petsc/private/vecimpl.h.html">&lt;petsc/private/vecimpl.h&gt;</A>
+<a name="line10"> 10: </a> #include <A href="../../../../../../include/../src/vec/vec/impls/dvecimpl.h.html">&lt;../src/vec/vec/impls/dvecimpl.h&gt;</A>
+<a name="line11"> 11: </a> #include <A href="../../../../../../include/../src/vec/vec/impls/seq/seqcuda/cudavecimpl.h.html">&lt;../src/vec/vec/impls/seq/seqcuda/cudavecimpl.h&gt;</A>
+
+<a name="line13"> 13: </a><font color="#A020F0">#include &lt;cuda_runtime.h&gt;</font>
+<a name="line14"> 14: </a><font color="#A020F0">#include &lt;thrust/device_ptr.h&gt;</font>
+<a name="line15"> 15: </a><font color="#A020F0">#include &lt;thrust/transform.h&gt;</font>
+<a name="line16"> 16: </a><font color="#A020F0">#include &lt;thrust/functional.h&gt;</font>
+
+<a name="line18"> 18: </a><font color="#B22222">/*</font>
+<a name="line19"> 19: </a><font color="#B22222">    Allocates space for the vector array on the GPU if it does not exist.</font>
+<a name="line20"> 20: </a><font color="#B22222">    Does NOT change the PetscCUDAFlag for the vector</font>
+<a name="line21"> 21: </a><font color="#B22222">    Does NOT zero the CUDA array</font>
+
+<a name="line23"> 23: </a><font color="#B22222"> */</font>
+<a name="line24"> 24: </a><strong><font color="#4169E1"><a name="VecCUDAAllocateCheck"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecCUDAAllocateCheck(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v)</font></strong>
+<a name="line25"> 25: </a>{
+<a name="line27"> 27: </a>  cudaError_t    err;
+<a name="line28"> 28: </a>  Vec_CUDA       *veccuda;
+
+<a name="line31"> 31: </a>  <font color="#4169E1">if</font> (!v-&gt;spptr) {
+<a name="line32"> 32: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>(<font color="#4169E1">sizeof</font>(Vec_CUDA),&amp;v-&gt;spptr);
+<a name="line33"> 33: </a>    veccuda = (Vec_CUDA*)v-&gt;spptr;
+<a name="line34"> 34: </a>    err = cudaMalloc((void**)&amp;veccuda-&gt;GPUarray_allocated,<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)*((<a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>)v-&gt;map-&gt;n));CHKERRCUDA(err);
+<a name="line35"> 35: </a>    veccuda-&gt;GPUarray = veccuda-&gt;GPUarray_allocated;
+<a name="line36"> 36: </a>    veccuda-&gt;stream = 0;  <font color="#B22222">/* using default stream */</font>
+<a name="line37"> 37: </a>    veccuda-&gt;hostDataRegisteredAsPageLocked = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line38"> 38: </a>    <font color="#4169E1">if</font> (v-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_UNALLOCATED</a>) {
+<a name="line39"> 39: </a>      <font color="#4169E1">if</font> (v-&gt;data &amp;&amp; ((Vec_Seq*)v-&gt;data)-&gt;array) {
+<a name="line40"> 40: </a>        v-&gt;offloadmask = <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_CPU</a>;
+<a name="line41"> 41: </a>      } <font color="#4169E1">else</font> {
+<a name="line42"> 42: </a>        v-&gt;offloadmask = <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_GPU</a>;
+<a name="line43"> 43: </a>      }
+<a name="line44"> 44: </a>    }
+<a name="line45"> 45: </a>  }
+<a name="line46"> 46: </a>  <font color="#4169E1">return</font>(0);
+<a name="line47"> 47: </a>}
+
+<a name="line49"> 49: </a><font color="#B22222">/* Copies a vector from the CPU to the GPU unless we already have an up-to-date copy on the GPU */</font>
+<a name="line50"> 50: </a><strong><font color="#4169E1"><a name="VecCUDACopyToGPU"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecCUDACopyToGPU(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v)</font></strong>
+<a name="line51"> 51: </a>{
+<a name="line53"> 53: </a>  cudaError_t    err;
+<a name="line54"> 54: </a>  Vec_CUDA       *veccuda;
+<a name="line55"> 55: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *varray;
+
+<a name="line59"> 59: </a>  VecCUDAAllocateCheck(v);
+<a name="line60"> 60: </a>  <font color="#4169E1">if</font> (v-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_CPU</a>) {
+<a name="line61"> 61: </a>    <a href="../../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_CUDACopyToGPU,v,0,0,0);
+<a name="line62"> 62: </a>    veccuda            = (Vec_CUDA*)v-&gt;spptr;
+<a name="line63"> 63: </a>    varray             = veccuda-&gt;GPUarray;
+<a name="line64"> 64: </a>    err                = cudaMemcpy(varray,((Vec_Seq*)v-&gt;data)-&gt;array,v-&gt;map-&gt;n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyHostToDevice);CHKERRCUDA(err);
+<a name="line65"> 65: </a>    PetscLogCpuToGpu((v-&gt;map-&gt;n)*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>));
+<a name="line66"> 66: </a>    <a href="../../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_CUDACopyToGPU,v,0,0,0);
+<a name="line67"> 67: </a>    v-&gt;offloadmask = <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_BOTH</a>;
+<a name="line68"> 68: </a>  }
+<a name="line69"> 69: </a>  <font color="#4169E1">return</font>(0);
+<a name="line70"> 70: </a>}
+
+<a name="line72"> 72: </a><strong><font color="#4169E1"><a name="VecCUDACopyToGPUSome"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecCUDACopyToGPUSome(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v, PetscCUDAIndices ci,<a href="../../../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">ScatterMode</a> mode)</font></strong>
+<a name="line73"> 73: </a>{
+<a name="line74"> 74: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *varray;
+<a name="line76"> 76: </a>  cudaError_t    err;
+<a name="line77"> 77: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *cpuPtr, *gpuPtr;
+<a name="line78"> 78: </a>  Vec_Seq        *s;
+<a name="line79"> 79: </a>  VecScatterCUDAIndices_PtoP ptop_scatter = (VecScatterCUDAIndices_PtoP)ci-&gt;scatter;
+<a name="line80"> 80: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       lowestIndex,n;
+
+<a name="line84"> 84: </a>  VecCUDAAllocateCheck(v);
+<a name="line85"> 85: </a>  <font color="#4169E1">if</font> (v-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_CPU</a>) {
+<a name="line86"> 86: </a>    s = (Vec_Seq*)v-&gt;data;
+<a name="line87"> 87: </a>    <font color="#4169E1">if</font> (mode &amp; <a href="../../../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>) {
+<a name="line88"> 88: </a>      lowestIndex = ptop_scatter-&gt;sendLowestIndex;
+<a name="line89"> 89: </a>      n           = ptop_scatter-&gt;ns;
+<a name="line90"> 90: </a>    } <font color="#4169E1">else</font> {
+<a name="line91"> 91: </a>      lowestIndex = ptop_scatter-&gt;recvLowestIndex;
+<a name="line92"> 92: </a>      n           = ptop_scatter-&gt;nr;
+<a name="line93"> 93: </a>    }
+
+<a name="line95"> 95: </a>    <a href="../../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_CUDACopyToGPUSome,v,0,0,0);
+<a name="line96"> 96: </a>    varray = ((Vec_CUDA*)v-&gt;spptr)-&gt;GPUarray;
+<a name="line97"> 97: </a>    gpuPtr = varray + lowestIndex;
+<a name="line98"> 98: </a>    cpuPtr = s-&gt;array + lowestIndex;
+
+<a name="line100">100: </a>    <font color="#B22222">/* Note : this code copies the smallest contiguous chunk of data</font>
+<a name="line101">101: </a><font color="#B22222">       containing ALL of the indices */</font>
+<a name="line102">102: </a>    err = cudaMemcpy(gpuPtr,cpuPtr,n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyHostToDevice);CHKERRCUDA(err);
+<a name="line103">103: </a>    PetscLogCpuToGpu(n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>));
+
+<a name="line105">105: </a>    <font color="#B22222">/* Set the buffer states */</font>
+<a name="line106">106: </a>    v-&gt;offloadmask = <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_BOTH</a>;
+<a name="line107">107: </a>    <a href="../../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_CUDACopyToGPUSome,v,0,0,0);
+<a name="line108">108: </a>  }
+<a name="line109">109: </a>  <font color="#4169E1">return</font>(0);
+<a name="line110">110: </a>}
+
+
+<a name="line113">113: </a><font color="#B22222">/*</font>
+<a name="line114">114: </a><font color="#B22222">     VecCUDACopyFromGPU - Copies a vector from the GPU to the CPU unless we already have an up-to-date copy on the CPU</font>
+<a name="line115">115: </a><font color="#B22222">*/</font>
+<a name="line116">116: </a><strong><font color="#4169E1"><a name="VecCUDACopyFromGPU"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecCUDACopyFromGPU(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v)</font></strong>
+<a name="line117">117: </a>{
+<a name="line119">119: </a>  cudaError_t    err;
+<a name="line120">120: </a>  Vec_CUDA       *veccuda;
+<a name="line121">121: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *varray;
+
+<a name="line125">125: </a>  VecCUDAAllocateCheckHost(v);
+<a name="line126">126: </a>  <font color="#4169E1">if</font> (v-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_GPU</a>) {
+<a name="line127">127: </a>    <a href="../../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_CUDACopyFromGPU,v,0,0,0);
+<a name="line128">128: </a>    veccuda            = (Vec_CUDA*)v-&gt;spptr;
+<a name="line129">129: </a>    varray             = veccuda-&gt;GPUarray;
+<a name="line130">130: </a>    err                = cudaMemcpy(((Vec_Seq*)v-&gt;data)-&gt;array,varray,v-&gt;map-&gt;n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyDeviceToHost);CHKERRCUDA(err);
+<a name="line131">131: </a>    PetscLogGpuToCpu((v-&gt;map-&gt;n)*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>));
+<a name="line132">132: </a>    <a href="../../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_CUDACopyFromGPU,v,0,0,0);
+<a name="line133">133: </a>    v-&gt;offloadmask     = <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_BOTH</a>;
+<a name="line134">134: </a>  }
+<a name="line135">135: </a>  <font color="#4169E1">return</font>(0);
+<a name="line136">136: </a>}
+
+<a name="line138">138: </a><font color="#B22222">/* Note that this function only copies *some* of the values up from the GPU to CPU,</font>
+<a name="line139">139: </a><font color="#B22222">   which means that we need recombine the data at some point before using any of the standard functions.</font>
+<a name="line140">140: </a><font color="#B22222">   We could add another few flag-types to keep track of this, or treat things like <a href="../../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a> <a href="../../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a></font>
+<a name="line141">141: </a><font color="#B22222">   where you have to always call in pairs</font>
+<a name="line142">142: </a><font color="#B22222">*/</font>
+<a name="line143">143: </a><strong><font color="#4169E1"><a name="VecCUDACopyFromGPUSome"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecCUDACopyFromGPUSome(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v, PetscCUDAIndices ci,<a href="../../../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">ScatterMode</a> mode)</font></strong>
+<a name="line144">144: </a>{
+<a name="line145">145: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *varray, *gpuPtr;
+<a name="line146">146: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line147">147: </a>  cudaError_t       err;
+<a name="line148">148: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *cpuPtr;
+<a name="line149">149: </a>  Vec_Seq           *s;
+<a name="line150">150: </a>  VecScatterCUDAIndices_PtoP ptop_scatter = (VecScatterCUDAIndices_PtoP)ci-&gt;scatter;
+<a name="line151">151: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          lowestIndex,n;
+
+<a name="line155">155: </a>  VecCUDAAllocateCheckHost(v);
+<a name="line156">156: </a>  <font color="#4169E1">if</font> (v-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_GPU</a>) {
+<a name="line157">157: </a>    <a href="../../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_CUDACopyFromGPUSome,v,0,0,0);
+<a name="line158">158: </a>    <font color="#4169E1">if</font> (mode &amp; <a href="../../../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>) {
+<a name="line159">159: </a>      lowestIndex = ptop_scatter-&gt;recvLowestIndex;
+<a name="line160">160: </a>      n           = ptop_scatter-&gt;nr;
+<a name="line161">161: </a>    } <font color="#4169E1">else</font> {
+<a name="line162">162: </a>      lowestIndex = ptop_scatter-&gt;sendLowestIndex;
+<a name="line163">163: </a>      n           = ptop_scatter-&gt;ns;
+<a name="line164">164: </a>    }
+
+<a name="line166">166: </a>    varray=((Vec_CUDA*)v-&gt;spptr)-&gt;GPUarray;
+<a name="line167">167: </a>    s = (Vec_Seq*)v-&gt;data;
+<a name="line168">168: </a>    gpuPtr = varray + lowestIndex;
+<a name="line169">169: </a>    cpuPtr = s-&gt;array + lowestIndex;
+
+<a name="line171">171: </a>    <font color="#B22222">/* Note : this code copies the smallest contiguous chunk of data</font>
+<a name="line172">172: </a><font color="#B22222">       containing ALL of the indices */</font>
+<a name="line173">173: </a>    err = cudaMemcpy(cpuPtr,gpuPtr,n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyDeviceToHost);CHKERRCUDA(err);
+<a name="line174">174: </a>    PetscLogGpuToCpu(n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>));
+
+<a name="line176">176: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(v,&amp;varray);
+<a name="line177">177: </a>    <a href="../../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_CUDACopyFromGPUSome,v,0,0,0);
+<a name="line178">178: </a>  }
+<a name="line179">179: </a>  <font color="#4169E1">return</font>(0);
+<a name="line180">180: </a>}
+
+<a name="line182">182: </a><font color="#B22222">/*MC</font>
+<a name="line183">183: </a><font color="#B22222">   <a href="../../../../../../docs/manualpages/Vec/VECSEQCUDA.html#VECSEQCUDA">VECSEQCUDA</a> - <a href="../../../../../../docs/manualpages/Vec/VECSEQCUDA.html#VECSEQCUDA">VECSEQCUDA</a> = "seqcuda" - The basic sequential vector, modified to use CUDA</font>
+
+<a name="line185">185: </a><font color="#B22222">   Options Database Keys:</font>
+<a name="line186">186: </a><font color="#B22222">. -vec_type seqcuda - sets the vector type to <a href="../../../../../../docs/manualpages/Vec/VECSEQCUDA.html#VECSEQCUDA">VECSEQCUDA</a> during a call to <a href="../../../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>()</font>
+
+<a name="line188">188: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line190">190: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(), <a href="../../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(), <a href="../../../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>(), <a href="../../../../../../docs/manualpages/Vec/VecCreateSeqWithArray.html#VecCreateSeqWithArray">VecCreateSeqWithArray</a>(), <a href="../../../../../../docs/manualpages/Vec/VECMPI.html#VECMPI">VECMPI</a>, <a href="../../../../../../docs/manualpages/Vec/VecType.html#VecType">VecType</a>, <a href="../../../../../../docs/manualpages/Vec/VecCreateMPI.html#VecCreateMPI">VecCreateMPI</a>(), <a href="../../../../../../docs/manualpages/Vec/VecCreateSeq.html#VecCreateSeq">VecCreateSeq</a>()</font>
+<a name="line191">191: </a><font color="#B22222">M*/</font>
+
+<a name="line193">193: </a><strong><font color="#4169E1"><a name="VecAYPX_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecAYPX_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> alpha,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin)</font></strong>
+<a name="line194">194: </a>{
+<a name="line195">195: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xarray;
+<a name="line196">196: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *yarray;
+<a name="line197">197: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line198">198: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>      one=1,bn;
+<a name="line199">199: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       sone=1.0;
+<a name="line200">200: </a>  cublasHandle_t    cublasv2handle;
+<a name="line201">201: </a>  cublasStatus_t    cberr;
+<a name="line202">202: </a>  cudaError_t       err;
+
+<a name="line205">205: </a>  PetscCUBLASGetHandle(&amp;cublasv2handle);
+<a name="line206">206: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(yin-&gt;map-&gt;n,&amp;bn);
+<a name="line207">207: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line208">208: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArray.html#VecCUDAGetArray">VecCUDAGetArray</a>(yin,&amp;yarray);
+<a name="line209">209: </a>  PetscLogGpuTimeBegin();
+<a name="line210">210: </a>  <font color="#4169E1">if</font> (alpha == (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line211">211: </a>    err = cudaMemcpy(yarray,xarray,bn*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyDeviceToDevice);CHKERRCUDA(err);
+<a name="line212">212: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (alpha == (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)1.0) {
+<a name="line213">213: </a>    cberr = cublasXaxpy(cublasv2handle,bn,&amp;alpha,xarray,one,yarray,one);CHKERRCUBLAS(cberr);
+<a name="line214">214: </a>    PetscLogGpuFlops(1.0*yin-&gt;map-&gt;n);
+<a name="line215">215: </a>  } <font color="#4169E1">else</font> {
+<a name="line216">216: </a>    cberr = cublasXscal(cublasv2handle,bn,&amp;alpha,yarray,one);CHKERRCUBLAS(cberr);
+<a name="line217">217: </a>    cberr = cublasXaxpy(cublasv2handle,bn,&amp;sone,xarray,one,yarray,one);CHKERRCUBLAS(cberr);
+<a name="line218">218: </a>    PetscLogGpuFlops(2.0*yin-&gt;map-&gt;n);
+<a name="line219">219: </a>  }
+<a name="line220">220: </a>  WaitForGPU();CHKERRCUDA(ierr);
+<a name="line221">221: </a>  PetscLogGpuTimeEnd();
+<a name="line222">222: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line223">223: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArray.html#VecCUDARestoreArray">VecCUDARestoreArray</a>(yin,&amp;yarray);
+<a name="line224">224: </a>  <font color="#4169E1">return</font>(0);
+<a name="line225">225: </a>}
+
+<a name="line227">227: </a><strong><font color="#4169E1"><a name="VecAXPY_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecAXPY_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> alpha,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin)</font></strong>
+<a name="line228">228: </a>{
+<a name="line229">229: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xarray;
+<a name="line230">230: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *yarray;
+<a name="line231">231: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line232">232: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>      one=1,bn;
+<a name="line233">233: </a>  cublasHandle_t    cublasv2handle;
+<a name="line234">234: </a>  cublasStatus_t    cberr;
+
+<a name="line237">237: </a>  PetscCUBLASGetHandle(&amp;cublasv2handle);
+<a name="line238">238: </a>  <font color="#4169E1">if</font> (alpha != (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line239">239: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(yin-&gt;map-&gt;n,&amp;bn);
+<a name="line240">240: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line241">241: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArray.html#VecCUDAGetArray">VecCUDAGetArray</a>(yin,&amp;yarray);
+<a name="line242">242: </a>    PetscLogGpuTimeBegin();
+<a name="line243">243: </a>    cberr = cublasXaxpy(cublasv2handle,bn,&amp;alpha,xarray,one,yarray,one);CHKERRCUBLAS(cberr);
+<a name="line244">244: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line245">245: </a>    PetscLogGpuTimeEnd();
+<a name="line246">246: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line247">247: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArray.html#VecCUDARestoreArray">VecCUDARestoreArray</a>(yin,&amp;yarray);
+<a name="line248">248: </a>    PetscLogGpuFlops(2.0*yin-&gt;map-&gt;n);
+<a name="line249">249: </a>  }
+<a name="line250">250: </a>  <font color="#4169E1">return</font>(0);
+<a name="line251">251: </a>}
+
+<a name="line253">253: </a><strong><font color="#4169E1"><a name="VecPointwiseDivide_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecPointwiseDivide_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> win, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin)</font></strong>
+<a name="line254">254: </a>{
+<a name="line255">255: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>                              n = xin-&gt;map-&gt;n;
+<a name="line256">256: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>                     *xarray=NULL,*yarray=NULL;
+<a name="line257">257: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>                           *warray=NULL;
+<a name="line258">258: </a><strong><font color="#FF0000">  thrust:</font></strong>:device_ptr&lt;const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>&gt; xptr,yptr;
+<a name="line259">259: </a><strong><font color="#FF0000">  thrust:</font></strong>:device_ptr&lt;<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>&gt;       wptr;
+<a name="line260">260: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>                        ierr;
+
+<a name="line263">263: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayWrite.html#VecCUDAGetArrayWrite">VecCUDAGetArrayWrite</a>(win,&amp;warray);
+<a name="line264">264: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line265">265: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin,&amp;yarray);
+<a name="line266">266: </a>  PetscLogGpuTimeBegin();
+<a name="line267">267: </a>  try {
+<a name="line268">268: </a>    wptr = thrust::device_pointer_cast(warray);
+<a name="line269">269: </a>    xptr = thrust::device_pointer_cast(xarray);
+<a name="line270">270: </a>    yptr = thrust::device_pointer_cast(yarray);
+<a name="line271">271: </a><strong><font color="#FF0000">    thrust:</font></strong>:transform(xptr,xptr+n,yptr,wptr,thrust::divides&lt;<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>&gt;());
+<a name="line272">272: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line273">273: </a>  } catch (char *ex) {
+<a name="line274">274: </a>    <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Thrust error: %s"</font>, ex);
+<a name="line275">275: </a>  }
+<a name="line276">276: </a>  PetscLogGpuTimeEnd();
+<a name="line277">277: </a>  PetscLogGpuFlops(n);
+<a name="line278">278: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line279">279: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin,&amp;yarray);
+<a name="line280">280: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayWrite.html#VecCUDARestoreArrayWrite">VecCUDARestoreArrayWrite</a>(win,&amp;warray);
+<a name="line281">281: </a>  <font color="#4169E1">return</font>(0);
+<a name="line282">282: </a>}
+
+<a name="line284">284: </a><strong><font color="#4169E1"><a name="VecWAXPY_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecWAXPY_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> win,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> alpha,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin)</font></strong>
+<a name="line285">285: </a>{
+<a name="line286">286: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xarray=NULL,*yarray=NULL;
+<a name="line287">287: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *warray=NULL;
+<a name="line288">288: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line289">289: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>      one=1,bn;
+<a name="line290">290: </a>  cublasHandle_t    cublasv2handle;
+<a name="line291">291: </a>  cublasStatus_t    cberr;
+<a name="line292">292: </a>  cudaError_t       err;
+
+<a name="line295">295: </a>  PetscCUBLASGetHandle(&amp;cublasv2handle);
+<a name="line296">296: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(win-&gt;map-&gt;n,&amp;bn);
+<a name="line297">297: </a>  <font color="#4169E1">if</font> (alpha == (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line298">298: </a>    VecCopy_SeqCUDA(yin,win);
+<a name="line299">299: </a>  } <font color="#4169E1">else</font> {
+<a name="line300">300: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line301">301: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin,&amp;yarray);
+<a name="line302">302: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayWrite.html#VecCUDAGetArrayWrite">VecCUDAGetArrayWrite</a>(win,&amp;warray);
+<a name="line303">303: </a>    PetscLogGpuTimeBegin();
+<a name="line304">304: </a>    err = cudaMemcpy(warray,yarray,win-&gt;map-&gt;n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyDeviceToDevice);CHKERRCUDA(err);
+<a name="line305">305: </a>    cberr = cublasXaxpy(cublasv2handle,bn,&amp;alpha,xarray,one,warray,one);CHKERRCUBLAS(cberr);
+<a name="line306">306: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line307">307: </a>    PetscLogGpuTimeEnd();
+<a name="line308">308: </a>    PetscLogGpuFlops(2*win-&gt;map-&gt;n);
+<a name="line309">309: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line310">310: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin,&amp;yarray);
+<a name="line311">311: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayWrite.html#VecCUDARestoreArrayWrite">VecCUDARestoreArrayWrite</a>(win,&amp;warray);
+<a name="line312">312: </a>  }
+<a name="line313">313: </a>  <font color="#4169E1">return</font>(0);
+<a name="line314">314: </a>}
+
+<a name="line316">316: </a><strong><font color="#4169E1"><a name="VecMAXPY_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecMAXPY_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nv,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *alpha,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *y)</font></strong>
+<a name="line317">317: </a>{
+<a name="line319">319: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       n = xin-&gt;map-&gt;n,j,j_rem;
+<a name="line320">320: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    alpha0,alpha1,alpha2,alpha3;
+
+<a name="line323">323: </a>  PetscLogGpuFlops(nv*2.0*n);
+<a name="line324">324: </a>  <font color="#4169E1">switch</font> (j_rem=nv&amp;0x3) {
+<a name="line325">325: </a>    <font color="#4169E1">case</font> 3:
+<a name="line326">326: </a>      alpha0 = alpha[0];
+<a name="line327">327: </a>      alpha1 = alpha[1];
+<a name="line328">328: </a>      alpha2 = alpha[2];
+<a name="line329">329: </a>      alpha += 3;
+<a name="line330">330: </a>      VecAXPY_SeqCUDA(xin,alpha0,y[0]);
+<a name="line331">331: </a>      VecAXPY_SeqCUDA(xin,alpha1,y[1]);
+<a name="line332">332: </a>      VecAXPY_SeqCUDA(xin,alpha2,y[2]);
+<a name="line333">333: </a>      y   += 3;
+<a name="line334">334: </a>      <font color="#4169E1">break</font>;
+<a name="line335">335: </a>    <font color="#4169E1">case</font> 2:
+<a name="line336">336: </a>      alpha0 = alpha[0];
+<a name="line337">337: </a>      alpha1 = alpha[1];
+<a name="line338">338: </a>      alpha +=2;
+<a name="line339">339: </a>      VecAXPY_SeqCUDA(xin,alpha0,y[0]);
+<a name="line340">340: </a>      VecAXPY_SeqCUDA(xin,alpha1,y[1]);
+<a name="line341">341: </a>      y +=2;
+<a name="line342">342: </a>      <font color="#4169E1">break</font>;
+<a name="line343">343: </a>    <font color="#4169E1">case</font> 1:
+<a name="line344">344: </a>      alpha0 = *alpha++;
+<a name="line345">345: </a>      VecAXPY_SeqCUDA(xin,alpha0,y[0]);
+<a name="line346">346: </a>      y     +=1;
+<a name="line347">347: </a>      <font color="#4169E1">break</font>;
+<a name="line348">348: </a>  }
+<a name="line349">349: </a>  <font color="#4169E1">for</font> (j=j_rem; j&lt;nv; j+=4) {
+<a name="line350">350: </a>    alpha0 = alpha[0];
+<a name="line351">351: </a>    alpha1 = alpha[1];
+<a name="line352">352: </a>    alpha2 = alpha[2];
+<a name="line353">353: </a>    alpha3 = alpha[3];
+<a name="line354">354: </a>    alpha += 4;
+<a name="line355">355: </a>    VecAXPY_SeqCUDA(xin,alpha0,y[0]);
+<a name="line356">356: </a>    VecAXPY_SeqCUDA(xin,alpha1,y[1]);
+<a name="line357">357: </a>    VecAXPY_SeqCUDA(xin,alpha2,y[2]);
+<a name="line358">358: </a>    VecAXPY_SeqCUDA(xin,alpha3,y[3]);
+<a name="line359">359: </a>    y   += 4;
+<a name="line360">360: </a>  }
+<a name="line361">361: </a>  WaitForGPU();CHKERRCUDA(ierr);
+<a name="line362">362: </a>  <font color="#4169E1">return</font>(0);
+<a name="line363">363: </a>}
+
+<a name="line365">365: </a><strong><font color="#4169E1"><a name="VecDot_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecDot_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *z)</font></strong>
+<a name="line366">366: </a>{
+<a name="line367">367: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xarray,*yarray;
+<a name="line368">368: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line369">369: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>      one=1,bn;
+<a name="line370">370: </a>  cublasHandle_t    cublasv2handle;
+<a name="line371">371: </a>  cublasStatus_t    cberr;
+
+<a name="line374">374: </a>  PetscCUBLASGetHandle(&amp;cublasv2handle);
+<a name="line375">375: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(yin-&gt;map-&gt;n,&amp;bn);
+<a name="line376">376: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line377">377: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin,&amp;yarray);
+<a name="line378">378: </a>  <font color="#B22222">/* arguments y, x are reversed because BLAS complex conjugates the first argument, PETSc the second */</font>
+<a name="line379">379: </a>  PetscLogGpuTimeBegin();
+<a name="line380">380: </a>  cberr = cublasXdot(cublasv2handle,bn,yarray,one,xarray,one,z);CHKERRCUBLAS(cberr);
+<a name="line381">381: </a>  WaitForGPU();CHKERRCUDA(ierr);
+<a name="line382">382: </a>  PetscLogGpuTimeEnd();
+<a name="line383">383: </a>  <font color="#4169E1">if</font> (xin-&gt;map-&gt;n &gt;0) {
+<a name="line384">384: </a>    PetscLogGpuFlops(2.0*xin-&gt;map-&gt;n-1);
+<a name="line385">385: </a>  }
+<a name="line386">386: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line387">387: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin,&amp;yarray);
+<a name="line388">388: </a>  <font color="#4169E1">return</font>(0);
+<a name="line389">389: </a>}
+
+<a name="line391">391: </a>//
+<a name="line392">392: </a>// CUDA kernels <font color="#4169E1">for</font> MDot to follow
+<a name="line393">393: </a>//
+
+<a name="line395">395: </a>// set work group size to be a power of 2 (128 is usually a good compromise between portability and speed)
+<a name="line396">396: </a><strong><font color="#228B22">#define MDOT_WORKGROUP_SIZE 128</font></strong>
+<a name="line397">397: </a><strong><font color="#228B22">#define MDOT_WORKGROUP_NUM  128</font></strong>
+
+<a name="line399">399: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line400">400: </a>// M = 2:
+<a name="line401">401: </a><strong><font color="#4169E1"><a name="VecMDot_SeqCUDA_kernel2"></a>__global__ void VecMDot_SeqCUDA_kernel2(const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y0,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y1,</font></strong>
+<a name="line402">402: </a><strong><font color="#4169E1">                                        <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> size, <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *group_results)</font></strong>
+<a name="line403">403: </a>{
+<a name="line404">404: </a>  __shared__ <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> tmp_buffer[2*MDOT_WORKGROUP_SIZE];
+<a name="line405">405: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> entries_per_group = (size - 1) / gridDim.x + 1;
+<a name="line406">406: </a>  entries_per_group = (entries_per_group == 0) ? 1 : entries_per_group;  // <font color="#4169E1">for</font> very small vectors, a group should still <font color="#4169E1">do</font> some work
+<a name="line407">407: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vec_start_index = blockIdx.x * entries_per_group;
+<a name="line408">408: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vec_stop_index  = <a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>((blockIdx.x + 1) * entries_per_group, size); // don't go beyond vec size
+
+<a name="line410">410: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> entry_x    = 0;
+<a name="line411">411: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum0 = 0;
+<a name="line412">412: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum1 = 0;
+<a name="line413">413: </a>  <font color="#4169E1">for</font> (<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> i = vec_start_index + threadIdx.x; i &lt; vec_stop_index; i += blockDim.x) {
+<a name="line414">414: </a>    entry_x     = x[i];   // load only once from global memory!
+<a name="line415">415: </a>    group_sum0 += entry_x * y0[i];
+<a name="line416">416: </a>    group_sum1 += entry_x * y1[i];
+<a name="line417">417: </a>  }
+<a name="line418">418: </a>  tmp_buffer[threadIdx.x]                       = group_sum0;
+<a name="line419">419: </a>  tmp_buffer[threadIdx.x + MDOT_WORKGROUP_SIZE] = group_sum1;
+
+<a name="line421">421: </a>  // parallel reduction
+<a name="line422">422: </a>  <font color="#4169E1">for</font> (<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> stride = blockDim.x/2; stride &gt; 0; stride /= 2) {
+<a name="line423">423: </a>    __syncthreads();
+<a name="line424">424: </a>    <font color="#4169E1">if</font> (threadIdx.x &lt; stride) {
+<a name="line425">425: </a>      tmp_buffer[threadIdx.x                      ] += tmp_buffer[threadIdx.x+stride                      ];
+<a name="line426">426: </a>      tmp_buffer[threadIdx.x + MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride + MDOT_WORKGROUP_SIZE];
+<a name="line427">427: </a>    }
+<a name="line428">428: </a>  }
+
+<a name="line430">430: </a>  // write result of group to group_results
+<a name="line431">431: </a>  <font color="#4169E1">if</font> (threadIdx.x == 0) {
+<a name="line432">432: </a>    group_results[blockIdx.x]             = tmp_buffer[0];
+<a name="line433">433: </a>    group_results[blockIdx.x + gridDim.x] = tmp_buffer[MDOT_WORKGROUP_SIZE];
+<a name="line434">434: </a>  }
+<a name="line435">435: </a>}
+
+<a name="line437">437: </a>// M = 3:
+<a name="line438">438: </a><strong><font color="#4169E1"><a name="VecMDot_SeqCUDA_kernel3"></a>__global__ void VecMDot_SeqCUDA_kernel3(const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y0,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y1,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y2,</font></strong>
+<a name="line439">439: </a><strong><font color="#4169E1">                                        <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> size, <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *group_results)</font></strong>
+<a name="line440">440: </a>{
+<a name="line441">441: </a>  __shared__ <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> tmp_buffer[3*MDOT_WORKGROUP_SIZE];
+<a name="line442">442: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> entries_per_group = (size - 1) / gridDim.x + 1;
+<a name="line443">443: </a>  entries_per_group = (entries_per_group == 0) ? 1 : entries_per_group;  // <font color="#4169E1">for</font> very small vectors, a group should still <font color="#4169E1">do</font> some work
+<a name="line444">444: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vec_start_index = blockIdx.x * entries_per_group;
+<a name="line445">445: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vec_stop_index  = <a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>((blockIdx.x + 1) * entries_per_group, size); // don't go beyond vec size
+
+<a name="line447">447: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> entry_x    = 0;
+<a name="line448">448: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum0 = 0;
+<a name="line449">449: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum1 = 0;
+<a name="line450">450: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum2 = 0;
+<a name="line451">451: </a>  <font color="#4169E1">for</font> (<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> i = vec_start_index + threadIdx.x; i &lt; vec_stop_index; i += blockDim.x) {
+<a name="line452">452: </a>    entry_x     = x[i];   // load only once from global memory!
+<a name="line453">453: </a>    group_sum0 += entry_x * y0[i];
+<a name="line454">454: </a>    group_sum1 += entry_x * y1[i];
+<a name="line455">455: </a>    group_sum2 += entry_x * y2[i];
+<a name="line456">456: </a>  }
+<a name="line457">457: </a>  tmp_buffer[threadIdx.x]                           = group_sum0;
+<a name="line458">458: </a>  tmp_buffer[threadIdx.x +     MDOT_WORKGROUP_SIZE] = group_sum1;
+<a name="line459">459: </a>  tmp_buffer[threadIdx.x + 2 * MDOT_WORKGROUP_SIZE] = group_sum2;
+
+<a name="line461">461: </a>  // parallel reduction
+<a name="line462">462: </a>  <font color="#4169E1">for</font> (<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> stride = blockDim.x/2; stride &gt; 0; stride /= 2) {
+<a name="line463">463: </a>    __syncthreads();
+<a name="line464">464: </a>    <font color="#4169E1">if</font> (threadIdx.x &lt; stride) {
+<a name="line465">465: </a>      tmp_buffer[threadIdx.x                          ] += tmp_buffer[threadIdx.x+stride                          ];
+<a name="line466">466: </a>      tmp_buffer[threadIdx.x +     MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride +     MDOT_WORKGROUP_SIZE];
+<a name="line467">467: </a>      tmp_buffer[threadIdx.x + 2 * MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride + 2 * MDOT_WORKGROUP_SIZE];
+<a name="line468">468: </a>    }
+<a name="line469">469: </a>  }
+
+<a name="line471">471: </a>  // write result of group to group_results
+<a name="line472">472: </a>  <font color="#4169E1">if</font> (threadIdx.x == 0) {
+<a name="line473">473: </a>    group_results[blockIdx.x                ] = tmp_buffer[0];
+<a name="line474">474: </a>    group_results[blockIdx.x +     gridDim.x] = tmp_buffer[    MDOT_WORKGROUP_SIZE];
+<a name="line475">475: </a>    group_results[blockIdx.x + 2 * gridDim.x] = tmp_buffer[2 * MDOT_WORKGROUP_SIZE];
+<a name="line476">476: </a>  }
+<a name="line477">477: </a>}
+
+<a name="line479">479: </a>// M = 4:
+<a name="line480">480: </a><strong><font color="#4169E1"><a name="VecMDot_SeqCUDA_kernel4"></a>__global__ void VecMDot_SeqCUDA_kernel4(const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y0,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y1,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y2,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y3,</font></strong>
+<a name="line481">481: </a><strong><font color="#4169E1">                                        <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> size, <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *group_results)</font></strong>
+<a name="line482">482: </a>{
+<a name="line483">483: </a>  __shared__ <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> tmp_buffer[4*MDOT_WORKGROUP_SIZE];
+<a name="line484">484: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> entries_per_group = (size - 1) / gridDim.x + 1;
+<a name="line485">485: </a>  entries_per_group = (entries_per_group == 0) ? 1 : entries_per_group;  // <font color="#4169E1">for</font> very small vectors, a group should still <font color="#4169E1">do</font> some work
+<a name="line486">486: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vec_start_index = blockIdx.x * entries_per_group;
+<a name="line487">487: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vec_stop_index  = <a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>((blockIdx.x + 1) * entries_per_group, size); // don't go beyond vec size
+
+<a name="line489">489: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> entry_x    = 0;
+<a name="line490">490: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum0 = 0;
+<a name="line491">491: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum1 = 0;
+<a name="line492">492: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum2 = 0;
+<a name="line493">493: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum3 = 0;
+<a name="line494">494: </a>  <font color="#4169E1">for</font> (<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> i = vec_start_index + threadIdx.x; i &lt; vec_stop_index; i += blockDim.x) {
+<a name="line495">495: </a>    entry_x     = x[i];   // load only once from global memory!
+<a name="line496">496: </a>    group_sum0 += entry_x * y0[i];
+<a name="line497">497: </a>    group_sum1 += entry_x * y1[i];
+<a name="line498">498: </a>    group_sum2 += entry_x * y2[i];
+<a name="line499">499: </a>    group_sum3 += entry_x * y3[i];
+<a name="line500">500: </a>  }
+<a name="line501">501: </a>  tmp_buffer[threadIdx.x]                           = group_sum0;
+<a name="line502">502: </a>  tmp_buffer[threadIdx.x +     MDOT_WORKGROUP_SIZE] = group_sum1;
+<a name="line503">503: </a>  tmp_buffer[threadIdx.x + 2 * MDOT_WORKGROUP_SIZE] = group_sum2;
+<a name="line504">504: </a>  tmp_buffer[threadIdx.x + 3 * MDOT_WORKGROUP_SIZE] = group_sum3;
+
+<a name="line506">506: </a>  // parallel reduction
+<a name="line507">507: </a>  <font color="#4169E1">for</font> (<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> stride = blockDim.x/2; stride &gt; 0; stride /= 2) {
+<a name="line508">508: </a>    __syncthreads();
+<a name="line509">509: </a>    <font color="#4169E1">if</font> (threadIdx.x &lt; stride) {
+<a name="line510">510: </a>      tmp_buffer[threadIdx.x                          ] += tmp_buffer[threadIdx.x+stride                          ];
+<a name="line511">511: </a>      tmp_buffer[threadIdx.x +     MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride +     MDOT_WORKGROUP_SIZE];
+<a name="line512">512: </a>      tmp_buffer[threadIdx.x + 2 * MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride + 2 * MDOT_WORKGROUP_SIZE];
+<a name="line513">513: </a>      tmp_buffer[threadIdx.x + 3 * MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride + 3 * MDOT_WORKGROUP_SIZE];
+<a name="line514">514: </a>    }
+<a name="line515">515: </a>  }
+
+<a name="line517">517: </a>  // write result of group to group_results
+<a name="line518">518: </a>  <font color="#4169E1">if</font> (threadIdx.x == 0) {
+<a name="line519">519: </a>    group_results[blockIdx.x                ] = tmp_buffer[0];
+<a name="line520">520: </a>    group_results[blockIdx.x +     gridDim.x] = tmp_buffer[    MDOT_WORKGROUP_SIZE];
+<a name="line521">521: </a>    group_results[blockIdx.x + 2 * gridDim.x] = tmp_buffer[2 * MDOT_WORKGROUP_SIZE];
+<a name="line522">522: </a>    group_results[blockIdx.x + 3 * gridDim.x] = tmp_buffer[3 * MDOT_WORKGROUP_SIZE];
+<a name="line523">523: </a>  }
+<a name="line524">524: </a>}
+
+<a name="line526">526: </a>// M = 8:
+<a name="line527">527: </a><strong><font color="#4169E1"><a name="VecMDot_SeqCUDA_kernel8"></a>__global__ void VecMDot_SeqCUDA_kernel8(const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y0,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y1,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y2,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y3,</font></strong>
+<a name="line528">528: </a><strong><font color="#4169E1">                                          const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y4,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y5,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y6,const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y7,</font></strong>
+<a name="line529">529: </a><strong><font color="#4169E1">                                          <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> size, <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *group_results)</font></strong>
+<a name="line530">530: </a>{
+<a name="line531">531: </a>  __shared__ <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> tmp_buffer[8*MDOT_WORKGROUP_SIZE];
+<a name="line532">532: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> entries_per_group = (size - 1) / gridDim.x + 1;
+<a name="line533">533: </a>  entries_per_group = (entries_per_group == 0) ? 1 : entries_per_group;  // <font color="#4169E1">for</font> very small vectors, a group should still <font color="#4169E1">do</font> some work
+<a name="line534">534: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vec_start_index = blockIdx.x * entries_per_group;
+<a name="line535">535: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> vec_stop_index  = <a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>((blockIdx.x + 1) * entries_per_group, size); // don't go beyond vec size
+
+<a name="line537">537: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> entry_x    = 0;
+<a name="line538">538: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum0 = 0;
+<a name="line539">539: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum1 = 0;
+<a name="line540">540: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum2 = 0;
+<a name="line541">541: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum3 = 0;
+<a name="line542">542: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum4 = 0;
+<a name="line543">543: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum5 = 0;
+<a name="line544">544: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum6 = 0;
+<a name="line545">545: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> group_sum7 = 0;
+<a name="line546">546: </a>  <font color="#4169E1">for</font> (<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> i = vec_start_index + threadIdx.x; i &lt; vec_stop_index; i += blockDim.x) {
+<a name="line547">547: </a>    entry_x     = x[i];   // load only once from global memory!
+<a name="line548">548: </a>    group_sum0 += entry_x * y0[i];
+<a name="line549">549: </a>    group_sum1 += entry_x * y1[i];
+<a name="line550">550: </a>    group_sum2 += entry_x * y2[i];
+<a name="line551">551: </a>    group_sum3 += entry_x * y3[i];
+<a name="line552">552: </a>    group_sum4 += entry_x * y4[i];
+<a name="line553">553: </a>    group_sum5 += entry_x * y5[i];
+<a name="line554">554: </a>    group_sum6 += entry_x * y6[i];
+<a name="line555">555: </a>    group_sum7 += entry_x * y7[i];
+<a name="line556">556: </a>  }
+<a name="line557">557: </a>  tmp_buffer[threadIdx.x]                           = group_sum0;
+<a name="line558">558: </a>  tmp_buffer[threadIdx.x +     MDOT_WORKGROUP_SIZE] = group_sum1;
+<a name="line559">559: </a>  tmp_buffer[threadIdx.x + 2 * MDOT_WORKGROUP_SIZE] = group_sum2;
+<a name="line560">560: </a>  tmp_buffer[threadIdx.x + 3 * MDOT_WORKGROUP_SIZE] = group_sum3;
+<a name="line561">561: </a>  tmp_buffer[threadIdx.x + 4 * MDOT_WORKGROUP_SIZE] = group_sum4;
+<a name="line562">562: </a>  tmp_buffer[threadIdx.x + 5 * MDOT_WORKGROUP_SIZE] = group_sum5;
+<a name="line563">563: </a>  tmp_buffer[threadIdx.x + 6 * MDOT_WORKGROUP_SIZE] = group_sum6;
+<a name="line564">564: </a>  tmp_buffer[threadIdx.x + 7 * MDOT_WORKGROUP_SIZE] = group_sum7;
+
+<a name="line566">566: </a>  // parallel reduction
+<a name="line567">567: </a>  <font color="#4169E1">for</font> (<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> stride = blockDim.x/2; stride &gt; 0; stride /= 2) {
+<a name="line568">568: </a>    __syncthreads();
+<a name="line569">569: </a>    <font color="#4169E1">if</font> (threadIdx.x &lt; stride) {
+<a name="line570">570: </a>      tmp_buffer[threadIdx.x                          ] += tmp_buffer[threadIdx.x+stride                          ];
+<a name="line571">571: </a>      tmp_buffer[threadIdx.x +     MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride +     MDOT_WORKGROUP_SIZE];
+<a name="line572">572: </a>      tmp_buffer[threadIdx.x + 2 * MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride + 2 * MDOT_WORKGROUP_SIZE];
+<a name="line573">573: </a>      tmp_buffer[threadIdx.x + 3 * MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride + 3 * MDOT_WORKGROUP_SIZE];
+<a name="line574">574: </a>      tmp_buffer[threadIdx.x + 4 * MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride + 4 * MDOT_WORKGROUP_SIZE];
+<a name="line575">575: </a>      tmp_buffer[threadIdx.x + 5 * MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride + 5 * MDOT_WORKGROUP_SIZE];
+<a name="line576">576: </a>      tmp_buffer[threadIdx.x + 6 * MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride + 6 * MDOT_WORKGROUP_SIZE];
+<a name="line577">577: </a>      tmp_buffer[threadIdx.x + 7 * MDOT_WORKGROUP_SIZE] += tmp_buffer[threadIdx.x+stride + 7 * MDOT_WORKGROUP_SIZE];
+<a name="line578">578: </a>    }
+<a name="line579">579: </a>  }
+
+<a name="line581">581: </a>  // write result of group to group_results
+<a name="line582">582: </a>  <font color="#4169E1">if</font> (threadIdx.x == 0) {
+<a name="line583">583: </a>    group_results[blockIdx.x                ] = tmp_buffer[0];
+<a name="line584">584: </a>    group_results[blockIdx.x +     gridDim.x] = tmp_buffer[    MDOT_WORKGROUP_SIZE];
+<a name="line585">585: </a>    group_results[blockIdx.x + 2 * gridDim.x] = tmp_buffer[2 * MDOT_WORKGROUP_SIZE];
+<a name="line586">586: </a>    group_results[blockIdx.x + 3 * gridDim.x] = tmp_buffer[3 * MDOT_WORKGROUP_SIZE];
+<a name="line587">587: </a>    group_results[blockIdx.x + 4 * gridDim.x] = tmp_buffer[4 * MDOT_WORKGROUP_SIZE];
+<a name="line588">588: </a>    group_results[blockIdx.x + 5 * gridDim.x] = tmp_buffer[5 * MDOT_WORKGROUP_SIZE];
+<a name="line589">589: </a>    group_results[blockIdx.x + 6 * gridDim.x] = tmp_buffer[6 * MDOT_WORKGROUP_SIZE];
+<a name="line590">590: </a>    group_results[blockIdx.x + 7 * gridDim.x] = tmp_buffer[7 * MDOT_WORKGROUP_SIZE];
+<a name="line591">591: </a>  }
+<a name="line592">592: </a>}
+<a name="line593">593: </a><font color="#A020F0">#endif </font><font color="#B22222">/* !defined(PETSC_USE_COMPLEX) */</font><font color="#A020F0"></font>
+
+<a name="line595">595: </a><strong><font color="#4169E1"><a name="VecMDot_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecMDot_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nv,const <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin[],<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *z)</font></strong>
+<a name="line596">596: </a>{
+<a name="line597">597: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line598">598: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i,n = xin-&gt;map-&gt;n,current_y_index = 0;
+<a name="line599">599: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xptr,*y0ptr,*y1ptr,*y2ptr,*y3ptr,*y4ptr,*y5ptr,*y6ptr,*y7ptr;
+<a name="line600">600: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *group_results_gpu;
+<a name="line601">601: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line602">602: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          j;
+<a name="line603">603: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       group_results_cpu[MDOT_WORKGROUP_NUM * 8]; // we process at most eight vectors in one kernel
+<a name="line604">604: </a><font color="#A020F0">#endif</font>
+<a name="line605">605: </a>  cudaError_t    cuda_ierr;
+<a name="line606">606: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>   one=1,bn;
+<a name="line607">607: </a>  cublasHandle_t cublasv2handle;
+<a name="line608">608: </a>  cublasStatus_t cberr;
+
+<a name="line611">611: </a>  PetscCUBLASGetHandle(&amp;cublasv2handle);
+<a name="line612">612: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(xin-&gt;map-&gt;n,&amp;bn);
+<a name="line613">613: </a>  <font color="#4169E1">if</font> (nv &lt;= 0) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Number of vectors provided to VecMDot_SeqCUDA not positive."</font>);
+<a name="line614">614: </a>  <font color="#B22222">/* Handle the case of local size zero first */</font>
+<a name="line615">615: </a>  <font color="#4169E1">if</font> (!xin-&gt;map-&gt;n) {
+<a name="line616">616: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nv; ++i) z[i] = 0;
+<a name="line617">617: </a>    <font color="#4169E1">return</font>(0);
+<a name="line618">618: </a>  }
+
+<a name="line620">620: </a>  // allocate scratchpad memory <font color="#4169E1">for</font> the results of individual work groups:
+<a name="line621">621: </a>  cuda_cudaMalloc((void**)&amp;group_results_gpu, <font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) * MDOT_WORKGROUP_NUM * 8);CHKERRCUDA(cuda_ierr);
+
+<a name="line623">623: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xptr);
+
+<a name="line625">625: </a>  <font color="#4169E1">while</font> (current_y_index &lt; nv)
+<a name="line626">626: </a>  {
+<a name="line627">627: </a>    <font color="#4169E1">switch</font> (nv - current_y_index) {
+
+<a name="line629">629: </a>      <font color="#4169E1">case</font> 7:
+<a name="line630">630: </a>      <font color="#4169E1">case</font> 6:
+<a name="line631">631: </a>      <font color="#4169E1">case</font> 5:
+<a name="line632">632: </a>      <font color="#4169E1">case</font> 4:
+<a name="line633">633: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index  ],&amp;y0ptr);
+<a name="line634">634: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+1],&amp;y1ptr);
+<a name="line635">635: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+2],&amp;y2ptr);
+<a name="line636">636: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+3],&amp;y3ptr);
+<a name="line637">637: </a>        PetscLogGpuTimeBegin();
+<a name="line638">638: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line639">639: </a>        cberr = cublasXdot(cublasv2handle,bn,y0ptr,one,xptr,one,&amp;z[current_y_index]);CHKERRCUBLAS(cberr);
+<a name="line640">640: </a>        cberr = cublasXdot(cublasv2handle,bn,y1ptr,one,xptr,one,&amp;z[current_y_index+1]);CHKERRCUBLAS(cberr);
+<a name="line641">641: </a>        cberr = cublasXdot(cublasv2handle,bn,y2ptr,one,xptr,one,&amp;z[current_y_index+2]);CHKERRCUBLAS(cberr);
+<a name="line642">642: </a>        cberr = cublasXdot(cublasv2handle,bn,y3ptr,one,xptr,one,&amp;z[current_y_index+3]);CHKERRCUBLAS(cberr);
+<a name="line643">643: </a><font color="#A020F0">#else</font>
+<a name="line644">644: </a>        // run kernel:
+<a name="line645">645: </a>        VecMDot_SeqCUDA_kernel4&lt;&lt;&lt;MDOT_WORKGROUP_NUM,MDOT_WORKGROUP_SIZE&gt;&gt;&gt;(xptr,y0ptr,y1ptr,y2ptr,y3ptr,n,group_results_gpu);
+<a name="line646">646: </a>        PetscLogGpuTimeEnd();
+
+<a name="line648">648: </a>        // copy results back to
+<a name="line649">649: </a>        cuda_cudaMemcpy(group_results_cpu,group_results_gpu,<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) * MDOT_WORKGROUP_NUM * 4,cudaMemcpyDeviceToHost);CHKERRCUDA(cuda_ierr);
+
+<a name="line651">651: </a>        // sum group results into z:
+<a name="line652">652: </a>        <font color="#4169E1">for</font> (j=0; j&lt;4; ++j) {
+<a name="line653">653: </a>          z[current_y_index + j] = 0;
+<a name="line654">654: </a>          <font color="#4169E1">for</font> (i=j*MDOT_WORKGROUP_NUM; i&lt;(j+1)*MDOT_WORKGROUP_NUM; ++i) z[current_y_index + j] += group_results_cpu[i];
+<a name="line655">655: </a>        }
+<a name="line656">656: </a><font color="#A020F0">#endif</font>
+<a name="line657">657: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index  ],&amp;y0ptr);
+<a name="line658">658: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+1],&amp;y1ptr);
+<a name="line659">659: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+2],&amp;y2ptr);
+<a name="line660">660: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+3],&amp;y3ptr);
+<a name="line661">661: </a>        current_y_index += 4;
+<a name="line662">662: </a>        <font color="#4169E1">break</font>;
+
+<a name="line664">664: </a>      <font color="#4169E1">case</font> 3:
+<a name="line665">665: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index  ],&amp;y0ptr);
+<a name="line666">666: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+1],&amp;y1ptr);
+<a name="line667">667: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+2],&amp;y2ptr);
+
+<a name="line669">669: </a>        PetscLogGpuTimeBegin();
+<a name="line670">670: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line671">671: </a>        cberr = cublasXdot(cublasv2handle,bn,y0ptr,one,xptr,one,&amp;z[current_y_index]);CHKERRCUBLAS(cberr);
+<a name="line672">672: </a>        cberr = cublasXdot(cublasv2handle,bn,y1ptr,one,xptr,one,&amp;z[current_y_index+1]);CHKERRCUBLAS(cberr);
+<a name="line673">673: </a>        cberr = cublasXdot(cublasv2handle,bn,y2ptr,one,xptr,one,&amp;z[current_y_index+2]);CHKERRCUBLAS(cberr);
+<a name="line674">674: </a><font color="#A020F0">#else</font>
+<a name="line675">675: </a>        // run kernel:
+<a name="line676">676: </a>        VecMDot_SeqCUDA_kernel3&lt;&lt;&lt;MDOT_WORKGROUP_NUM,MDOT_WORKGROUP_SIZE&gt;&gt;&gt;(xptr,y0ptr,y1ptr,y2ptr,n,group_results_gpu);
+<a name="line677">677: </a>        PetscLogGpuTimeEnd();
+
+<a name="line679">679: </a>        // copy results back to
+<a name="line680">680: </a>        cuda_cudaMemcpy(group_results_cpu,group_results_gpu,<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) * MDOT_WORKGROUP_NUM * 3,cudaMemcpyDeviceToHost);CHKERRCUDA(cuda_ierr);
+
+<a name="line682">682: </a>        // sum group results into z:
+<a name="line683">683: </a>        <font color="#4169E1">for</font> (j=0; j&lt;3; ++j) {
+<a name="line684">684: </a>          z[current_y_index + j] = 0;
+<a name="line685">685: </a>          <font color="#4169E1">for</font> (i=j*MDOT_WORKGROUP_NUM; i&lt;(j+1)*MDOT_WORKGROUP_NUM; ++i) z[current_y_index + j] += group_results_cpu[i];
+<a name="line686">686: </a>        }
+<a name="line687">687: </a><font color="#A020F0">#endif</font>
+<a name="line688">688: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index  ],&amp;y0ptr);
+<a name="line689">689: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+1],&amp;y1ptr);
+<a name="line690">690: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+2],&amp;y2ptr);
+<a name="line691">691: </a>        current_y_index += 3;
+<a name="line692">692: </a>        <font color="#4169E1">break</font>;
+
+<a name="line694">694: </a>      <font color="#4169E1">case</font> 2:
+<a name="line695">695: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index],&amp;y0ptr);
+<a name="line696">696: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+1],&amp;y1ptr);
+<a name="line697">697: </a>        PetscLogGpuTimeBegin();
+<a name="line698">698: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line699">699: </a>        cberr = cublasXdot(cublasv2handle,bn,y0ptr,one,xptr,one,&amp;z[current_y_index]);CHKERRCUBLAS(cberr);
+<a name="line700">700: </a>        cberr = cublasXdot(cublasv2handle,bn,y1ptr,one,xptr,one,&amp;z[current_y_index+1]);CHKERRCUBLAS(cberr);
+<a name="line701">701: </a><font color="#A020F0">#else</font>
+<a name="line702">702: </a>        // run kernel:
+<a name="line703">703: </a>        VecMDot_SeqCUDA_kernel2&lt;&lt;&lt;MDOT_WORKGROUP_NUM,MDOT_WORKGROUP_SIZE&gt;&gt;&gt;(xptr,y0ptr,y1ptr,n,group_results_gpu);
+<a name="line704">704: </a>        PetscLogGpuTimeEnd();
+
+<a name="line706">706: </a>        // copy results back to
+<a name="line707">707: </a>        cuda_cudaMemcpy(group_results_cpu,group_results_gpu,<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) * MDOT_WORKGROUP_NUM * 2,cudaMemcpyDeviceToHost);CHKERRCUDA(cuda_ierr);
+
+<a name="line709">709: </a>        // sum group results into z:
+<a name="line710">710: </a>        <font color="#4169E1">for</font> (j=0; j&lt;2; ++j) {
+<a name="line711">711: </a>          z[current_y_index + j] = 0;
+<a name="line712">712: </a>          <font color="#4169E1">for</font> (i=j*MDOT_WORKGROUP_NUM; i&lt;(j+1)*MDOT_WORKGROUP_NUM; ++i) z[current_y_index + j] += group_results_cpu[i];
+<a name="line713">713: </a>        }
+<a name="line714">714: </a><font color="#A020F0">#endif</font>
+<a name="line715">715: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index],&amp;y0ptr);
+<a name="line716">716: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+1],&amp;y1ptr);
+<a name="line717">717: </a>        current_y_index += 2;
+<a name="line718">718: </a>        <font color="#4169E1">break</font>;
+
+<a name="line720">720: </a>      <font color="#4169E1">case</font> 1:
+<a name="line721">721: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index],&amp;y0ptr);
+<a name="line722">722: </a>        PetscLogGpuTimeBegin();
+<a name="line723">723: </a>        cberr = cublasXdot(cublasv2handle,bn,y0ptr,one,xptr,one,&amp;z[current_y_index]);CHKERRCUBLAS(cberr);
+<a name="line724">724: </a>        PetscLogGpuTimeEnd();
+<a name="line725">725: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index],&amp;y0ptr);
+<a name="line726">726: </a>        current_y_index += 1;
+<a name="line727">727: </a>        <font color="#4169E1">break</font>;
+
+<a name="line729">729: </a><strong><font color="#FF0000">      default:</font></strong> // 8 or more vectors left
+<a name="line730">730: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index  ],&amp;y0ptr);
+<a name="line731">731: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+1],&amp;y1ptr);
+<a name="line732">732: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+2],&amp;y2ptr);
+<a name="line733">733: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+3],&amp;y3ptr);
+<a name="line734">734: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+4],&amp;y4ptr);
+<a name="line735">735: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+5],&amp;y5ptr);
+<a name="line736">736: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+6],&amp;y6ptr);
+<a name="line737">737: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin[current_y_index+7],&amp;y7ptr);
+<a name="line738">738: </a>        PetscLogGpuTimeBegin();
+<a name="line739">739: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line740">740: </a>        cberr = cublasXdot(cublasv2handle,bn,y0ptr,one,xptr,one,&amp;z[current_y_index]);CHKERRCUBLAS(cberr);
+<a name="line741">741: </a>        cberr = cublasXdot(cublasv2handle,bn,y1ptr,one,xptr,one,&amp;z[current_y_index+1]);CHKERRCUBLAS(cberr);
+<a name="line742">742: </a>        cberr = cublasXdot(cublasv2handle,bn,y2ptr,one,xptr,one,&amp;z[current_y_index+2]);CHKERRCUBLAS(cberr);
+<a name="line743">743: </a>        cberr = cublasXdot(cublasv2handle,bn,y3ptr,one,xptr,one,&amp;z[current_y_index+3]);CHKERRCUBLAS(cberr);
+<a name="line744">744: </a>        cberr = cublasXdot(cublasv2handle,bn,y4ptr,one,xptr,one,&amp;z[current_y_index+4]);CHKERRCUBLAS(cberr);
+<a name="line745">745: </a>        cberr = cublasXdot(cublasv2handle,bn,y5ptr,one,xptr,one,&amp;z[current_y_index+5]);CHKERRCUBLAS(cberr);
+<a name="line746">746: </a>        cberr = cublasXdot(cublasv2handle,bn,y6ptr,one,xptr,one,&amp;z[current_y_index+6]);CHKERRCUBLAS(cberr);
+<a name="line747">747: </a>        cberr = cublasXdot(cublasv2handle,bn,y7ptr,one,xptr,one,&amp;z[current_y_index+7]);CHKERRCUBLAS(cberr);
+<a name="line748">748: </a><font color="#A020F0">#else</font>
+<a name="line749">749: </a>        // run kernel:
+<a name="line750">750: </a>        VecMDot_SeqCUDA_kernel8&lt;&lt;&lt;MDOT_WORKGROUP_NUM,MDOT_WORKGROUP_SIZE&gt;&gt;&gt;(xptr,y0ptr,y1ptr,y2ptr,y3ptr,y4ptr,y5ptr,y6ptr,y7ptr,n,group_results_gpu);
+<a name="line751">751: </a>        PetscLogGpuTimeEnd();
+
+<a name="line753">753: </a>        // copy results back to
+<a name="line754">754: </a>        cuda_cudaMemcpy(group_results_cpu,group_results_gpu,<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) * MDOT_WORKGROUP_NUM * 8,cudaMemcpyDeviceToHost);CHKERRCUDA(cuda_ierr);
+
+<a name="line756">756: </a>        // sum group results into z:
+<a name="line757">757: </a>        <font color="#4169E1">for</font> (j=0; j&lt;8; ++j) {
+<a name="line758">758: </a>          z[current_y_index + j] = 0;
+<a name="line759">759: </a>          <font color="#4169E1">for</font> (i=j*MDOT_WORKGROUP_NUM; i&lt;(j+1)*MDOT_WORKGROUP_NUM; ++i) z[current_y_index + j] += group_results_cpu[i];
+<a name="line760">760: </a>        }
+<a name="line761">761: </a><font color="#A020F0">#endif</font>
+<a name="line762">762: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index  ],&amp;y0ptr);
+<a name="line763">763: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+1],&amp;y1ptr);
+<a name="line764">764: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+2],&amp;y2ptr);
+<a name="line765">765: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+3],&amp;y3ptr);
+<a name="line766">766: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+4],&amp;y4ptr);
+<a name="line767">767: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+5],&amp;y5ptr);
+<a name="line768">768: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+6],&amp;y6ptr);
+<a name="line769">769: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin[current_y_index+7],&amp;y7ptr);
+<a name="line770">770: </a>        current_y_index += 8;
+<a name="line771">771: </a>        <font color="#4169E1">break</font>;
+<a name="line772">772: </a>    }
+<a name="line773">773: </a>  }
+<a name="line774">774: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xptr);
+
+<a name="line776">776: </a>  cuda_cudaFree(group_results_gpu);CHKERRCUDA(cuda_ierr);
+<a name="line777">777: </a>  PetscLogGpuFlops(<a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(nv*(2.0*n-1),0.0));
+<a name="line778">778: </a>  <font color="#4169E1">return</font>(0);
+<a name="line779">779: </a>}
+
+<a name="line781">781: </a><strong><font color="#228B22">#undef MDOT_WORKGROUP_SIZE</font></strong>
+<a name="line782">782: </a><strong><font color="#228B22">#undef MDOT_WORKGROUP_NUM</font></strong>
+
+<a name="line784">784: </a><strong><font color="#4169E1"><a name="VecSet_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecSet_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> alpha)</font></strong>
+<a name="line785">785: </a>{
+<a name="line786">786: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>                        n = xin-&gt;map-&gt;n;
+<a name="line787">787: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>                     *xarray=NULL;
+<a name="line788">788: </a><strong><font color="#FF0000">  thrust:</font></strong>:device_ptr&lt;<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>&gt; xptr;
+<a name="line789">789: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>                  ierr;
+<a name="line790">790: </a>  cudaError_t                     err;
+
+<a name="line793">793: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayWrite.html#VecCUDAGetArrayWrite">VecCUDAGetArrayWrite</a>(xin,&amp;xarray);
+<a name="line794">794: </a>  PetscLogGpuTimeBegin();
+<a name="line795">795: </a>  <font color="#4169E1">if</font> (alpha == (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line796">796: </a>    err = cudaMemset(xarray,0,n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>));CHKERRCUDA(err);
+<a name="line797">797: </a>  } <font color="#4169E1">else</font> {
+<a name="line798">798: </a>    try {
+<a name="line799">799: </a>      xptr = thrust::device_pointer_cast(xarray);
+<a name="line800">800: </a><strong><font color="#FF0000">      thrust:</font></strong>:fill(xptr,xptr+n,alpha);
+<a name="line801">801: </a>    } catch (char *ex) {
+<a name="line802">802: </a>      <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Thrust error: %s"</font>, ex);
+<a name="line803">803: </a>    }
+<a name="line804">804: </a>  }
+<a name="line805">805: </a>  WaitForGPU();CHKERRCUDA(ierr);
+<a name="line806">806: </a>  PetscLogGpuTimeEnd();
+<a name="line807">807: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayWrite.html#VecCUDARestoreArrayWrite">VecCUDARestoreArrayWrite</a>(xin,&amp;xarray);
+<a name="line808">808: </a>  <font color="#4169E1">return</font>(0);
+<a name="line809">809: </a>}
+
+<a name="line811">811: </a><strong><font color="#4169E1"><a name="VecScale_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScale_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> alpha)</font></strong>
+<a name="line812">812: </a>{
+<a name="line813">813: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *xarray;
+<a name="line815">815: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>   one=1,bn;
+<a name="line816">816: </a>  cublasHandle_t cublasv2handle;
+<a name="line817">817: </a>  cublasStatus_t cberr;
+
+<a name="line820">820: </a>  <font color="#4169E1">if</font> (alpha == (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line821">821: </a>    VecSet_SeqCUDA(xin,alpha);
+<a name="line822">822: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line823">823: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (alpha != (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)1.0) {
+<a name="line824">824: </a>    PetscCUBLASGetHandle(&amp;cublasv2handle);
+<a name="line825">825: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(xin-&gt;map-&gt;n,&amp;bn);
+<a name="line826">826: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArray.html#VecCUDAGetArray">VecCUDAGetArray</a>(xin,&amp;xarray);
+<a name="line827">827: </a>    PetscLogGpuTimeBegin();
+<a name="line828">828: </a>    cberr = cublasXscal(cublasv2handle,bn,&amp;alpha,xarray,one);CHKERRCUBLAS(cberr);
+<a name="line829">829: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArray.html#VecCUDARestoreArray">VecCUDARestoreArray</a>(xin,&amp;xarray);
+<a name="line830">830: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line831">831: </a>    PetscLogGpuTimeEnd();
+<a name="line832">832: </a>  }
+<a name="line833">833: </a>  PetscLogGpuFlops(xin-&gt;map-&gt;n);
+<a name="line834">834: </a>  <font color="#4169E1">return</font>(0);
+<a name="line835">835: </a>}
+
+<a name="line837">837: </a><strong><font color="#4169E1"><a name="VecTDot_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecTDot_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *z)</font></strong>
+<a name="line838">838: </a>{
+<a name="line839">839: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xarray,*yarray;
+<a name="line840">840: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line841">841: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>      one=1,bn;
+<a name="line842">842: </a>  cublasHandle_t    cublasv2handle;
+<a name="line843">843: </a>  cublasStatus_t    cberr;
+
+<a name="line846">846: </a>  PetscCUBLASGetHandle(&amp;cublasv2handle);
+<a name="line847">847: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(xin-&gt;map-&gt;n,&amp;bn);
+<a name="line848">848: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line849">849: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin,&amp;yarray);
+<a name="line850">850: </a>  PetscLogGpuTimeBegin();
+<a name="line851">851: </a>  cberr = cublasXdotu(cublasv2handle,bn,xarray,one,yarray,one,z);CHKERRCUBLAS(cberr);
+<a name="line852">852: </a>  WaitForGPU();CHKERRCUDA(ierr);
+<a name="line853">853: </a>  PetscLogGpuTimeEnd();
+<a name="line854">854: </a>  <font color="#4169E1">if</font> (xin-&gt;map-&gt;n &gt; 0) {
+<a name="line855">855: </a>    PetscLogGpuFlops(2.0*xin-&gt;map-&gt;n-1);
+<a name="line856">856: </a>  }
+<a name="line857">857: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin,&amp;yarray);
+<a name="line858">858: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line859">859: </a>  <font color="#4169E1">return</font>(0);
+<a name="line860">860: </a>}
+
+<a name="line862">862: </a><strong><font color="#4169E1"><a name="VecCopy_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecCopy_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin)</font></strong>
+<a name="line863">863: </a>{
+<a name="line864">864: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xarray;
+<a name="line865">865: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *yarray;
+<a name="line866">866: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line867">867: </a>  cudaError_t       err;
+
+<a name="line870">870: </a>  <font color="#4169E1">if</font> (xin != yin) {
+<a name="line871">871: </a>    <font color="#4169E1">if</font> (xin-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_GPU</a>) {
+<a name="line872">872: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> yiscuda;
+
+<a name="line874">874: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscObjectTypeCompareAny.html#PetscObjectTypeCompareAny">PetscObjectTypeCompareAny</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)yin,&amp;yiscuda,<a href="../../../../../../docs/manualpages/Vec/VECSEQCUDA.html#VECSEQCUDA">VECSEQCUDA</a>,<a href="../../../../../../docs/manualpages/Vec/VECMPICUDA.html#VECMPICUDA">VECMPICUDA</a>,<font color="#666666">""</font>);
+<a name="line875">875: </a>      <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line876">876: </a>      <font color="#4169E1">if</font> (yiscuda) {
+<a name="line877">877: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayWrite.html#VecCUDAGetArrayWrite">VecCUDAGetArrayWrite</a>(yin,&amp;yarray);
+<a name="line878">878: </a>      } <font color="#4169E1">else</font> {
+<a name="line879">879: </a>        <a href="../../../../../../docs/manualpages/Vec/VecGetArrayWrite.html#VecGetArrayWrite">VecGetArrayWrite</a>(yin,&amp;yarray);
+<a name="line880">880: </a>      }
+<a name="line881">881: </a>      PetscLogGpuTimeBegin();
+<a name="line882">882: </a>      <font color="#4169E1">if</font> (yiscuda) {
+<a name="line883">883: </a>        err = cudaMemcpy(yarray,xarray,yin-&gt;map-&gt;n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyDeviceToDevice);CHKERRCUDA(err);
+<a name="line884">884: </a>      } <font color="#4169E1">else</font> {
+<a name="line885">885: </a>        err = cudaMemcpy(yarray,xarray,yin-&gt;map-&gt;n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyDeviceToHost);CHKERRCUDA(err);
+<a name="line886">886: </a>      }
+<a name="line887">887: </a>      WaitForGPU();CHKERRCUDA(ierr);
+<a name="line888">888: </a>      PetscLogGpuTimeEnd();
+<a name="line889">889: </a>      <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line890">890: </a>      <font color="#4169E1">if</font> (yiscuda) {
+<a name="line891">891: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayWrite.html#VecCUDARestoreArrayWrite">VecCUDARestoreArrayWrite</a>(yin,&amp;yarray);
+<a name="line892">892: </a>      } <font color="#4169E1">else</font> {
+<a name="line893">893: </a>        <a href="../../../../../../docs/manualpages/Vec/VecRestoreArrayWrite.html#VecRestoreArrayWrite">VecRestoreArrayWrite</a>(yin,&amp;yarray);
+<a name="line894">894: </a>      }
+<a name="line895">895: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (xin-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_CPU</a>) {
+<a name="line896">896: </a>      <font color="#B22222">/* copy in CPU if we are on the CPU */</font>
+<a name="line897">897: </a>      VecCopy_SeqCUDA_Private(xin,yin);
+<a name="line898">898: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (xin-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_BOTH</a>) {
+<a name="line899">899: </a>      <font color="#B22222">/* if xin is valid in both places, see where yin is and copy there (because it's probably where we'll want to next use it) */</font>
+<a name="line900">900: </a>      <font color="#4169E1">if</font> (yin-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_CPU</a>) {
+<a name="line901">901: </a>        <font color="#B22222">/* copy in CPU */</font>
+<a name="line902">902: </a>        VecCopy_SeqCUDA_Private(xin,yin);
+<a name="line903">903: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (yin-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_GPU</a>) {
+<a name="line904">904: </a>        <font color="#B22222">/* copy in GPU */</font>
+<a name="line905">905: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line906">906: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayWrite.html#VecCUDAGetArrayWrite">VecCUDAGetArrayWrite</a>(yin,&amp;yarray);
+<a name="line907">907: </a>        PetscLogGpuTimeBegin();
+<a name="line908">908: </a>        err  = cudaMemcpy(yarray,xarray,yin-&gt;map-&gt;n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyDeviceToDevice);CHKERRCUDA(err);
+<a name="line909">909: </a>        PetscLogGpuTimeEnd();
+<a name="line910">910: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line911">911: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayWrite.html#VecCUDARestoreArrayWrite">VecCUDARestoreArrayWrite</a>(yin,&amp;yarray);
+<a name="line912">912: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (yin-&gt;offloadmask == <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_BOTH</a>) {
+<a name="line913">913: </a>        <font color="#B22222">/* xin and yin are both valid in both places (or yin was unallocated before the earlier call to allocatecheck</font>
+<a name="line914">914: </a><font color="#B22222">           default to copy in GPU (this is an arbitrary choice) */</font>
+<a name="line915">915: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line916">916: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayWrite.html#VecCUDAGetArrayWrite">VecCUDAGetArrayWrite</a>(yin,&amp;yarray);
+<a name="line917">917: </a>        PetscLogGpuTimeBegin();
+<a name="line918">918: </a>        err  = cudaMemcpy(yarray,xarray,yin-&gt;map-&gt;n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyDeviceToDevice);CHKERRCUDA(err);
+<a name="line919">919: </a>        PetscLogGpuTimeEnd();
+<a name="line920">920: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line921">921: </a>        <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayWrite.html#VecCUDARestoreArrayWrite">VecCUDARestoreArrayWrite</a>(yin,&amp;yarray);
+<a name="line922">922: </a>      } <font color="#4169E1">else</font> {
+<a name="line923">923: </a>        VecCopy_SeqCUDA_Private(xin,yin);
+<a name="line924">924: </a>      }
+<a name="line925">925: </a>    }
+<a name="line926">926: </a>  }
+<a name="line927">927: </a>  <font color="#4169E1">return</font>(0);
+<a name="line928">928: </a>}
+
+<a name="line930">930: </a><strong><font color="#4169E1"><a name="VecSwap_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecSwap_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin)</font></strong>
+<a name="line931">931: </a>{
+<a name="line933">933: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>   one = 1,bn;
+<a name="line934">934: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *xarray,*yarray;
+<a name="line935">935: </a>  cublasHandle_t cublasv2handle;
+<a name="line936">936: </a>  cublasStatus_t cberr;
+
+<a name="line939">939: </a>  PetscCUBLASGetHandle(&amp;cublasv2handle);
+<a name="line940">940: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(xin-&gt;map-&gt;n,&amp;bn);
+<a name="line941">941: </a>  <font color="#4169E1">if</font> (xin != yin) {
+<a name="line942">942: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArray.html#VecCUDAGetArray">VecCUDAGetArray</a>(xin,&amp;xarray);
+<a name="line943">943: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArray.html#VecCUDAGetArray">VecCUDAGetArray</a>(yin,&amp;yarray);
+<a name="line944">944: </a>    PetscLogGpuTimeBegin();
+<a name="line945">945: </a>    cberr = cublasXswap(cublasv2handle,bn,xarray,one,yarray,one);CHKERRCUBLAS(cberr);
+<a name="line946">946: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line947">947: </a>    PetscLogGpuTimeEnd();
+<a name="line948">948: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArray.html#VecCUDARestoreArray">VecCUDARestoreArray</a>(xin,&amp;xarray);
+<a name="line949">949: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArray.html#VecCUDARestoreArray">VecCUDARestoreArray</a>(yin,&amp;yarray);
+<a name="line950">950: </a>  }
+<a name="line951">951: </a>  <font color="#4169E1">return</font>(0);
+<a name="line952">952: </a>}
+
+<a name="line954">954: </a><strong><font color="#4169E1"><a name="VecAXPBY_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecAXPBY_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> alpha,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> beta,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin)</font></strong>
+<a name="line955">955: </a>{
+<a name="line956">956: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line957">957: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       a = alpha,b = beta;
+<a name="line958">958: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xarray;
+<a name="line959">959: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *yarray;
+<a name="line960">960: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>      one = 1, bn;
+<a name="line961">961: </a>  cublasHandle_t    cublasv2handle;
+<a name="line962">962: </a>  cublasStatus_t    cberr;
+<a name="line963">963: </a>  cudaError_t       err;
+
+<a name="line966">966: </a>  PetscCUBLASGetHandle(&amp;cublasv2handle);
+<a name="line967">967: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(yin-&gt;map-&gt;n,&amp;bn);
+<a name="line968">968: </a>  <font color="#4169E1">if</font> (a == (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line969">969: </a>    VecScale_SeqCUDA(yin,beta);
+<a name="line970">970: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (b == (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)1.0) {
+<a name="line971">971: </a>    VecAXPY_SeqCUDA(yin,alpha,xin);
+<a name="line972">972: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (a == (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)1.0) {
+<a name="line973">973: </a>    VecAYPX_SeqCUDA(yin,beta,xin);
+<a name="line974">974: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (b == (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line975">975: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line976">976: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArray.html#VecCUDAGetArray">VecCUDAGetArray</a>(yin,&amp;yarray);
+<a name="line977">977: </a>    PetscLogGpuTimeBegin();
+<a name="line978">978: </a>    err = cudaMemcpy(yarray,xarray,yin-&gt;map-&gt;n*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyDeviceToDevice);CHKERRCUDA(err);
+<a name="line979">979: </a>    cberr = cublasXscal(cublasv2handle,bn,&amp;alpha,yarray,one);CHKERRCUBLAS(cberr);
+<a name="line980">980: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line981">981: </a>    PetscLogGpuTimeEnd();
+<a name="line982">982: </a>    PetscLogGpuFlops(xin-&gt;map-&gt;n);
+<a name="line983">983: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line984">984: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArray.html#VecCUDARestoreArray">VecCUDARestoreArray</a>(yin,&amp;yarray);
+<a name="line985">985: </a>  } <font color="#4169E1">else</font> {
+<a name="line986">986: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line987">987: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArray.html#VecCUDAGetArray">VecCUDAGetArray</a>(yin,&amp;yarray);
+<a name="line988">988: </a>    PetscLogGpuTimeBegin();
+<a name="line989">989: </a>    cberr = cublasXscal(cublasv2handle,bn,&amp;beta,yarray,one);CHKERRCUBLAS(cberr);
+<a name="line990">990: </a>    cberr = cublasXaxpy(cublasv2handle,bn,&amp;alpha,xarray,one,yarray,one);CHKERRCUBLAS(cberr);
+<a name="line991">991: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line992">992: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArray.html#VecCUDARestoreArray">VecCUDARestoreArray</a>(yin,&amp;yarray);
+<a name="line993">993: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line994">994: </a>    PetscLogGpuTimeEnd();
+<a name="line995">995: </a>    PetscLogGpuFlops(3.0*xin-&gt;map-&gt;n);
+<a name="line996">996: </a>  }
+<a name="line997">997: </a>  <font color="#4169E1">return</font>(0);
+<a name="line998">998: </a>}
+
+<a name="line1000">1000: </a><strong><font color="#4169E1"><a name="VecAXPBYPCZ_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecAXPBYPCZ_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> zin,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> alpha,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> beta,<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> gamma,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin)</font></strong>
+<a name="line1001">1001: </a>{
+<a name="line1003">1003: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       n = zin-&gt;map-&gt;n;
+
+<a name="line1006">1006: </a>  <font color="#4169E1">if</font> (gamma == (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)1.0) {
+<a name="line1007">1007: </a>    <font color="#B22222">/* z = ax + b*y + z */</font>
+<a name="line1008">1008: </a>    VecAXPY_SeqCUDA(zin,alpha,xin);
+<a name="line1009">1009: </a>    VecAXPY_SeqCUDA(zin,beta,yin);
+<a name="line1010">1010: </a>    PetscLogGpuFlops(4.0*n);
+<a name="line1011">1011: </a>  } <font color="#4169E1">else</font> {
+<a name="line1012">1012: </a>    <font color="#B22222">/* z = a*x + b*y + c*z */</font>
+<a name="line1013">1013: </a>    VecScale_SeqCUDA(zin,gamma);
+<a name="line1014">1014: </a>    VecAXPY_SeqCUDA(zin,alpha,xin);
+<a name="line1015">1015: </a>    VecAXPY_SeqCUDA(zin,beta,yin);
+<a name="line1016">1016: </a>    PetscLogGpuFlops(5.0*n);
+<a name="line1017">1017: </a>  }
+<a name="line1018">1018: </a>  WaitForGPU();CHKERRCUDA(ierr);
+<a name="line1019">1019: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1020">1020: </a>}
+
+<a name="line1022">1022: </a><strong><font color="#4169E1"><a name="VecPointwiseMult_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecPointwiseMult_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> win,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> yin)</font></strong>
+<a name="line1023">1023: </a>{
+<a name="line1024">1024: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>                              n = win-&gt;map-&gt;n;
+<a name="line1025">1025: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>                     *xarray,*yarray;
+<a name="line1026">1026: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>                           *warray;
+<a name="line1027">1027: </a><strong><font color="#FF0000">  thrust:</font></strong>:device_ptr&lt;const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>&gt; xptr,yptr;
+<a name="line1028">1028: </a><strong><font color="#FF0000">  thrust:</font></strong>:device_ptr&lt;<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>&gt;       wptr;
+<a name="line1029">1029: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>                        ierr;
+
+<a name="line1032">1032: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArray.html#VecCUDAGetArray">VecCUDAGetArray</a>(win,&amp;warray);
+<a name="line1033">1033: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line1034">1034: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(yin,&amp;yarray);
+<a name="line1035">1035: </a>  PetscLogGpuTimeBegin();
+<a name="line1036">1036: </a>  try {
+<a name="line1037">1037: </a>    wptr = thrust::device_pointer_cast(warray);
+<a name="line1038">1038: </a>    xptr = thrust::device_pointer_cast(xarray);
+<a name="line1039">1039: </a>    yptr = thrust::device_pointer_cast(yarray);
+<a name="line1040">1040: </a><strong><font color="#FF0000">    thrust:</font></strong>:transform(xptr,xptr+n,yptr,wptr,thrust::multiplies&lt;<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>&gt;());
+<a name="line1041">1041: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line1042">1042: </a>  } catch (char *ex) {
+<a name="line1043">1043: </a>    <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Thrust error: %s"</font>, ex);
+<a name="line1044">1044: </a>  }
+<a name="line1045">1045: </a>  PetscLogGpuTimeEnd();
+<a name="line1046">1046: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line1047">1047: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(yin,&amp;yarray);
+<a name="line1048">1048: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArray.html#VecCUDARestoreArray">VecCUDARestoreArray</a>(win,&amp;warray);
+<a name="line1049">1049: </a>  PetscLogGpuFlops(n);
+<a name="line1050">1050: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1051">1051: </a>}
+
+<a name="line1053">1053: </a><font color="#B22222">/* should do infinity norm in cuda */</font>
+
+<a name="line1055">1055: </a><strong><font color="#4169E1"><a name="VecNorm_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecNorm_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin,<a href="../../../../../../docs/manualpages/Vec/NormType.html#NormType">NormType</a> type,<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *z)</font></strong>
+<a name="line1056">1056: </a>{
+<a name="line1057">1057: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line1058">1058: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          n = xin-&gt;map-&gt;n;
+<a name="line1059">1059: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>      one = 1, bn;
+<a name="line1060">1060: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xarray;
+<a name="line1061">1061: </a>  cublasHandle_t    cublasv2handle;
+<a name="line1062">1062: </a>  cublasStatus_t    cberr;
+<a name="line1063">1063: </a>  cudaError_t       err;
+
+<a name="line1066">1066: </a>  PetscCUBLASGetHandle(&amp;cublasv2handle);
+<a name="line1067">1067: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(n,&amp;bn);
+<a name="line1068">1068: </a>  <font color="#4169E1">if</font> (type == <a href="../../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a> || type == <a href="../../../../../../docs/manualpages/Vec/NORM_FROBENIUS.html#NORM_FROBENIUS">NORM_FROBENIUS</a>) {
+<a name="line1069">1069: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line1070">1070: </a>    PetscLogGpuTimeBegin();
+<a name="line1071">1071: </a>    cberr = cublasXnrm2(cublasv2handle,bn,xarray,one,z);CHKERRCUBLAS(cberr);
+<a name="line1072">1072: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line1073">1073: </a>    PetscLogGpuTimeEnd();
+<a name="line1074">1074: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line1075">1075: </a>    PetscLogGpuFlops(<a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(2.0*n-1,0.0));
+<a name="line1076">1076: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type == <a href="../../../../../../docs/manualpages/Vec/NORM_INFINITY.html#NORM_INFINITY">NORM_INFINITY</a>) {
+<a name="line1077">1077: </a>    int  i;
+<a name="line1078">1078: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line1079">1079: </a>    PetscLogGpuTimeBegin();
+<a name="line1080">1080: </a>    cberr = cublasIXamax(cublasv2handle,bn,xarray,one,&amp;i);CHKERRCUBLAS(cberr);
+<a name="line1081">1081: </a>    PetscLogGpuTimeEnd();
+<a name="line1082">1082: </a>    <font color="#4169E1">if</font> (bn) {
+<a name="line1083">1083: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> zs;
+<a name="line1084">1084: </a>      err = cudaMemcpy(&amp;zs,xarray+i-1,<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>),cudaMemcpyDeviceToHost);CHKERRCUDA(err);
+<a name="line1085">1085: </a>      *z = PetscAbsScalar(zs);
+<a name="line1086">1086: </a>    } <font color="#4169E1">else</font> *z = 0.0;
+<a name="line1087">1087: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line1088">1088: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type == <a href="../../../../../../docs/manualpages/Vec/NORM_1.html#NORM_1">NORM_1</a>) {
+<a name="line1089">1089: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(xin,&amp;xarray);
+<a name="line1090">1090: </a>    PetscLogGpuTimeBegin();
+<a name="line1091">1091: </a>    cberr = cublasXasum(cublasv2handle,bn,xarray,one,z);CHKERRCUBLAS(cberr);
+<a name="line1092">1092: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(xin,&amp;xarray);
+<a name="line1093">1093: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line1094">1094: </a>    PetscLogGpuTimeEnd();
+<a name="line1095">1095: </a>    PetscLogGpuFlops(<a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(n-1.0,0.0));
+<a name="line1096">1096: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type == <a href="../../../../../../docs/manualpages/Vec/NORM_1_AND_2.html#NORM_1_AND_2">NORM_1_AND_2</a>) {
+<a name="line1097">1097: </a>    VecNorm_SeqCUDA(xin,<a href="../../../../../../docs/manualpages/Vec/NORM_1.html#NORM_1">NORM_1</a>,z);
+<a name="line1098">1098: </a>    VecNorm_SeqCUDA(xin,<a href="../../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,z+1);
+<a name="line1099">1099: </a>  }
+<a name="line1100">1100: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1101">1101: </a>}
+
+<a name="line1103">1103: </a><strong><font color="#4169E1"><a name="VecDotNorm2_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecDotNorm2_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> s, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> t, <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *dp, <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *nm)</font></strong>
+<a name="line1104">1104: </a>{
+<a name="line1105">1105: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line1106">1106: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         n=s-&gt;map-&gt;n;
+<a name="line1107">1107: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *sarray,*tarray;
+
+<a name="line1110">1110: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(s,&amp;sarray);
+<a name="line1111">1111: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArrayRead.html#VecCUDAGetArrayRead">VecCUDAGetArrayRead</a>(t,&amp;tarray);
+<a name="line1112">1112: </a>  VecDot_SeqCUDA(s,t,dp);
+<a name="line1113">1113: </a>  VecDot_SeqCUDA(t,t,nm);
+<a name="line1114">1114: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(s,&amp;sarray);
+<a name="line1115">1115: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArrayRead.html#VecCUDARestoreArrayRead">VecCUDARestoreArrayRead</a>(t,&amp;tarray);
+<a name="line1116">1116: </a>  WaitForGPU();CHKERRCUDA(ierr);
+<a name="line1117">1117: </a>  PetscLogGpuFlops(4.0*n);
+<a name="line1118">1118: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1119">1119: </a>}
+
+<a name="line1121">1121: </a><strong><font color="#4169E1"><a name="VecDestroy_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecDestroy_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v)</font></strong>
+<a name="line1122">1122: </a>{
+<a name="line1124">1124: </a>  cudaError_t    err;
+
+<a name="line1127">1127: </a>  <font color="#4169E1">if</font> (v-&gt;spptr) {
+<a name="line1128">1128: </a>    <font color="#4169E1">if</font> (((Vec_CUDA*)v-&gt;spptr)-&gt;GPUarray_allocated) {
+<a name="line1129">1129: </a>      err = cudaFree(((Vec_CUDA*)v-&gt;spptr)-&gt;GPUarray_allocated);CHKERRCUDA(err);
+<a name="line1130">1130: </a>      ((Vec_CUDA*)v-&gt;spptr)-&gt;GPUarray_allocated = NULL;
+<a name="line1131">1131: </a>    }
+<a name="line1132">1132: </a>    <font color="#4169E1">if</font> (((Vec_CUDA*)v-&gt;spptr)-&gt;stream) {
+<a name="line1133">1133: </a>      err = cudaStreamDestroy(((Vec_CUDA*)v-&gt;spptr)-&gt;stream);CHKERRCUDA(err);
+<a name="line1134">1134: </a>    }
+<a name="line1135">1135: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(v-&gt;spptr);
+<a name="line1136">1136: </a>  }
+<a name="line1137">1137: </a>  VecDestroy_SeqCUDA_Private(v);
+<a name="line1138">1138: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1139">1139: </a>}
+
+<a name="line1141">1141: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line1142">1142: </a><font color="#4169E1"><a name="conjugate"></a>struct conjugate</font>
+<a name="line1143">1143: </a>{
+<a name="line1144">1144: </a>  __host__ __device__
+<a name="line1145">1145: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> operator()(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> x)
+<a name="line1146">1146: </a>    {
+<a name="line1147">1147: </a>      <font color="#4169E1">return</font> PetscConj(x);
+<a name="line1148">1148: </a>    }
+<a name="line1149">1149: </a>};
+<a name="line1150">1150: </a><font color="#A020F0">#endif</font>
+
+<a name="line1152">1152: </a><strong><font color="#4169E1"><a name="VecConjugate_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecConjugate_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin)</font></strong>
+<a name="line1153">1153: </a>{
+<a name="line1154">1154: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>                     *xarray;
+<a name="line1155">1155: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>                  ierr;
+<a name="line1156">1156: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line1157">1157: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>                        n = xin-&gt;map-&gt;n;
+<a name="line1158">1158: </a><strong><font color="#FF0000">  thrust:</font></strong>:device_ptr&lt;<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>&gt; xptr;
+<a name="line1159">1159: </a><font color="#A020F0">#endif</font>
+
+<a name="line1162">1162: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDAGetArray.html#VecCUDAGetArray">VecCUDAGetArray</a>(xin,&amp;xarray);
+<a name="line1163">1163: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line1164">1164: </a>  PetscLogGpuTimeBegin();
+<a name="line1165">1165: </a>  try {
+<a name="line1166">1166: </a>    xptr = thrust::device_pointer_cast(xarray);
+<a name="line1167">1167: </a><strong><font color="#FF0000">    thrust:</font></strong>:transform(xptr,xptr+n,xptr,conjugate());
+<a name="line1168">1168: </a>    WaitForGPU();CHKERRCUDA(ierr);
+<a name="line1169">1169: </a>  } catch (char *ex) {
+<a name="line1170">1170: </a>    <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Thrust error: %s"</font>, ex);
+<a name="line1171">1171: </a>  }
+<a name="line1172">1172: </a>  PetscLogGpuTimeEnd();
+<a name="line1173">1173: </a><font color="#A020F0">#endif</font>
+<a name="line1174">1174: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCUDARestoreArray.html#VecCUDARestoreArray">VecCUDARestoreArray</a>(xin,&amp;xarray);
+<a name="line1175">1175: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1176">1176: </a>}
+
+<a name="line1178">1178: </a><strong><font color="#4169E1"><a name="VecGetLocalVector_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecGetLocalVector_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> w)</font></strong>
+<a name="line1179">1179: </a>{
+<a name="line1181">1181: </a>  cudaError_t    err;
+
+
+<a name="line1188">1188: </a>  <font color="#4169E1">if</font> (w-&gt;data) {
+<a name="line1189">1189: </a>    <font color="#4169E1">if</font> (((Vec_Seq*)w-&gt;data)-&gt;array_allocated) {
+<a name="line1190">1190: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(((Vec_Seq*)w-&gt;data)-&gt;array_allocated);
+<a name="line1191">1191: </a>    }
+<a name="line1192">1192: </a>    ((Vec_Seq*)w-&gt;data)-&gt;array = NULL;
+<a name="line1193">1193: </a>    ((Vec_Seq*)w-&gt;data)-&gt;unplacedarray = NULL;
+<a name="line1194">1194: </a>  }
+<a name="line1195">1195: </a>  <font color="#4169E1">if</font> (w-&gt;spptr) {
+<a name="line1196">1196: </a>    <font color="#4169E1">if</font> (((Vec_CUDA*)w-&gt;spptr)-&gt;GPUarray) {
+<a name="line1197">1197: </a>      err = cudaFree(((Vec_CUDA*)w-&gt;spptr)-&gt;GPUarray);CHKERRCUDA(err);
+<a name="line1198">1198: </a>      ((Vec_CUDA*)w-&gt;spptr)-&gt;GPUarray = NULL;
+<a name="line1199">1199: </a>    }
+<a name="line1200">1200: </a>    <font color="#4169E1">if</font> (((Vec_CUDA*)v-&gt;spptr)-&gt;stream) {
+<a name="line1201">1201: </a>      err = cudaStreamDestroy(((Vec_CUDA*)w-&gt;spptr)-&gt;stream);CHKERRCUDA(err);
+<a name="line1202">1202: </a>    }
+<a name="line1203">1203: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(w-&gt;spptr);
+<a name="line1204">1204: </a>  }
+
+<a name="line1206">1206: </a>  <font color="#4169E1">if</font> (v-&gt;petscnative) {
+<a name="line1207">1207: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(w-&gt;data);
+<a name="line1208">1208: </a>    w-&gt;data = v-&gt;data;
+<a name="line1209">1209: </a>    w-&gt;offloadmask = v-&gt;offloadmask;
+<a name="line1210">1210: </a>    w-&gt;spptr = v-&gt;spptr;
+<a name="line1211">1211: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)w);
+<a name="line1212">1212: </a>  } <font color="#4169E1">else</font> {
+<a name="line1213">1213: </a>    <a href="../../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(v,&amp;((Vec_Seq*)w-&gt;data)-&gt;array);
+<a name="line1214">1214: </a>    w-&gt;offloadmask = <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_CPU</a>;
+<a name="line1215">1215: </a>    VecCUDAAllocateCheck(w);
+<a name="line1216">1216: </a>  }
+<a name="line1217">1217: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1218">1218: </a>}
+
+<a name="line1220">1220: </a><strong><font color="#4169E1"><a name="VecRestoreLocalVector_SeqCUDA"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecRestoreLocalVector_SeqCUDA(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> w)</font></strong>
+<a name="line1221">1221: </a>{
+<a name="line1223">1223: </a>  cudaError_t    err;
+
+
+<a name="line1230">1230: </a>  <font color="#4169E1">if</font> (v-&gt;petscnative) {
+<a name="line1231">1231: </a>    v-&gt;data = w-&gt;data;
+<a name="line1232">1232: </a>    v-&gt;offloadmask = w-&gt;offloadmask;
+<a name="line1233">1233: </a>    v-&gt;spptr = w-&gt;spptr;
+<a name="line1234">1234: </a>    VecCUDACopyFromGPU(v);
+<a name="line1235">1235: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v);
+<a name="line1236">1236: </a>    w-&gt;data = 0;
+<a name="line1237">1237: </a>    w-&gt;offloadmask = <a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_UNALLOCATED</a>;
+<a name="line1238">1238: </a>    w-&gt;spptr = 0;
+<a name="line1239">1239: </a>  } <font color="#4169E1">else</font> {
+<a name="line1240">1240: </a>    <a href="../../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(v,&amp;((Vec_Seq*)w-&gt;data)-&gt;array);
+<a name="line1241">1241: </a>    <font color="#4169E1">if</font> ((Vec_CUDA*)w-&gt;spptr) {
+<a name="line1242">1242: </a>      err = cudaFree(((Vec_CUDA*)w-&gt;spptr)-&gt;GPUarray);CHKERRCUDA(err);
+<a name="line1243">1243: </a>      ((Vec_CUDA*)w-&gt;spptr)-&gt;GPUarray = NULL;
+<a name="line1244">1244: </a>      <font color="#4169E1">if</font> (((Vec_CUDA*)v-&gt;spptr)-&gt;stream) {
+<a name="line1245">1245: </a>        err = cudaStreamDestroy(((Vec_CUDA*)w-&gt;spptr)-&gt;stream);CHKERRCUDA(err);
+<a name="line1246">1246: </a>      }
+<a name="line1247">1247: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(w-&gt;spptr);
+<a name="line1248">1248: </a>    }
+<a name="line1249">1249: </a>  }
+<a name="line1250">1250: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1251">1251: </a>}
+</pre>
+</body>
+
+</html>

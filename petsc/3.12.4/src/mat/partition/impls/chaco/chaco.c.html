@@ -1,0 +1,696 @@
+<center><a href="chaco.c">Actual source code: chaco.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/mat/partition/impls/chaco/chaco.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:56:15+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/mat/partition/impls/chaco/chaco.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a> #include <A href="../../../../../include/../src/mat/impls/adj/mpi/mpiadj.h.html">&lt;../src/mat/impls/adj/mpi/mpiadj.h&gt;</A>
+
+<a name="line4">  4: </a><font color="#A020F0">#if defined(PETSC_HAVE_UNISTD_H)</font>
+<a name="line5">  5: </a><font color="#A020F0">#include &lt;unistd.h&gt;</font>
+<a name="line6">  6: </a><font color="#A020F0">#endif</font>
+
+<a name="line8">  8: </a><font color="#A020F0">#if defined(PETSC_HAVE_CHACO_INT_ASSIGNMENT)</font>
+<a name="line9">  9: </a><font color="#A020F0">#include &lt;chaco.h&gt;</font>
+<a name="line10"> 10: </a><font color="#A020F0">#else</font>
+<a name="line11"> 11: </a><font color="#B22222">/* Older versions of Chaco do not have an include file */</font>
+<a name="line12"> 12: </a>PETSC_EXTERN int interface(int nvtxs, int *start, int *adjacency, int *vwgts,
+<a name="line13"> 13: </a>                     float *ewgts, float *x, float *y, float *z, char *outassignname,
+<a name="line14"> 14: </a>                     char *outfilename, short *assignment, int architecture, int ndims_tot,
+<a name="line15"> 15: </a>                     int mesh_dims[3], double *goal, int global_method, int local_method,
+<a name="line16"> 16: </a>                     int rqi_flag, int vmax, int ndims, double eigtol, long seed);
+<a name="line17"> 17: </a><font color="#A020F0">#endif</font>
+
+<a name="line19"> 19: </a>extern int FREE_GRAPH;
+
+<a name="line21"> 21: </a><font color="#B22222">/*</font>
+<a name="line22"> 22: </a><font color="#B22222">int       nvtxs;                number of vertices in full graph</font>
+<a name="line23"> 23: </a><font color="#B22222">int      *start;                start of edge list for each vertex</font>
+<a name="line24"> 24: </a><font color="#B22222">int      *adjacency;            edge list data</font>
+<a name="line25"> 25: </a><font color="#B22222">int      *vwgts;                weights for all vertices</font>
+<a name="line26"> 26: </a><font color="#B22222">float    *ewgts;                weights for all edges</font>
+<a name="line27"> 27: </a><font color="#B22222">float    *x, *y, *z;            coordinates for inertial method</font>
+<a name="line28"> 28: </a><font color="#B22222">char     *outassignname;        name of assignment output file</font>
+<a name="line29"> 29: </a><font color="#B22222">char     *outfilename;          output file name</font>
+<a name="line30"> 30: </a><font color="#B22222">short    *assignment;           set number of each vtx (length n)</font>
+<a name="line31"> 31: </a><font color="#B22222">int       architecture;         0 =&gt; hypercube, d =&gt; d-dimensional mesh</font>
+<a name="line32"> 32: </a><font color="#B22222">int       ndims_tot;            total number of cube dimensions to divide</font>
+<a name="line33"> 33: </a><font color="#B22222">int       mesh_dims[3];         dimensions of mesh of processors</font>
+<a name="line34"> 34: </a><font color="#B22222">double   *goal;                 desired set sizes for each set</font>
+<a name="line35"> 35: </a><font color="#B22222">int       global_method;        global partitioning algorithm</font>
+<a name="line36"> 36: </a><font color="#B22222">int       local_method;         local partitioning algorithm</font>
+<a name="line37"> 37: </a><font color="#B22222">int       rqi_flag;             should I use RQI/Symmlq eigensolver?</font>
+<a name="line38"> 38: </a><font color="#B22222">int       vmax;                 how many vertices to coarsen down to?</font>
+<a name="line39"> 39: </a><font color="#B22222">int       ndims;                number of eigenvectors (2^d sets)</font>
+<a name="line40"> 40: </a><font color="#B22222">double    eigtol;               tolerance on eigenvectors</font>
+<a name="line41"> 41: </a><font color="#B22222">long      seed;                 for random graph mutations</font>
+<a name="line42"> 42: </a><font color="#B22222">*/</font>
+
+<a name="line44"> 44: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line45"> 45: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         verbose;
+<a name="line46"> 46: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          eignum;
+<a name="line47"> 47: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         eigtol;
+<a name="line48"> 48: </a>  MPChacoGlobalType global_method;          <font color="#B22222">/* global method */</font>
+<a name="line49"> 49: </a>  MPChacoLocalType  local_method;           <font color="#B22222">/* local method */</font>
+<a name="line50"> 50: </a>  MPChacoEigenType  eigen_method;           <font color="#B22222">/* eigensolver */</font>
+<a name="line51"> 51: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          nbvtxcoarsed;           <font color="#B22222">/* number of vertices for the coarse graph */</font>
+<a name="line52"> 52: </a>} MatPartitioning_Chaco;
+
+<a name="line54"> 54: </a><strong><font color="#228B22">#define SIZE_LOG 10000          </font><font color="#B22222">/* size of buffer for mesg_log */</font><font color="#228B22"></font></strong>
+
+<a name="line56"> 56: </a><strong><font color="#4169E1"><a name="MatPartitioningApply_Chaco"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningApply_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a> *partitioning)</font></strong>
+<a name="line57"> 57: </a>{
+<a name="line58"> 58: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>        ierr;
+<a name="line59"> 59: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>              *parttab,*locals,i,nb_locals,M,N;
+<a name="line60"> 60: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>           size,rank;
+<a name="line61"> 61: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>                   mat = part-&gt;adj,matAdj,matSeq,*A;
+<a name="line62"> 62: </a>  Mat_MPIAdj            *adj;
+<a name="line63"> 63: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+<a name="line64"> 64: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>             flg;
+<a name="line65"> 65: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>                    isrow, iscol;
+<a name="line66"> 66: </a>  int                   nvtxs,*start,*adjacency,*vwgts,architecture,ndims_tot;
+<a name="line67"> 67: </a>  int                   mesh_dims[3],global_method,local_method,rqi_flag,vmax,ndims;
+<a name="line68"> 68: </a><font color="#A020F0">#if defined(PETSC_HAVE_CHACO_INT_ASSIGNMENT)</font>
+<a name="line69"> 69: </a>  int                   *assignment;
+<a name="line70"> 70: </a><font color="#A020F0">#else</font>
+<a name="line71"> 71: </a>  short                 *assignment;
+<a name="line72"> 72: </a><font color="#A020F0">#endif</font>
+<a name="line73"> 73: </a>  double                eigtol;
+<a name="line74"> 74: </a>  long                  seed;
+<a name="line75"> 75: </a>  char                  *mesg_log;
+<a name="line76"> 76: </a><font color="#A020F0">#if defined(PETSC_HAVE_UNISTD_H)</font>
+<a name="line77"> 77: </a>  int                   fd_stdout,fd_pipe[2],count,err;
+<a name="line78"> 78: </a><font color="#A020F0">#endif</font>
+
+<a name="line81"> 81: </a>  FREE_GRAPH = 0; <font color="#B22222">/* otherwise Chaco will attempt to free memory for adjacency graph */</font>
+<a name="line82"> 82: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat),&amp;size);
+<a name="line83"> 83: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat),&amp;rank);
+<a name="line84"> 84: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat,<a href="../../../../../docs/manualpages/Mat/MATMPIADJ.html#MATMPIADJ">MATMPIADJ</a>,&amp;flg);
+<a name="line85"> 85: </a>  <font color="#4169E1">if</font> (size&gt;1) {
+<a name="line86"> 86: </a>    <font color="#4169E1">if</font> (flg) {
+<a name="line87"> 87: </a>      <a href="../../../../../docs/manualpages/Mat/MatMPIAdjToSeq.html#MatMPIAdjToSeq">MatMPIAdjToSeq</a>(mat,&amp;matSeq);
+<a name="line88"> 88: </a>    } <font color="#4169E1">else</font> {
+<a name="line89"> 89: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscInfo.html#PetscInfo">PetscInfo</a>(part,<font color="#666666">"Converting distributed matrix to sequential: this could be a performance loss\n"</font>);
+<a name="line90"> 90: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetSize.html#MatGetSize">MatGetSize</a>(mat,&amp;M,&amp;N);
+<a name="line91"> 91: </a>      <a href="../../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,M,0,1,&amp;isrow);
+<a name="line92"> 92: </a>      <a href="../../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,N,0,1,&amp;iscol);
+<a name="line93"> 93: </a>      <a href="../../../../../docs/manualpages/Mat/MatCreateSubMatrices.html#MatCreateSubMatrices">MatCreateSubMatrices</a>(mat,1,&amp;isrow,&amp;iscol,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;A);
+<a name="line94"> 94: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;isrow);
+<a name="line95"> 95: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;iscol);
+<a name="line96"> 96: </a>      matSeq = *A;
+<a name="line97"> 97: </a>      <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(A);
+<a name="line98"> 98: </a>    }
+<a name="line99"> 99: </a>  } <font color="#4169E1">else</font> {
+<a name="line100">100: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat);
+<a name="line101">101: </a>    matSeq = mat;
+<a name="line102">102: </a>  }
+
+<a name="line104">104: </a>  <font color="#4169E1">if</font> (!flg) { <font color="#B22222">/* convert regular matrix to MPIADJ */</font>
+<a name="line105">105: </a>    <a href="../../../../../docs/manualpages/Mat/MatConvert.html#MatConvert">MatConvert</a>(matSeq,<a href="../../../../../docs/manualpages/Mat/MATMPIADJ.html#MATMPIADJ">MATMPIADJ</a>,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;matAdj);
+<a name="line106">106: </a>  } <font color="#4169E1">else</font> {
+<a name="line107">107: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)matSeq);
+<a name="line108">108: </a>    matAdj = matSeq;
+<a name="line109">109: </a>  }
+
+<a name="line111">111: </a>  adj = (Mat_MPIAdj*)matAdj-&gt;data;  <font color="#B22222">/* finaly adj contains adjacency graph */</font>
+
+<a name="line113">113: </a>  <font color="#B22222">/* arguments for Chaco library */</font>
+<a name="line114">114: </a>  nvtxs         = mat-&gt;rmap-&gt;N;           <font color="#B22222">/* number of vertices in full graph */</font>
+<a name="line115">115: </a>  start         = adj-&gt;i;                 <font color="#B22222">/* start of edge list for each vertex */</font>
+<a name="line116">116: </a>  vwgts         = part-&gt;vertex_weights;   <font color="#B22222">/* weights for all vertices */</font>
+<a name="line117">117: </a>  architecture  = 1;                      <font color="#B22222">/* 0 =&gt; hypercube, d =&gt; d-dimensional mesh */</font>
+<a name="line118">118: </a>  ndims_tot     = 0;                      <font color="#B22222">/* total number of cube dimensions to divide */</font>
+<a name="line119">119: </a>  mesh_dims[0]  = part-&gt;n;                <font color="#B22222">/* dimensions of mesh of processors */</font>
+<a name="line120">120: </a>  global_method = chaco-&gt;global_method;   <font color="#B22222">/* global partitioning algorithm */</font>
+<a name="line121">121: </a>  local_method  = chaco-&gt;local_method;    <font color="#B22222">/* local partitioning algorithm */</font>
+<a name="line122">122: </a>  rqi_flag      = chaco-&gt;eigen_method;    <font color="#B22222">/* should I use RQI/Symmlq eigensolver? */</font>
+<a name="line123">123: </a>  vmax          = chaco-&gt;nbvtxcoarsed;    <font color="#B22222">/* how many vertices to coarsen down to? */</font>
+<a name="line124">124: </a>  ndims         = chaco-&gt;eignum;          <font color="#B22222">/* number of eigenvectors (2^d sets) */</font>
+<a name="line125">125: </a>  eigtol        = chaco-&gt;eigtol;          <font color="#B22222">/* tolerance on eigenvectors */</font>
+<a name="line126">126: </a>  seed          = 123636512;              <font color="#B22222">/* for random graph mutations */</font>
+
+<a name="line128">128: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(mat-&gt;rmap-&gt;N,&amp;assignment);
+<a name="line129">129: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(start[nvtxs],&amp;adjacency);
+<a name="line130">130: </a>  <font color="#4169E1">for</font> (i=0; i&lt;start[nvtxs]; i++) adjacency[i] = (adj-&gt;j)[i] + 1; <font color="#B22222">/* 1-based indexing */</font>
+
+<a name="line132">132: </a>  <font color="#B22222">/* redirect output to buffer */</font>
+<a name="line133">133: </a><font color="#A020F0">#if defined(PETSC_HAVE_UNISTD_H)</font>
+<a name="line134">134: </a>  fd_stdout = dup(1);
+<a name="line135">135: </a>  <font color="#4169E1">if</font> (pipe(fd_pipe)) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SYS,<font color="#666666">"Could not open pipe"</font>);
+<a name="line136">136: </a>  close(1);
+<a name="line137">137: </a>  dup2(fd_pipe[1],1);
+<a name="line138">138: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(SIZE_LOG,&amp;mesg_log);
+<a name="line139">139: </a><font color="#A020F0">#endif</font>
+
+<a name="line141">141: </a>  <font color="#B22222">/* library call */</font>
+<a name="line142">142: </a>  interface(nvtxs,start,adjacency,vwgts,NULL,NULL,NULL,NULL,
+<a name="line143">143: </a>                   NULL,NULL,assignment,architecture,ndims_tot,mesh_dims,
+<a name="line144">144: </a>                   NULL,global_method,local_method,rqi_flag,vmax,ndims,eigtol,seed);
+
+<a name="line146">146: </a><font color="#A020F0">#if defined(PETSC_HAVE_UNISTD_H)</font>
+<a name="line147">147: </a>  err = fflush(stdout);
+<a name="line148">148: </a>  <font color="#4169E1">if</font> (err) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SYS,<font color="#666666">"fflush() failed on stdout"</font>);
+<a name="line149">149: </a>  count = read(fd_pipe[0],mesg_log,(SIZE_LOG-1)*<font color="#4169E1">sizeof</font>(char));
+<a name="line150">150: </a>  <font color="#4169E1">if</font> (count&lt;0) count = 0;
+<a name="line151">151: </a>  mesg_log[count] = 0;
+<a name="line152">152: </a>  close(1);
+<a name="line153">153: </a>  dup2(fd_stdout,1);
+<a name="line154">154: </a>  close(fd_stdout);
+<a name="line155">155: </a>  close(fd_pipe[0]);
+<a name="line156">156: </a>  close(fd_pipe[1]);
+<a name="line157">157: </a>  <font color="#4169E1">if</font> (chaco-&gt;verbose) {
+<a name="line158">158: </a>    <a href="../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat),mesg_log);
+<a name="line159">159: </a>  }
+<a name="line160">160: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(mesg_log);
+<a name="line161">161: </a><font color="#A020F0">#endif</font>
+<a name="line162">162: </a>  <font color="#4169E1">if</font> (ierr) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Chaco failed"</font>);
+
+<a name="line164">164: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(mat-&gt;rmap-&gt;N,&amp;parttab);
+<a name="line165">165: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nvtxs; i++) parttab[i] = assignment[i];
+
+<a name="line167">167: </a>  <font color="#B22222">/* creation of the index set */</font>
+<a name="line168">168: </a>  nb_locals = mat-&gt;rmap-&gt;n;
+<a name="line169">169: </a>  locals    = parttab + mat-&gt;rmap-&gt;rstart;
+<a name="line170">170: </a>  <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part),nb_locals,locals,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,partitioning);
+
+<a name="line172">172: </a>  <font color="#B22222">/* clean up */</font>
+<a name="line173">173: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(parttab);
+<a name="line174">174: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(adjacency);
+<a name="line175">175: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(assignment);
+<a name="line176">176: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;matSeq);
+<a name="line177">177: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;matAdj);
+<a name="line178">178: </a>  <font color="#4169E1">return</font>(0);
+<a name="line179">179: </a>}
+
+<a name="line181">181: </a><strong><font color="#4169E1"><a name="MatPartitioningView_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningView_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part, <a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line182">182: </a>{
+<a name="line183">183: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+<a name="line184">184: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>        ierr;
+<a name="line185">185: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>             isascii;
+
+<a name="line188">188: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../../docs/manualpages/Viewer/PETSCVIEWERASCII.html#PETSCVIEWERASCII">PETSCVIEWERASCII</a>,&amp;isascii);
+<a name="line189">189: </a>  <font color="#4169E1">if</font> (isascii) {
+<a name="line190">190: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Global method: %s\n"</font>,MPChacoGlobalTypes[chaco-&gt;global_method]);
+<a name="line191">191: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Local method: %s\n"</font>,MPChacoLocalTypes[chaco-&gt;local_method]);
+<a name="line192">192: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Number of vertices for the coarse graph: %d\n"</font>,chaco-&gt;nbvtxcoarsed);
+<a name="line193">193: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Eigensolver: %s\n"</font>,MPChacoEigenTypes[chaco-&gt;eigen_method]);
+<a name="line194">194: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Tolerance for eigensolver: %g\n"</font>,chaco-&gt;eigtol);
+<a name="line195">195: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Number of eigenvectors: %d\n"</font>,chaco-&gt;eignum);
+<a name="line196">196: </a>  }
+<a name="line197">197: </a>  <font color="#4169E1">return</font>(0);
+<a name="line198">198: </a>}
+
+<a name="line200">200: </a><font color="#B22222">/*@</font>
+<a name="line201">201: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetGlobal.html#MatPartitioningChacoSetGlobal">MatPartitioningChacoSetGlobal</a> - Set global method for Chaco partitioner.</font>
+
+<a name="line203">203: </a><font color="#B22222">   Collective on <a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a></font>
+
+<a name="line205">205: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line206">206: </a><font color="#B22222">+  part - the partitioning context</font>
+<a name="line207">207: </a><font color="#B22222">-  method - one of MP_CHACO_MULTILEVEL, MP_CHACO_SPECTRAL, MP_CHACO_LINEAR,</font>
+<a name="line208">208: </a><font color="#B22222">            MP_CHACO_RANDOM or MP_CHACO_SCATTERED</font>
+
+<a name="line210">210: </a><font color="#B22222">   Options Database:</font>
+<a name="line211">211: </a><font color="#B22222">.  -mat_partitioning_chaco_global &lt;method&gt; - the global method</font>
+
+<a name="line213">213: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line215">215: </a><font color="#B22222">   Notes:</font>
+<a name="line216">216: </a><font color="#B22222">   The default is the multi-level method. See Chaco documentation for</font>
+<a name="line217">217: </a><font color="#B22222">   additional details.</font>
+
+<a name="line219">219: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetLocal.html#MatPartitioningChacoSetLocal">MatPartitioningChacoSetLocal</a>(),<a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetGlobal.html#MatPartitioningChacoGetGlobal">MatPartitioningChacoGetGlobal</a>()</font>
+<a name="line220">220: </a><font color="#B22222">@*/</font>
+<a name="line221">221: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetGlobal"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetGlobal.html#MatPartitioningChacoSetGlobal">MatPartitioningChacoSetGlobal</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoGlobalType method)</font></strong>
+<a name="line222">222: </a>{
+
+<a name="line228">228: </a>  PetscTryMethod(part,<font color="#666666">"MatPartitioningChacoSetGlobal_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,MPChacoGlobalType),(part,method));
+<a name="line229">229: </a>  <font color="#4169E1">return</font>(0);
+<a name="line230">230: </a>}
+
+<a name="line232">232: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetGlobal_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoSetGlobal_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoGlobalType method)</font></strong>
+<a name="line233">233: </a>{
+<a name="line234">234: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line237">237: </a>  <font color="#4169E1">switch</font> (method) {
+<a name="line238">238: </a>  <font color="#4169E1">case</font> MP_CHACO_MULTILEVEL:
+<a name="line239">239: </a>  <font color="#4169E1">case</font> MP_CHACO_SPECTRAL:
+<a name="line240">240: </a>  <font color="#4169E1">case</font> MP_CHACO_LINEAR:
+<a name="line241">241: </a>  <font color="#4169E1">case</font> MP_CHACO_RANDOM:
+<a name="line242">242: </a>  <font color="#4169E1">case</font> MP_CHACO_SCATTERED:
+<a name="line243">243: </a>    chaco-&gt;global_method = method; <font color="#4169E1">break</font>;
+<a name="line244">244: </a><strong><font color="#FF0000">  default:</font></strong>
+<a name="line245">245: </a>    <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONG,<font color="#666666">"Chaco: Unknown or unsupported option"</font>);
+<a name="line246">246: </a>  }
+<a name="line247">247: </a>  <font color="#4169E1">return</font>(0);
+<a name="line248">248: </a>}
+
+<a name="line250">250: </a><font color="#B22222">/*@</font>
+<a name="line251">251: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetGlobal.html#MatPartitioningChacoGetGlobal">MatPartitioningChacoGetGlobal</a> - Get global method for Chaco partitioner.</font>
+
+<a name="line253">253: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line255">255: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line256">256: </a><font color="#B22222">.  part - the partitioning context</font>
+
+<a name="line258">258: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line259">259: </a><font color="#B22222">.  method - the method</font>
+
+<a name="line261">261: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line263">263: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetGlobal.html#MatPartitioningChacoSetGlobal">MatPartitioningChacoSetGlobal</a>()</font>
+<a name="line264">264: </a><font color="#B22222">@*/</font>
+<a name="line265">265: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoGetGlobal"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetGlobal.html#MatPartitioningChacoGetGlobal">MatPartitioningChacoGetGlobal</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoGlobalType *method)</font></strong>
+<a name="line266">266: </a>{
+
+<a name="line272">272: </a>  PetscTryMethod(part,<font color="#666666">"MatPartitioningChacoGetGlobal_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,MPChacoGlobalType*),(part,method));
+<a name="line273">273: </a>  <font color="#4169E1">return</font>(0);
+<a name="line274">274: </a>}
+
+<a name="line276">276: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoGetGlobal_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoGetGlobal_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoGlobalType *method)</font></strong>
+<a name="line277">277: </a>{
+<a name="line278">278: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line281">281: </a>  *method = chaco-&gt;global_method;
+<a name="line282">282: </a>  <font color="#4169E1">return</font>(0);
+<a name="line283">283: </a>}
+
+<a name="line285">285: </a><font color="#B22222">/*@</font>
+<a name="line286">286: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetLocal.html#MatPartitioningChacoSetLocal">MatPartitioningChacoSetLocal</a> - Set local method for Chaco partitioner.</font>
+
+<a name="line288">288: </a><font color="#B22222">   Collective on <a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a></font>
+
+<a name="line290">290: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line291">291: </a><font color="#B22222">+  part - the partitioning context</font>
+<a name="line292">292: </a><font color="#B22222">-  method - one of MP_CHACO_KERNIGHAN or MP_CHACO_NONE</font>
+
+<a name="line294">294: </a><font color="#B22222">   Options Database:</font>
+<a name="line295">295: </a><font color="#B22222">.  -mat_partitioning_chaco_local &lt;method&gt; - the local method</font>
+
+<a name="line297">297: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line299">299: </a><font color="#B22222">   Notes:</font>
+<a name="line300">300: </a><font color="#B22222">   The default is to apply the Kernighan-Lin heuristic. See Chaco documentation</font>
+<a name="line301">301: </a><font color="#B22222">   for additional details.</font>
+
+<a name="line303">303: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetGlobal.html#MatPartitioningChacoSetGlobal">MatPartitioningChacoSetGlobal</a>(),<a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetLocal.html#MatPartitioningChacoGetLocal">MatPartitioningChacoGetLocal</a>()</font>
+<a name="line304">304: </a><font color="#B22222">@*/</font>
+<a name="line305">305: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetLocal"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetLocal.html#MatPartitioningChacoSetLocal">MatPartitioningChacoSetLocal</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoLocalType method)</font></strong>
+<a name="line306">306: </a>{
+
+<a name="line312">312: </a>  PetscTryMethod(part,<font color="#666666">"MatPartitioningChacoSetLocal_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,MPChacoLocalType),(part,method));
+<a name="line313">313: </a>  <font color="#4169E1">return</font>(0);
+<a name="line314">314: </a>}
+
+<a name="line316">316: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetLocal_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoSetLocal_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoLocalType method)</font></strong>
+<a name="line317">317: </a>{
+<a name="line318">318: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line321">321: </a>  <font color="#4169E1">switch</font> (method) {
+<a name="line322">322: </a>  <font color="#4169E1">case</font> MP_CHACO_KERNIGHAN:
+<a name="line323">323: </a>  <font color="#4169E1">case</font> MP_CHACO_NONE:
+<a name="line324">324: </a>    chaco-&gt;local_method = method; <font color="#4169E1">break</font>;
+<a name="line325">325: </a><strong><font color="#FF0000">  default:</font></strong>
+<a name="line326">326: </a>    <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONG,<font color="#666666">"Chaco: Unknown or unsupported option"</font>);
+<a name="line327">327: </a>  }
+<a name="line328">328: </a>  <font color="#4169E1">return</font>(0);
+<a name="line329">329: </a>}
+
+<a name="line331">331: </a><font color="#B22222">/*@</font>
+<a name="line332">332: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetLocal.html#MatPartitioningChacoGetLocal">MatPartitioningChacoGetLocal</a> - Get local method for Chaco partitioner.</font>
+
+<a name="line334">334: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line336">336: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line337">337: </a><font color="#B22222">.  part - the partitioning context</font>
+
+<a name="line339">339: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line340">340: </a><font color="#B22222">.  method - the method</font>
+
+<a name="line342">342: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line344">344: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetLocal.html#MatPartitioningChacoSetLocal">MatPartitioningChacoSetLocal</a>()</font>
+<a name="line345">345: </a><font color="#B22222">@*/</font>
+<a name="line346">346: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoGetLocal"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetLocal.html#MatPartitioningChacoGetLocal">MatPartitioningChacoGetLocal</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoLocalType *method)</font></strong>
+<a name="line347">347: </a>{
+
+<a name="line353">353: </a>  PetscUseMethod(part,<font color="#666666">"MatPartitioningChacoGetLocal_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,MPChacoLocalType*),(part,method));
+<a name="line354">354: </a>  <font color="#4169E1">return</font>(0);
+<a name="line355">355: </a>}
+
+<a name="line357">357: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoGetLocal_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoGetLocal_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoLocalType *method)</font></strong>
+<a name="line358">358: </a>{
+<a name="line359">359: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line362">362: </a>  *method = chaco-&gt;local_method;
+<a name="line363">363: </a>  <font color="#4169E1">return</font>(0);
+<a name="line364">364: </a>}
+
+<a name="line366">366: </a><font color="#B22222">/*@</font>
+<a name="line367">367: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetCoarseLevel.html#MatPartitioningChacoSetCoarseLevel">MatPartitioningChacoSetCoarseLevel</a> - Set the coarse level parameter for the</font>
+<a name="line368">368: </a><font color="#B22222">   Chaco partitioner.</font>
+
+<a name="line370">370: </a><font color="#B22222">   Collective on <a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a></font>
+
+<a name="line372">372: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line373">373: </a><font color="#B22222">+  part - the partitioning context</font>
+<a name="line374">374: </a><font color="#B22222">-  level - the coarse level in range [0.0,1.0]</font>
+
+<a name="line376">376: </a><font color="#B22222">   Options Database:</font>
+<a name="line377">377: </a><font color="#B22222">.  -mat_partitioning_chaco_coarse &lt;l&gt; - Coarse level</font>
+
+<a name="line379">379: </a><font color="#B22222">   Level: advanced</font>
+<a name="line380">380: </a><font color="#B22222">@*/</font>
+<a name="line381">381: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetCoarseLevel"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetCoarseLevel.html#MatPartitioningChacoSetCoarseLevel">MatPartitioningChacoSetCoarseLevel</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> level)</font></strong>
+<a name="line382">382: </a>{
+
+<a name="line388">388: </a>  PetscTryMethod(part,<font color="#666666">"MatPartitioningChacoSetCoarseLevel_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>),(part,level));
+<a name="line389">389: </a>  <font color="#4169E1">return</font>(0);
+<a name="line390">390: </a>}
+
+<a name="line392">392: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetCoarseLevel_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoSetCoarseLevel_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> level)</font></strong>
+<a name="line393">393: </a>{
+<a name="line394">394: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line397">397: </a>  <font color="#4169E1">if</font> (level&lt;0.0 || level&gt;1.0) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Chaco: level of coarsening out of range [0.0-1.0]"</font>);
+<a name="line398">398: </a>  chaco-&gt;nbvtxcoarsed = (<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)(part-&gt;adj-&gt;cmap-&gt;N * level);
+<a name="line399">399: </a>  <font color="#4169E1">if</font> (chaco-&gt;nbvtxcoarsed &lt; 20) chaco-&gt;nbvtxcoarsed = 20;
+<a name="line400">400: </a>  <font color="#4169E1">return</font>(0);
+<a name="line401">401: </a>}
+
+<a name="line403">403: </a><font color="#B22222">/*@</font>
+<a name="line404">404: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenSolver.html#MatPartitioningChacoSetEigenSolver">MatPartitioningChacoSetEigenSolver</a> - Set eigensolver method for Chaco partitioner.</font>
+
+<a name="line406">406: </a><font color="#B22222">   Collective on <a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a></font>
+
+<a name="line408">408: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line409">409: </a><font color="#B22222">+  part - the partitioning context</font>
+<a name="line410">410: </a><font color="#B22222">-  method - one of MP_CHACO_LANCZOS or MP_CHACO_RQI</font>
+
+<a name="line412">412: </a><font color="#B22222">   Options Database:</font>
+<a name="line413">413: </a><font color="#B22222">.  -mat_partitioning_chaco_eigen_solver &lt;method&gt; - the eigensolver</font>
+
+<a name="line415">415: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line417">417: </a><font color="#B22222">   Notes:</font>
+<a name="line418">418: </a><font color="#B22222">   The default is to use a Lanczos method. See Chaco documentation for details.</font>
+
+<a name="line420">420: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenTol.html#MatPartitioningChacoSetEigenTol">MatPartitioningChacoSetEigenTol</a>(),<a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenNumber.html#MatPartitioningChacoSetEigenNumber">MatPartitioningChacoSetEigenNumber</a>(),</font>
+<a name="line421">421: </a><font color="#B22222">          <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetEigenSolver.html#MatPartitioningChacoGetEigenSolver">MatPartitioningChacoGetEigenSolver</a>()</font>
+<a name="line422">422: </a><font color="#B22222">@*/</font>
+<a name="line423">423: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetEigenSolver"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenSolver.html#MatPartitioningChacoSetEigenSolver">MatPartitioningChacoSetEigenSolver</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoEigenType method)</font></strong>
+<a name="line424">424: </a>{
+
+<a name="line430">430: </a>  PetscTryMethod(part,<font color="#666666">"MatPartitioningChacoSetEigenSolver_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,MPChacoEigenType),(part,method));
+<a name="line431">431: </a>  <font color="#4169E1">return</font>(0);
+<a name="line432">432: </a>}
+
+<a name="line434">434: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetEigenSolver_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoSetEigenSolver_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoEigenType method)</font></strong>
+<a name="line435">435: </a>{
+<a name="line436">436: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line439">439: </a>  <font color="#4169E1">switch</font> (method) {
+<a name="line440">440: </a>  <font color="#4169E1">case</font> MP_CHACO_LANCZOS:
+<a name="line441">441: </a>  <font color="#4169E1">case</font> MP_CHACO_RQI:
+<a name="line442">442: </a>    chaco-&gt;eigen_method = method; <font color="#4169E1">break</font>;
+<a name="line443">443: </a><strong><font color="#FF0000">  default:</font></strong>
+<a name="line444">444: </a>    <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONG,<font color="#666666">"Chaco: Unknown or unsupported option"</font>);
+<a name="line445">445: </a>  }
+<a name="line446">446: </a>  <font color="#4169E1">return</font>(0);
+<a name="line447">447: </a>}
+
+<a name="line449">449: </a><font color="#B22222">/*@</font>
+<a name="line450">450: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetEigenSolver.html#MatPartitioningChacoGetEigenSolver">MatPartitioningChacoGetEigenSolver</a> - Get local method for Chaco partitioner.</font>
+
+<a name="line452">452: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line454">454: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line455">455: </a><font color="#B22222">.  part - the partitioning context</font>
+
+<a name="line457">457: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line458">458: </a><font color="#B22222">.  method - the method</font>
+
+<a name="line460">460: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line462">462: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenSolver.html#MatPartitioningChacoSetEigenSolver">MatPartitioningChacoSetEigenSolver</a>()</font>
+<a name="line463">463: </a><font color="#B22222">@*/</font>
+<a name="line464">464: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoGetEigenSolver"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetEigenSolver.html#MatPartitioningChacoGetEigenSolver">MatPartitioningChacoGetEigenSolver</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoEigenType *method)</font></strong>
+<a name="line465">465: </a>{
+
+<a name="line471">471: </a>  PetscUseMethod(part,<font color="#666666">"MatPartitioningChacoGetEigenSolver_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,MPChacoEigenType*),(part,method));
+<a name="line472">472: </a>  <font color="#4169E1">return</font>(0);
+<a name="line473">473: </a>}
+
+<a name="line475">475: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoGetEigenSolver_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoGetEigenSolver_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,MPChacoEigenType *method)</font></strong>
+<a name="line476">476: </a>{
+<a name="line477">477: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line480">480: </a>  *method = chaco-&gt;eigen_method;
+<a name="line481">481: </a>  <font color="#4169E1">return</font>(0);
+<a name="line482">482: </a>}
+
+<a name="line484">484: </a><font color="#B22222">/*@</font>
+<a name="line485">485: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenTol.html#MatPartitioningChacoSetEigenTol">MatPartitioningChacoSetEigenTol</a> - Sets the tolerance for the eigensolver.</font>
+
+<a name="line487">487: </a><font color="#B22222">   Collective on <a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a></font>
+
+<a name="line489">489: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line490">490: </a><font color="#B22222">+  part - the partitioning context</font>
+<a name="line491">491: </a><font color="#B22222">-  tol  - the tolerance</font>
+
+<a name="line493">493: </a><font color="#B22222">   Options Database:</font>
+<a name="line494">494: </a><font color="#B22222">.  -mat_partitioning_chaco_eigen_tol &lt;tol&gt;: Tolerance for eigensolver</font>
+
+<a name="line496">496: </a><font color="#B22222">   Note:</font>
+<a name="line497">497: </a><font color="#B22222">   Must be positive. The default value is 0.001.</font>
+
+<a name="line499">499: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line501">501: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenSolver.html#MatPartitioningChacoSetEigenSolver">MatPartitioningChacoSetEigenSolver</a>(), <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetEigenTol.html#MatPartitioningChacoGetEigenTol">MatPartitioningChacoGetEigenTol</a>()</font>
+<a name="line502">502: </a><font color="#B22222">@*/</font>
+<a name="line503">503: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetEigenTol"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenTol.html#MatPartitioningChacoSetEigenTol">MatPartitioningChacoSetEigenTol</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> tol)</font></strong>
+<a name="line504">504: </a>{
+
+<a name="line510">510: </a>  PetscTryMethod(part,<font color="#666666">"MatPartitioningChacoSetEigenTol_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>),(part,tol));
+<a name="line511">511: </a>  <font color="#4169E1">return</font>(0);
+<a name="line512">512: </a>}
+
+<a name="line514">514: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetEigenTol_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoSetEigenTol_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> tol)</font></strong>
+<a name="line515">515: </a>{
+<a name="line516">516: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line519">519: </a>  <font color="#4169E1">if</font> (tol==<a href="../../../../../docs/manualpages/Sys/PETSC_DEFAULT.html#PETSC_DEFAULT">PETSC_DEFAULT</a>) chaco-&gt;eigtol = 0.001;
+<a name="line520">520: </a>  <font color="#4169E1">else</font> {
+<a name="line521">521: </a>    <font color="#4169E1">if</font> (tol&lt;=0.0) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part),PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Tolerance must be positive"</font>);
+<a name="line522">522: </a>    chaco-&gt;eigtol = tol;
+<a name="line523">523: </a>  }
+<a name="line524">524: </a>  <font color="#4169E1">return</font>(0);
+<a name="line525">525: </a>}
+
+<a name="line527">527: </a><font color="#B22222">/*@</font>
+<a name="line528">528: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetEigenTol.html#MatPartitioningChacoGetEigenTol">MatPartitioningChacoGetEigenTol</a> - Gets the eigensolver tolerance.</font>
+
+<a name="line530">530: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line532">532: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line533">533: </a><font color="#B22222">.  part - the partitioning context</font>
+
+<a name="line535">535: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line536">536: </a><font color="#B22222">.  tol  - the tolerance</font>
+
+<a name="line538">538: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line540">540: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenTol.html#MatPartitioningChacoSetEigenTol">MatPartitioningChacoSetEigenTol</a>()</font>
+<a name="line541">541: </a><font color="#B22222">@*/</font>
+<a name="line542">542: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoGetEigenTol"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetEigenTol.html#MatPartitioningChacoGetEigenTol">MatPartitioningChacoGetEigenTol</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *tol)</font></strong>
+<a name="line543">543: </a>{
+
+<a name="line549">549: </a>  PetscUseMethod(part,<font color="#666666">"MatPartitioningChacoGetEigenTol_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>*),(part,tol));
+<a name="line550">550: </a>  <font color="#4169E1">return</font>(0);
+<a name="line551">551: </a>}
+
+<a name="line553">553: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoGetEigenTol_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoGetEigenTol_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *tol)</font></strong>
+<a name="line554">554: </a>{
+<a name="line555">555: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line558">558: </a>  *tol = chaco-&gt;eigtol;
+<a name="line559">559: </a>  <font color="#4169E1">return</font>(0);
+<a name="line560">560: </a>}
+
+<a name="line562">562: </a><font color="#B22222">/*@</font>
+<a name="line563">563: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenNumber.html#MatPartitioningChacoSetEigenNumber">MatPartitioningChacoSetEigenNumber</a> - Sets the number of eigenvectors to compute</font>
+<a name="line564">564: </a><font color="#B22222">   during partitioning.</font>
+
+<a name="line566">566: </a><font color="#B22222">   Collective on <a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a></font>
+
+<a name="line568">568: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line569">569: </a><font color="#B22222">+  part - the partitioning context</font>
+<a name="line570">570: </a><font color="#B22222">-  num  - the number of eigenvectors</font>
+
+<a name="line572">572: </a><font color="#B22222">   Options Database:</font>
+<a name="line573">573: </a><font color="#B22222">.  -mat_partitioning_chaco_eigen_number &lt;n&gt;: Number of eigenvectors</font>
+
+<a name="line575">575: </a><font color="#B22222">   Note:</font>
+<a name="line576">576: </a><font color="#B22222">   Accepted values are 1, 2 or 3, indicating partitioning by bisection,</font>
+<a name="line577">577: </a><font color="#B22222">   quadrisection, or octosection.</font>
+
+<a name="line579">579: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line581">581: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenSolver.html#MatPartitioningChacoSetEigenSolver">MatPartitioningChacoSetEigenSolver</a>(), <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetEigenTol.html#MatPartitioningChacoGetEigenTol">MatPartitioningChacoGetEigenTol</a>()</font>
+<a name="line582">582: </a><font color="#B22222">@*/</font>
+<a name="line583">583: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetEigenNumber"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenNumber.html#MatPartitioningChacoSetEigenNumber">MatPartitioningChacoSetEigenNumber</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> num)</font></strong>
+<a name="line584">584: </a>{
+
+<a name="line590">590: </a>  PetscTryMethod(part,<font color="#666666">"MatPartitioningChacoSetEigenNumber_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>),(part,num));
+<a name="line591">591: </a>  <font color="#4169E1">return</font>(0);
+<a name="line592">592: </a>}
+
+<a name="line594">594: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoSetEigenNumber_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoSetEigenNumber_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> num)</font></strong>
+<a name="line595">595: </a>{
+<a name="line596">596: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line599">599: </a>  <font color="#4169E1">if</font> (num==<a href="../../../../../docs/manualpages/Sys/PETSC_DEFAULT.html#PETSC_DEFAULT">PETSC_DEFAULT</a>) chaco-&gt;eignum = 1;
+<a name="line600">600: </a>  <font color="#4169E1">else</font> {
+<a name="line601">601: </a>    <font color="#4169E1">if</font> (num&lt;1 || num&gt;3) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part),PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Can only specify 1, 2 or 3 eigenvectors"</font>);
+<a name="line602">602: </a>    chaco-&gt;eignum = num;
+<a name="line603">603: </a>  }
+<a name="line604">604: </a>  <font color="#4169E1">return</font>(0);
+<a name="line605">605: </a>}
+
+<a name="line607">607: </a><font color="#B22222">/*@</font>
+<a name="line608">608: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetEigenNumber.html#MatPartitioningChacoGetEigenNumber">MatPartitioningChacoGetEigenNumber</a> - Gets the number of eigenvectors used by Chaco.</font>
+
+<a name="line610">610: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line612">612: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line613">613: </a><font color="#B22222">.  part - the partitioning context</font>
+
+<a name="line615">615: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line616">616: </a><font color="#B22222">.  num  - number of eigenvectors</font>
+
+<a name="line618">618: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line620">620: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenNumber.html#MatPartitioningChacoSetEigenNumber">MatPartitioningChacoSetEigenNumber</a>()</font>
+<a name="line621">621: </a><font color="#B22222">@*/</font>
+<a name="line622">622: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoGetEigenNumber"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoGetEigenNumber.html#MatPartitioningChacoGetEigenNumber">MatPartitioningChacoGetEigenNumber</a>(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *num)</font></strong>
+<a name="line623">623: </a>{
+
+<a name="line629">629: </a>  PetscUseMethod(part,<font color="#666666">"MatPartitioningChacoGetEigenNumber_C"</font>,(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a>,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*),(part,num));
+<a name="line630">630: </a>  <font color="#4169E1">return</font>(0);
+<a name="line631">631: </a>}
+
+<a name="line633">633: </a><strong><font color="#4169E1"><a name="MatPartitioningChacoGetEigenNumber_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningChacoGetEigenNumber_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *num)</font></strong>
+<a name="line634">634: </a>{
+<a name="line635">635: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+
+<a name="line638">638: </a>  *num = chaco-&gt;eignum;
+<a name="line639">639: </a>  <font color="#4169E1">return</font>(0);
+<a name="line640">640: </a>}
+
+<a name="line642">642: </a><strong><font color="#4169E1"><a name="MatPartitioningSetFromOptions_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningSetFromOptions_Chaco(PetscOptionItems *PetscOptionsObject,<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part)</font></strong>
+<a name="line643">643: </a>{
+<a name="line644">644: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>        ierr;
+<a name="line645">645: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>              i;
+<a name="line646">646: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>             r;
+<a name="line647">647: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>             flag;
+<a name="line648">648: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*)part-&gt;data;
+<a name="line649">649: </a>  MPChacoGlobalType     global;
+<a name="line650">650: </a>  MPChacoLocalType      local;
+<a name="line651">651: </a>  MPChacoEigenType      eigen;
+
+<a name="line654">654: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsHead.html#PetscOptionsHead">PetscOptionsHead</a>(PetscOptionsObject,<font color="#666666">"Chaco partitioning options"</font>);
+<a name="line655">655: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsEnum.html#PetscOptionsEnum">PetscOptionsEnum</a>(<font color="#666666">"-mat_partitioning_chaco_global"</font>,<font color="#666666">"Global method"</font>,<font color="#666666">"<a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetGlobal.html#MatPartitioningChacoSetGlobal">MatPartitioningChacoSetGlobal</a>"</font>,MPChacoGlobalTypes,(<a href="../../../../../docs/manualpages/Sys/PetscEnum.html#PetscEnum">PetscEnum</a>)chaco-&gt;global_method,(<a href="../../../../../docs/manualpages/Sys/PetscEnum.html#PetscEnum">PetscEnum</a>*)&amp;global,&amp;flag);
+<a name="line656">656: </a>  <font color="#4169E1">if</font> (flag) { <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetGlobal.html#MatPartitioningChacoSetGlobal">MatPartitioningChacoSetGlobal</a>(part,global); }
+<a name="line657">657: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsEnum.html#PetscOptionsEnum">PetscOptionsEnum</a>(<font color="#666666">"-mat_partitioning_chaco_local"</font>,<font color="#666666">"Local method"</font>,<font color="#666666">"<a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetLocal.html#MatPartitioningChacoSetLocal">MatPartitioningChacoSetLocal</a>"</font>,MPChacoLocalTypes,(<a href="../../../../../docs/manualpages/Sys/PetscEnum.html#PetscEnum">PetscEnum</a>)chaco-&gt;local_method,(<a href="../../../../../docs/manualpages/Sys/PetscEnum.html#PetscEnum">PetscEnum</a>*)&amp;local,&amp;flag);
+<a name="line658">658: </a>  <font color="#4169E1">if</font> (flag) { <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetLocal.html#MatPartitioningChacoSetLocal">MatPartitioningChacoSetLocal</a>(part,local); }
+<a name="line659">659: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-mat_partitioning_chaco_coarse"</font>,<font color="#666666">"Coarse level"</font>,<font color="#666666">"<a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetCoarseLevel.html#MatPartitioningChacoSetCoarseLevel">MatPartitioningChacoSetCoarseLevel</a>"</font>,0.0,&amp;r,&amp;flag);
+<a name="line660">660: </a>  <font color="#4169E1">if</font> (flag) { <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetCoarseLevel.html#MatPartitioningChacoSetCoarseLevel">MatPartitioningChacoSetCoarseLevel</a>(part,r); }
+<a name="line661">661: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsEnum.html#PetscOptionsEnum">PetscOptionsEnum</a>(<font color="#666666">"-mat_partitioning_chaco_eigen_solver"</font>,<font color="#666666">"Eigensolver method"</font>,<font color="#666666">"<a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenSolver.html#MatPartitioningChacoSetEigenSolver">MatPartitioningChacoSetEigenSolver</a>"</font>,MPChacoEigenTypes,(<a href="../../../../../docs/manualpages/Sys/PetscEnum.html#PetscEnum">PetscEnum</a>)chaco-&gt;eigen_method,(<a href="../../../../../docs/manualpages/Sys/PetscEnum.html#PetscEnum">PetscEnum</a>*)&amp;eigen,&amp;flag);
+<a name="line662">662: </a>  <font color="#4169E1">if</font> (flag) { <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenSolver.html#MatPartitioningChacoSetEigenSolver">MatPartitioningChacoSetEigenSolver</a>(part,eigen); }
+<a name="line663">663: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-mat_partitioning_chaco_eigen_tol"</font>,<font color="#666666">"Eigensolver tolerance"</font>,<font color="#666666">"<a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenTol.html#MatPartitioningChacoSetEigenTol">MatPartitioningChacoSetEigenTol</a>"</font>,chaco-&gt;eigtol,&amp;r,&amp;flag);
+<a name="line664">664: </a>  <font color="#4169E1">if</font> (flag) { <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenTol.html#MatPartitioningChacoSetEigenTol">MatPartitioningChacoSetEigenTol</a>(part,r); }
+<a name="line665">665: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_partitioning_chaco_eigen_number"</font>,<font color="#666666">"Number of eigenvectors: 1, 2, or 3 (bi-, quadri-, or octosection)"</font>,<font color="#666666">"<a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenNumber.html#MatPartitioningChacoSetEigenNumber">MatPartitioningChacoSetEigenNumber</a>"</font>,chaco-&gt;eignum,&amp;i,&amp;flag);
+<a name="line666">666: </a>  <font color="#4169E1">if</font> (flag) { <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningChacoSetEigenNumber.html#MatPartitioningChacoSetEigenNumber">MatPartitioningChacoSetEigenNumber</a>(part,i); }
+<a name="line667">667: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-mat_partitioning_chaco_verbose"</font>,<font color="#666666">"Show library output"</font>,<font color="#666666">""</font>,chaco-&gt;verbose,&amp;chaco-&gt;verbose,NULL);
+<a name="line668">668: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsTail.html#PetscOptionsTail">PetscOptionsTail</a>();
+<a name="line669">669: </a>  <font color="#4169E1">return</font>(0);
+<a name="line670">670: </a>}
+
+<a name="line672">672: </a><strong><font color="#4169E1"><a name="MatPartitioningDestroy_Chaco"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningDestroy_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part)</font></strong>
+<a name="line673">673: </a>{
+<a name="line674">674: </a>  MatPartitioning_Chaco *chaco = (MatPartitioning_Chaco*) part-&gt;data;
+<a name="line675">675: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>        ierr;
+
+<a name="line678">678: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(chaco);
+<a name="line679">679: </a>  <font color="#B22222">/* clear composed functions */</font>
+<a name="line680">680: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetGlobal_C"</font>,NULL);
+<a name="line681">681: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoGetGlobal_C"</font>,NULL);
+<a name="line682">682: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetLocal_C"</font>,NULL);
+<a name="line683">683: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoGetLocal_C"</font>,NULL);
+<a name="line684">684: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetCoarseLevel_C"</font>,NULL);
+<a name="line685">685: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetEigenSolver_C"</font>,NULL);
+<a name="line686">686: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoGetEigenSolver_C"</font>,NULL);
+<a name="line687">687: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetEigenTol_C"</font>,NULL);
+<a name="line688">688: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoGetEigenTol_C"</font>,NULL);
+<a name="line689">689: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetEigenNumber_C"</font>,NULL);
+<a name="line690">690: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoGetEigenNumber_C"</font>,NULL);
+<a name="line691">691: </a>  <font color="#4169E1">return</font>(0);
+<a name="line692">692: </a>}
+
+<a name="line694">694: </a><font color="#B22222">/*MC</font>
+<a name="line695">695: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/MatOrderings/MATPARTITIONINGCHACO.html#MATPARTITIONINGCHACO">MATPARTITIONINGCHACO</a> - Creates a partitioning context via the external package Chaco.</font>
+
+<a name="line697">697: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line699">699: </a><font color="#B22222">   Notes:</font>
+<a name="line700">700: </a><font color="#B22222">    See http://www.cs.sandia.gov/CRF/chac.html</font>
+
+<a name="line702">702: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatOrderings/MatPartitioningSetType.html#MatPartitioningSetType">MatPartitioningSetType</a>(), <a href="../../../../../docs/manualpages/Mat/MatPartitioningType.html#MatPartitioningType">MatPartitioningType</a></font>
+<a name="line703">703: </a><font color="#B22222">M*/</font>
+
+<a name="line705">705: </a><strong><font color="#4169E1"><a name="MatPartitioningCreate_Chaco"></a>PETSC_EXTERN <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatPartitioningCreate_Chaco(<a href="../../../../../docs/manualpages/Mat/MatPartitioning.html#MatPartitioning">MatPartitioning</a> part)</font></strong>
+<a name="line706">706: </a>{
+<a name="line707">707: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>        ierr;
+<a name="line708">708: </a>  MatPartitioning_Chaco *chaco;
+
+<a name="line711">711: </a>  <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(part,&amp;chaco);
+<a name="line712">712: </a>  part-&gt;data = (void*)chaco;
+
+<a name="line714">714: </a>  chaco-&gt;global_method = MP_CHACO_MULTILEVEL;
+<a name="line715">715: </a>  chaco-&gt;local_method  = MP_CHACO_KERNIGHAN;
+<a name="line716">716: </a>  chaco-&gt;eigen_method  = MP_CHACO_LANCZOS;
+<a name="line717">717: </a>  chaco-&gt;nbvtxcoarsed  = 200;
+<a name="line718">718: </a>  chaco-&gt;eignum        = 1;
+<a name="line719">719: </a>  chaco-&gt;eigtol        = 0.001;
+<a name="line720">720: </a>  chaco-&gt;verbose       = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+
+<a name="line722">722: </a>  part-&gt;ops-&gt;apply          = MatPartitioningApply_Chaco;
+<a name="line723">723: </a>  part-&gt;ops-&gt;view           = MatPartitioningView_Chaco;
+<a name="line724">724: </a>  part-&gt;ops-&gt;destroy        = MatPartitioningDestroy_Chaco;
+<a name="line725">725: </a>  part-&gt;ops-&gt;setfromoptions = MatPartitioningSetFromOptions_Chaco;
+
+<a name="line727">727: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetGlobal_C"</font>,MatPartitioningChacoSetGlobal_Chaco);
+<a name="line728">728: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoGetGlobal_C"</font>,MatPartitioningChacoGetGlobal_Chaco);
+<a name="line729">729: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetLocal_C"</font>,MatPartitioningChacoSetLocal_Chaco);
+<a name="line730">730: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoGetLocal_C"</font>,MatPartitioningChacoGetLocal_Chaco);
+<a name="line731">731: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetCoarseLevel_C"</font>,MatPartitioningChacoSetCoarseLevel_Chaco);
+<a name="line732">732: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetEigenSolver_C"</font>,MatPartitioningChacoSetEigenSolver_Chaco);
+<a name="line733">733: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoGetEigenSolver_C"</font>,MatPartitioningChacoGetEigenSolver_Chaco);
+<a name="line734">734: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetEigenTol_C"</font>,MatPartitioningChacoSetEigenTol_Chaco);
+<a name="line735">735: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoGetEigenTol_C"</font>,MatPartitioningChacoGetEigenTol_Chaco);
+<a name="line736">736: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoSetEigenNumber_C"</font>,MatPartitioningChacoSetEigenNumber_Chaco);
+<a name="line737">737: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)part,<font color="#666666">"MatPartitioningChacoGetEigenNumber_C"</font>,MatPartitioningChacoGetEigenNumber_Chaco);
+<a name="line738">738: </a>  <font color="#4169E1">return</font>(0);
+<a name="line739">739: </a>}
+</pre>
+</body>
+
+</html>

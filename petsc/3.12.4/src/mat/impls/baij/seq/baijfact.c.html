@@ -1,0 +1,1730 @@
+<center><a href="baijfact.c">Actual source code: baijfact.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/mat/impls/baij/seq/baijfact.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:47:10+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/mat/impls/baij/seq/baijfact.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a><font color="#B22222">/*</font>
+<a name="line3">  3: </a><font color="#B22222">    Factorization code for BAIJ format.</font>
+<a name="line4">  4: </a><font color="#B22222">*/</font>
+<a name="line5">  5: </a> #include <A href="../../../../../include/../src/mat/impls/baij/seq/baij.h.html">&lt;../src/mat/impls/baij/seq/baij.h&gt;</A>
+<a name="line6">  6: </a> #include <A href="../../../../../include/petsc/private/kernels/blockinvert.h.html">&lt;petsc/private/kernels/blockinvert.h&gt;</A>
+
+<a name="line8">  8: </a><strong><font color="#4169E1"><a name="MatLUFactorNumeric_SeqBAIJ_2"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatLUFactorNumeric_SeqBAIJ_2(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line9">  9: </a>{
+<a name="line10"> 10: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            C     =B;
+<a name="line11"> 11: </a>  Mat_SeqBAIJ    *a    =(Mat_SeqBAIJ*)A-&gt;data,*b=(Mat_SeqBAIJ*)C-&gt;data;
+<a name="line12"> 12: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>             isrow = b-&gt;row,isicol = b-&gt;icol;
+<a name="line14"> 14: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *r,*ic;
+<a name="line15"> 15: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,k,nz,nzL,row,*pj;
+<a name="line16"> 16: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n=a-&gt;mbs,*ai=a-&gt;i,*aj=a-&gt;j,*bi=b-&gt;i,*bj=b-&gt;j,bs2=a-&gt;bs2;
+<a name="line17"> 17: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *ajtmp,*bjtmp,*bdiag=b-&gt;diag;
+<a name="line18"> 18: </a>  MatScalar      *rtmp,*pc,*mwork,*pv;
+<a name="line19"> 19: </a>  MatScalar      *aa=a-&gt;a,*v;
+<a name="line20"> 20: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       flg;
+<a name="line21"> 21: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      shift = info-&gt;shiftamount;
+<a name="line22"> 22: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      allowzeropivot,zeropivotdetected;
+
+<a name="line25"> 25: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isrow,&amp;r);
+<a name="line26"> 26: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isicol,&amp;ic);
+<a name="line27"> 27: </a>  allowzeropivot = <a href="../../../../../docs/manualpages/Sys/PetscNot.html#PetscNot">PetscNot</a>(A-&gt;erroriffailure);
+
+<a name="line29"> 29: </a>  <font color="#B22222">/* generate work space needed by the factorization */</font>
+<a name="line30"> 30: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(bs2*n,&amp;rtmp,bs2,&amp;mwork);
+<a name="line31"> 31: </a>  <a href="../../../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(rtmp,bs2*n);
+
+<a name="line33"> 33: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line34"> 34: </a>    <font color="#B22222">/* zero rtmp */</font>
+<a name="line35"> 35: </a>    <font color="#B22222">/* L part */</font>
+<a name="line36"> 36: </a>    nz    = bi[i+1] - bi[i];
+<a name="line37"> 37: </a>    bjtmp = bj + bi[i];
+<a name="line38"> 38: </a>    <font color="#4169E1">for</font>  (j=0; j&lt;nz; j++) {
+<a name="line39"> 39: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(rtmp+bs2*bjtmp[j],bs2);
+<a name="line40"> 40: </a>    }
+
+<a name="line42"> 42: </a>    <font color="#B22222">/* U part */</font>
+<a name="line43"> 43: </a>    nz    = bdiag[i] - bdiag[i+1];
+<a name="line44"> 44: </a>    bjtmp = bj + bdiag[i+1]+1;
+<a name="line45"> 45: </a>    <font color="#4169E1">for</font>  (j=0; j&lt;nz; j++) {
+<a name="line46"> 46: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(rtmp+bs2*bjtmp[j],bs2);
+<a name="line47"> 47: </a>    }
+
+<a name="line49"> 49: </a>    <font color="#B22222">/* load in initial (unfactored row) */</font>
+<a name="line50"> 50: </a>    nz    = ai[r[i]+1] - ai[r[i]];
+<a name="line51"> 51: </a>    ajtmp = aj + ai[r[i]];
+<a name="line52"> 52: </a>    v     = aa + bs2*ai[r[i]];
+<a name="line53"> 53: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line54"> 54: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(rtmp+bs2*ic[ajtmp[j]],v+bs2*j,bs2);
+<a name="line55"> 55: </a>    }
+
+<a name="line57"> 57: </a>    <font color="#B22222">/* elimination */</font>
+<a name="line58"> 58: </a>    bjtmp = bj + bi[i];
+<a name="line59"> 59: </a>    nzL   = bi[i+1] - bi[i];
+<a name="line60"> 60: </a>    <font color="#4169E1">for</font> (k=0; k &lt; nzL; k++) {
+<a name="line61"> 61: </a>      row = bjtmp[k];
+<a name="line62"> 62: </a>      pc  = rtmp + bs2*row;
+<a name="line63"> 63: </a>      <font color="#4169E1">for</font> (flg=0,j=0; j&lt;bs2; j++) {
+<a name="line64"> 64: </a>        <font color="#4169E1">if</font> (pc[j] != (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line65"> 65: </a>          flg = 1;
+<a name="line66"> 66: </a>          <font color="#4169E1">break</font>;
+<a name="line67"> 67: </a>        }
+<a name="line68"> 68: </a>      }
+<a name="line69"> 69: </a>      <font color="#4169E1">if</font> (flg) {
+<a name="line70"> 70: </a>        pv = b-&gt;a + bs2*bdiag[row];
+<a name="line71"> 71: </a>        <font color="#B22222">/* PetscKernel_A_gets_A_times_B(bs,pc,pv,mwork); *pc = *pc * (*pv); */</font>
+<a name="line72"> 72: </a>        PetscKernel_A_gets_A_times_B_2(pc,pv,mwork);
+
+<a name="line74"> 74: </a>        pj = b-&gt;j + bdiag[row+1]+1; <font color="#B22222">/* begining of U(row,:) */</font>
+<a name="line75"> 75: </a>        pv = b-&gt;a + bs2*(bdiag[row+1]+1);
+<a name="line76"> 76: </a>        nz = bdiag[row] - bdiag[row+1] - 1; <font color="#B22222">/* num of entries inU(row,:), excluding diag */</font>
+<a name="line77"> 77: </a>        <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line78"> 78: </a>          <font color="#B22222">/* PetscKernel_A_gets_A_minus_B_times_C(bs,rtmp+bs2*pj[j],pc,pv+bs2*j); */</font>
+<a name="line79"> 79: </a>          <font color="#B22222">/* rtmp+bs2*pj[j] = rtmp+bs2*pj[j] - (*pc)*(pv+bs2*j) */</font>
+<a name="line80"> 80: </a>          v    = rtmp + 4*pj[j];
+<a name="line81"> 81: </a>          PetscKernel_A_gets_A_minus_B_times_C_2(v,pc,pv);
+<a name="line82"> 82: </a>          pv  += 4;
+<a name="line83"> 83: </a>        }
+<a name="line84"> 84: </a>        <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(16*nz+12); <font color="#B22222">/* flops = 2*bs^3*nz + 2*bs^3 - bs2) */</font>
+<a name="line85"> 85: </a>      }
+<a name="line86"> 86: </a>    }
+
+<a name="line88"> 88: </a>    <font color="#B22222">/* finished row so stick it into b-&gt;a */</font>
+<a name="line89"> 89: </a>    <font color="#B22222">/* L part */</font>
+<a name="line90"> 90: </a>    pv = b-&gt;a + bs2*bi[i];
+<a name="line91"> 91: </a>    pj = b-&gt;j + bi[i];
+<a name="line92"> 92: </a>    nz = bi[i+1] - bi[i];
+<a name="line93"> 93: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line94"> 94: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(pv+bs2*j,rtmp+bs2*pj[j],bs2);
+<a name="line95"> 95: </a>    }
+
+<a name="line97"> 97: </a>    <font color="#B22222">/* Mark diagonal and invert diagonal for simplier triangular solves */</font>
+<a name="line98"> 98: </a>    pv   = b-&gt;a + bs2*bdiag[i];
+<a name="line99"> 99: </a>    pj   = b-&gt;j + bdiag[i];
+<a name="line100">100: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(pv,rtmp+bs2*pj[0],bs2);
+<a name="line101">101: </a>    PetscKernel_A_gets_inverse_A_2(pv,shift,allowzeropivot,&amp;zeropivotdetected);
+<a name="line102">102: </a>    <font color="#4169E1">if</font> (zeropivotdetected) B-&gt;factorerrortype = MAT_FACTOR_NUMERIC_ZEROPIVOT;
+
+<a name="line104">104: </a>    <font color="#B22222">/* U part */</font>
+<a name="line105">105: </a>    pv = b-&gt;a + bs2*(bdiag[i+1]+1);
+<a name="line106">106: </a>    pj = b-&gt;j + bdiag[i+1]+1;
+<a name="line107">107: </a>    nz = bdiag[i] - bdiag[i+1] - 1;
+<a name="line108">108: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line109">109: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(pv+bs2*j,rtmp+bs2*pj[j],bs2);
+<a name="line110">110: </a>    }
+<a name="line111">111: </a>  }
+
+<a name="line113">113: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(rtmp,mwork);
+<a name="line114">114: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isicol,&amp;ic);
+<a name="line115">115: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isrow,&amp;r);
+
+<a name="line117">117: </a>  C-&gt;ops-&gt;solve          = MatSolve_SeqBAIJ_2;
+<a name="line118">118: </a>  C-&gt;ops-&gt;solvetranspose = MatSolveTranspose_SeqBAIJ_2;
+<a name="line119">119: </a>  C-&gt;assembled           = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line121">121: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(1.333333333333*2*2*2*n); <font color="#B22222">/* from inverting diagonal blocks */</font>
+<a name="line122">122: </a>  <font color="#4169E1">return</font>(0);
+<a name="line123">123: </a>}
+
+<a name="line125">125: </a><strong><font color="#4169E1"><a name="MatLUFactorNumeric_SeqBAIJ_2_NaturalOrdering"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatLUFactorNumeric_SeqBAIJ_2_NaturalOrdering(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line126">126: </a>{
+<a name="line127">127: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            C =B;
+<a name="line128">128: </a>  Mat_SeqBAIJ    *a=(Mat_SeqBAIJ*)A-&gt;data,*b=(Mat_SeqBAIJ*)C-&gt;data;
+<a name="line130">130: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,k,nz,nzL,row,*pj;
+<a name="line131">131: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n=a-&gt;mbs,*ai=a-&gt;i,*aj=a-&gt;j,*bi=b-&gt;i,*bj=b-&gt;j,bs2=a-&gt;bs2;
+<a name="line132">132: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *ajtmp,*bjtmp,*bdiag=b-&gt;diag;
+<a name="line133">133: </a>  MatScalar      *rtmp,*pc,*mwork,*pv;
+<a name="line134">134: </a>  MatScalar      *aa=a-&gt;a,*v;
+<a name="line135">135: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       flg;
+<a name="line136">136: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      shift = info-&gt;shiftamount;
+<a name="line137">137: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      allowzeropivot,zeropivotdetected;
+
+<a name="line140">140: </a>  allowzeropivot = <a href="../../../../../docs/manualpages/Sys/PetscNot.html#PetscNot">PetscNot</a>(A-&gt;erroriffailure);
+
+<a name="line142">142: </a>  <font color="#B22222">/* generate work space needed by the factorization */</font>
+<a name="line143">143: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(bs2*n,&amp;rtmp,bs2,&amp;mwork);
+<a name="line144">144: </a>  <a href="../../../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(rtmp,bs2*n);
+
+<a name="line146">146: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line147">147: </a>    <font color="#B22222">/* zero rtmp */</font>
+<a name="line148">148: </a>    <font color="#B22222">/* L part */</font>
+<a name="line149">149: </a>    nz    = bi[i+1] - bi[i];
+<a name="line150">150: </a>    bjtmp = bj + bi[i];
+<a name="line151">151: </a>    <font color="#4169E1">for</font>  (j=0; j&lt;nz; j++) {
+<a name="line152">152: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(rtmp+bs2*bjtmp[j],bs2);
+<a name="line153">153: </a>    }
+
+<a name="line155">155: </a>    <font color="#B22222">/* U part */</font>
+<a name="line156">156: </a>    nz    = bdiag[i] - bdiag[i+1];
+<a name="line157">157: </a>    bjtmp = bj + bdiag[i+1]+1;
+<a name="line158">158: </a>    <font color="#4169E1">for</font>  (j=0; j&lt;nz; j++) {
+<a name="line159">159: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(rtmp+bs2*bjtmp[j],bs2);
+<a name="line160">160: </a>    }
+
+<a name="line162">162: </a>    <font color="#B22222">/* load in initial (unfactored row) */</font>
+<a name="line163">163: </a>    nz    = ai[i+1] - ai[i];
+<a name="line164">164: </a>    ajtmp = aj + ai[i];
+<a name="line165">165: </a>    v     = aa + bs2*ai[i];
+<a name="line166">166: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line167">167: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(rtmp+bs2*ajtmp[j],v+bs2*j,bs2);
+<a name="line168">168: </a>    }
+
+<a name="line170">170: </a>    <font color="#B22222">/* elimination */</font>
+<a name="line171">171: </a>    bjtmp = bj + bi[i];
+<a name="line172">172: </a>    nzL   = bi[i+1] - bi[i];
+<a name="line173">173: </a>    <font color="#4169E1">for</font> (k=0; k &lt; nzL; k++) {
+<a name="line174">174: </a>      row = bjtmp[k];
+<a name="line175">175: </a>      pc  = rtmp + bs2*row;
+<a name="line176">176: </a>      <font color="#4169E1">for</font> (flg=0,j=0; j&lt;bs2; j++) {
+<a name="line177">177: </a>        <font color="#4169E1">if</font> (pc[j]!=(<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line178">178: </a>          flg = 1;
+<a name="line179">179: </a>          <font color="#4169E1">break</font>;
+<a name="line180">180: </a>        }
+<a name="line181">181: </a>      }
+<a name="line182">182: </a>      <font color="#4169E1">if</font> (flg) {
+<a name="line183">183: </a>        pv = b-&gt;a + bs2*bdiag[row];
+<a name="line184">184: </a>        <font color="#B22222">/* PetscKernel_A_gets_A_times_B(bs,pc,pv,mwork); *pc = *pc * (*pv); */</font>
+<a name="line185">185: </a>        PetscKernel_A_gets_A_times_B_2(pc,pv,mwork);
+
+<a name="line187">187: </a>        pj = b-&gt;j + bdiag[row+1]+1; <font color="#B22222">/* beginning of U(row,:) */</font>
+<a name="line188">188: </a>        pv = b-&gt;a + bs2*(bdiag[row+1]+1);
+<a name="line189">189: </a>        nz = bdiag[row]-bdiag[row+1] - 1; <font color="#B22222">/* num of entries in U(row,:) excluding diag */</font>
+<a name="line190">190: </a>        <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line191">191: </a>          <font color="#B22222">/* PetscKernel_A_gets_A_minus_B_times_C(bs,rtmp+bs2*pj[j],pc,pv+bs2*j); */</font>
+<a name="line192">192: </a>          <font color="#B22222">/* rtmp+bs2*pj[j] = rtmp+bs2*pj[j] - (*pc)*(pv+bs2*j) */</font>
+<a name="line193">193: </a>          v    = rtmp + 4*pj[j];
+<a name="line194">194: </a>          PetscKernel_A_gets_A_minus_B_times_C_2(v,pc,pv);
+<a name="line195">195: </a>          pv  += 4;
+<a name="line196">196: </a>        }
+<a name="line197">197: </a>        <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(16*nz+12); <font color="#B22222">/* flops = 2*bs^3*nz + 2*bs^3 - bs2) */</font>
+<a name="line198">198: </a>      }
+<a name="line199">199: </a>    }
+
+<a name="line201">201: </a>    <font color="#B22222">/* finished row so stick it into b-&gt;a */</font>
+<a name="line202">202: </a>    <font color="#B22222">/* L part */</font>
+<a name="line203">203: </a>    pv = b-&gt;a + bs2*bi[i];
+<a name="line204">204: </a>    pj = b-&gt;j + bi[i];
+<a name="line205">205: </a>    nz = bi[i+1] - bi[i];
+<a name="line206">206: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line207">207: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(pv+bs2*j,rtmp+bs2*pj[j],bs2);
+<a name="line208">208: </a>    }
+
+<a name="line210">210: </a>    <font color="#B22222">/* Mark diagonal and invert diagonal for simplier triangular solves */</font>
+<a name="line211">211: </a>    pv   = b-&gt;a + bs2*bdiag[i];
+<a name="line212">212: </a>    pj   = b-&gt;j + bdiag[i];
+<a name="line213">213: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(pv,rtmp+bs2*pj[0],bs2);
+<a name="line214">214: </a>    PetscKernel_A_gets_inverse_A_2(pv,shift,allowzeropivot,&amp;zeropivotdetected);
+<a name="line215">215: </a>    <font color="#4169E1">if</font> (zeropivotdetected) B-&gt;factorerrortype = MAT_FACTOR_NUMERIC_ZEROPIVOT;
+
+<a name="line217">217: </a>    <font color="#B22222">/* U part */</font>
+<a name="line218">218: </a>    <font color="#B22222">/*</font>
+<a name="line219">219: </a><font color="#B22222">    pv = b-&gt;a + bs2*bi[2*n-i];</font>
+<a name="line220">220: </a><font color="#B22222">    pj = b-&gt;j + bi[2*n-i];</font>
+<a name="line221">221: </a><font color="#B22222">    nz = bi[2*n-i+1] - bi[2*n-i] - 1;</font>
+<a name="line222">222: </a><font color="#B22222">    */</font>
+<a name="line223">223: </a>    pv = b-&gt;a + bs2*(bdiag[i+1]+1);
+<a name="line224">224: </a>    pj = b-&gt;j + bdiag[i+1]+1;
+<a name="line225">225: </a>    nz = bdiag[i] - bdiag[i+1] - 1;
+<a name="line226">226: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line227">227: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(pv+bs2*j,rtmp+bs2*pj[j],bs2);
+<a name="line228">228: </a>    }
+<a name="line229">229: </a>  }
+<a name="line230">230: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(rtmp,mwork);
+
+<a name="line232">232: </a>  C-&gt;ops-&gt;solve          = MatSolve_SeqBAIJ_2_NaturalOrdering;
+<a name="line233">233: </a>  C-&gt;ops-&gt;forwardsolve   = MatForwardSolve_SeqBAIJ_2_NaturalOrdering;
+<a name="line234">234: </a>  C-&gt;ops-&gt;backwardsolve  = MatBackwardSolve_SeqBAIJ_2_NaturalOrdering;
+<a name="line235">235: </a>  C-&gt;ops-&gt;solvetranspose = MatSolveTranspose_SeqBAIJ_2_NaturalOrdering;
+<a name="line236">236: </a>  C-&gt;assembled           = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line238">238: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(1.333333333333*2*2*2*n); <font color="#B22222">/* from inverting diagonal blocks */</font>
+<a name="line239">239: </a>  <font color="#4169E1">return</font>(0);
+<a name="line240">240: </a>}
+
+<a name="line242">242: </a><strong><font color="#4169E1"><a name="MatLUFactorNumeric_SeqBAIJ_2_inplace"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatLUFactorNumeric_SeqBAIJ_2_inplace(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line243">243: </a>{
+<a name="line244">244: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            C     = B;
+<a name="line245">245: </a>  Mat_SeqBAIJ    *a    = (Mat_SeqBAIJ*)A-&gt;data,*b = (Mat_SeqBAIJ*)C-&gt;data;
+<a name="line246">246: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>             isrow = b-&gt;row,isicol = b-&gt;icol;
+<a name="line248">248: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *r,*ic;
+<a name="line249">249: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,n = a-&gt;mbs,*bi = b-&gt;i,*bj = b-&gt;j;
+<a name="line250">250: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *ajtmpold,*ajtmp,nz,row;
+<a name="line251">251: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *diag_offset=b-&gt;diag,idx,*ai=a-&gt;i,*aj=a-&gt;j,*pj;
+<a name="line252">252: </a>  MatScalar      *pv,*v,*rtmp,m1,m2,m3,m4,*pc,*w,*x,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>,x4;
+<a name="line253">253: </a>  MatScalar      p1,p2,p3,p4;
+<a name="line254">254: </a>  MatScalar      *ba   = b-&gt;a,*aa = a-&gt;a;
+<a name="line255">255: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      shift = info-&gt;shiftamount;
+<a name="line256">256: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      allowzeropivot,zeropivotdetected;
+
+<a name="line259">259: </a>  allowzeropivot = <a href="../../../../../docs/manualpages/Sys/PetscNot.html#PetscNot">PetscNot</a>(A-&gt;erroriffailure);
+<a name="line260">260: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isrow,&amp;r);
+<a name="line261">261: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isicol,&amp;ic);
+<a name="line262">262: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(4*(n+1),&amp;rtmp);
+
+<a name="line264">264: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line265">265: </a>    nz    = bi[i+1] - bi[i];
+<a name="line266">266: </a>    ajtmp = bj + bi[i];
+<a name="line267">267: </a>    <font color="#4169E1">for</font>  (j=0; j&lt;nz; j++) {
+<a name="line268">268: </a>      x = rtmp+4*ajtmp[j]; x[0] = x[1] = x[2] = x[3] = 0.0;
+<a name="line269">269: </a>    }
+<a name="line270">270: </a>    <font color="#B22222">/* load in initial (unfactored row) */</font>
+<a name="line271">271: </a>    idx      = r[i];
+<a name="line272">272: </a>    nz       = ai[idx+1] - ai[idx];
+<a name="line273">273: </a>    ajtmpold = aj + ai[idx];
+<a name="line274">274: </a>    v        = aa + 4*ai[idx];
+<a name="line275">275: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line276">276: </a>      x    = rtmp+4*ic[ajtmpold[j]];
+<a name="line277">277: </a>      x[0] = v[0]; x[1] = v[1]; x[2] = v[2]; x[3] = v[3];
+<a name="line278">278: </a>      v   += 4;
+<a name="line279">279: </a>    }
+<a name="line280">280: </a>    row = *ajtmp++;
+<a name="line281">281: </a>    <font color="#4169E1">while</font> (row &lt; i) {
+<a name="line282">282: </a>      pc = rtmp + 4*row;
+<a name="line283">283: </a>      p1 = pc[0]; p2 = pc[1]; p3 = pc[2]; p4 = pc[3];
+<a name="line284">284: </a>      <font color="#4169E1">if</font> (p1 != (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0 || p2 != (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0 || p3 != (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0 || p4 != (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line285">285: </a>        pv    = ba + 4*diag_offset[row];
+<a name="line286">286: </a>        pj    = bj + diag_offset[row] + 1;
+<a name="line287">287: </a>        <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>    = pv[0]; <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a> = pv[1]; <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> = pv[2]; x4 = pv[3];
+<a name="line288">288: </a>        pc[0] = m1 = p1*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + p3*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>;
+<a name="line289">289: </a>        pc[1] = m2 = p2*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + p4*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>;
+<a name="line290">290: </a>        pc[2] = m3 = p1*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> + p3*x4;
+<a name="line291">291: </a>        pc[3] = m4 = p2*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> + p4*x4;
+<a name="line292">292: </a>        nz    = bi[row+1] - diag_offset[row] - 1;
+<a name="line293">293: </a>        pv   += 4;
+<a name="line294">294: </a>        <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line295">295: </a>          <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>    = pv[0]; <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a> = pv[1]; <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> = pv[2]; x4 = pv[3];
+<a name="line296">296: </a>          x     = rtmp + 4*pj[j];
+<a name="line297">297: </a>          x[0] -= m1*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + m3*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>;
+<a name="line298">298: </a>          x[1] -= m2*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + m4*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>;
+<a name="line299">299: </a>          x[2] -= m1*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> + m3*x4;
+<a name="line300">300: </a>          x[3] -= m2*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> + m4*x4;
+<a name="line301">301: </a>          pv   += 4;
+<a name="line302">302: </a>        }
+<a name="line303">303: </a>        <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(16.0*nz+12.0);
+<a name="line304">304: </a>      }
+<a name="line305">305: </a>      row = *ajtmp++;
+<a name="line306">306: </a>    }
+<a name="line307">307: </a>    <font color="#B22222">/* finished row so stick it into b-&gt;a */</font>
+<a name="line308">308: </a>    pv = ba + 4*bi[i];
+<a name="line309">309: </a>    pj = bj + bi[i];
+<a name="line310">310: </a>    nz = bi[i+1] - bi[i];
+<a name="line311">311: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line312">312: </a>      x     = rtmp+4*pj[j];
+<a name="line313">313: </a>      pv[0] = x[0]; pv[1] = x[1]; pv[2] = x[2]; pv[3] = x[3];
+<a name="line314">314: </a>      pv   += 4;
+<a name="line315">315: </a>    }
+<a name="line316">316: </a>    <font color="#B22222">/* invert diagonal block */</font>
+<a name="line317">317: </a>    w    = ba + 4*diag_offset[i];
+<a name="line318">318: </a>    PetscKernel_A_gets_inverse_A_2(w,shift,allowzeropivot,&amp;zeropivotdetected);
+<a name="line319">319: </a>    <font color="#4169E1">if</font> (zeropivotdetected) C-&gt;factorerrortype = MAT_FACTOR_NUMERIC_ZEROPIVOT;
+<a name="line320">320: </a>  }
+
+<a name="line322">322: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rtmp);
+<a name="line323">323: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isicol,&amp;ic);
+<a name="line324">324: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isrow,&amp;r);
+
+<a name="line326">326: </a>  C-&gt;ops-&gt;solve          = MatSolve_SeqBAIJ_2_inplace;
+<a name="line327">327: </a>  C-&gt;ops-&gt;solvetranspose = MatSolveTranspose_SeqBAIJ_2_inplace;
+<a name="line328">328: </a>  C-&gt;assembled           = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line330">330: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(1.333333333333*8*b-&gt;mbs); <font color="#B22222">/* from inverting diagonal blocks */</font>
+<a name="line331">331: </a>  <font color="#4169E1">return</font>(0);
+<a name="line332">332: </a>}
+<a name="line333">333: </a><font color="#B22222">/*</font>
+<a name="line334">334: </a><font color="#B22222">      Version for when blocks are 2 by 2 Using natural ordering</font>
+<a name="line335">335: </a><font color="#B22222">*/</font>
+<a name="line336">336: </a><strong><font color="#4169E1"><a name="MatLUFactorNumeric_SeqBAIJ_2_NaturalOrdering_inplace"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatLUFactorNumeric_SeqBAIJ_2_NaturalOrdering_inplace(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> C,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line337">337: </a>{
+<a name="line338">338: </a>  Mat_SeqBAIJ    *a = (Mat_SeqBAIJ*)A-&gt;data,*b = (Mat_SeqBAIJ*)C-&gt;data;
+<a name="line340">340: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,n = a-&gt;mbs,*bi = b-&gt;i,*bj = b-&gt;j;
+<a name="line341">341: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *ajtmpold,*ajtmp,nz,row;
+<a name="line342">342: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *diag_offset = b-&gt;diag,*ai=a-&gt;i,*aj=a-&gt;j,*pj;
+<a name="line343">343: </a>  MatScalar      *pv,*v,*rtmp,*pc,*w,*x;
+<a name="line344">344: </a>  MatScalar      p1,p2,p3,p4,m1,m2,m3,m4,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>,x4;
+<a name="line345">345: </a>  MatScalar      *ba   = b-&gt;a,*aa = a-&gt;a;
+<a name="line346">346: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      shift = info-&gt;shiftamount;
+<a name="line347">347: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      allowzeropivot,zeropivotdetected;
+
+<a name="line350">350: </a>  allowzeropivot = <a href="../../../../../docs/manualpages/Sys/PetscNot.html#PetscNot">PetscNot</a>(A-&gt;erroriffailure);
+<a name="line351">351: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(4*(n+1),&amp;rtmp);
+<a name="line352">352: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line353">353: </a>    nz    = bi[i+1] - bi[i];
+<a name="line354">354: </a>    ajtmp = bj + bi[i];
+<a name="line355">355: </a>    <font color="#4169E1">for</font>  (j=0; j&lt;nz; j++) {
+<a name="line356">356: </a>      x    = rtmp+4*ajtmp[j];
+<a name="line357">357: </a>      x[0] = x[1]  = x[2]  = x[3]  = 0.0;
+<a name="line358">358: </a>    }
+<a name="line359">359: </a>    <font color="#B22222">/* load in initial (unfactored row) */</font>
+<a name="line360">360: </a>    nz       = ai[i+1] - ai[i];
+<a name="line361">361: </a>    ajtmpold = aj + ai[i];
+<a name="line362">362: </a>    v        = aa + 4*ai[i];
+<a name="line363">363: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line364">364: </a>      x    = rtmp+4*ajtmpold[j];
+<a name="line365">365: </a>      x[0] = v[0];  x[1]  = v[1];  x[2]  = v[2];  x[3]  = v[3];
+<a name="line366">366: </a>      v   += 4;
+<a name="line367">367: </a>    }
+<a name="line368">368: </a>    row = *ajtmp++;
+<a name="line369">369: </a>    <font color="#4169E1">while</font> (row &lt; i) {
+<a name="line370">370: </a>      pc = rtmp + 4*row;
+<a name="line371">371: </a>      p1 = pc[0];  p2  = pc[1];  p3  = pc[2];  p4  = pc[3];
+<a name="line372">372: </a>      <font color="#4169E1">if</font> (p1 != (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0 || p2 != (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0 || p3 != (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0 || p4 != (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line373">373: </a>        pv    = ba + 4*diag_offset[row];
+<a name="line374">374: </a>        pj    = bj + diag_offset[row] + 1;
+<a name="line375">375: </a>        <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>    = pv[0];  <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>  = pv[1];  <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>  = pv[2];  x4  = pv[3];
+<a name="line376">376: </a>        pc[0] = m1 = p1*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + p3*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>;
+<a name="line377">377: </a>        pc[1] = m2 = p2*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + p4*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>;
+<a name="line378">378: </a>        pc[2] = m3 = p1*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> + p3*x4;
+<a name="line379">379: </a>        pc[3] = m4 = p2*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> + p4*x4;
+<a name="line380">380: </a>        nz    = bi[row+1] - diag_offset[row] - 1;
+<a name="line381">381: </a>        pv   += 4;
+<a name="line382">382: </a>        <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line383">383: </a>          <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>    = pv[0];  <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>  = pv[1];   <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> = pv[2];  x4  = pv[3];
+<a name="line384">384: </a>          x     = rtmp + 4*pj[j];
+<a name="line385">385: </a>          x[0] -= m1*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + m3*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>;
+<a name="line386">386: </a>          x[1] -= m2*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + m4*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>;
+<a name="line387">387: </a>          x[2] -= m1*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> + m3*x4;
+<a name="line388">388: </a>          x[3] -= m2*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a> + m4*x4;
+<a name="line389">389: </a>          pv   += 4;
+<a name="line390">390: </a>        }
+<a name="line391">391: </a>        <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(16.0*nz+12.0);
+<a name="line392">392: </a>      }
+<a name="line393">393: </a>      row = *ajtmp++;
+<a name="line394">394: </a>    }
+<a name="line395">395: </a>    <font color="#B22222">/* finished row so stick it into b-&gt;a */</font>
+<a name="line396">396: </a>    pv = ba + 4*bi[i];
+<a name="line397">397: </a>    pj = bj + bi[i];
+<a name="line398">398: </a>    nz = bi[i+1] - bi[i];
+<a name="line399">399: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line400">400: </a>      x     = rtmp+4*pj[j];
+<a name="line401">401: </a>      pv[0] = x[0];  pv[1]  = x[1];  pv[2]  = x[2];  pv[3]  = x[3];
+<a name="line402">402: </a>      <font color="#B22222">/*</font>
+<a name="line403">403: </a><font color="#B22222">      printf(" col %d:",pj[j]);</font>
+<a name="line404">404: </a><font color="#B22222">      <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> j1;</font>
+<a name="line405">405: </a><font color="#B22222">      for (j1=0; j1&lt;4; j1++) printf(" %g,",*(pv+j1));</font>
+<a name="line406">406: </a><font color="#B22222">      printf("\n");</font>
+<a name="line407">407: </a><font color="#B22222">      */</font>
+<a name="line408">408: </a>      pv += 4;
+<a name="line409">409: </a>    }
+<a name="line410">410: </a>    <font color="#B22222">/* invert diagonal block */</font>
+<a name="line411">411: </a>    w = ba + 4*diag_offset[i];
+<a name="line412">412: </a>    PetscKernel_A_gets_inverse_A_2(w,shift, allowzeropivot,&amp;zeropivotdetected);
+<a name="line413">413: </a>    <font color="#4169E1">if</font> (zeropivotdetected) C-&gt;factorerrortype = MAT_FACTOR_NUMERIC_ZEROPIVOT;
+<a name="line414">414: </a>  }
+
+<a name="line416">416: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rtmp);
+
+<a name="line418">418: </a>  C-&gt;ops-&gt;solve          = MatSolve_SeqBAIJ_2_NaturalOrdering_inplace;
+<a name="line419">419: </a>  C-&gt;ops-&gt;solvetranspose = MatSolveTranspose_SeqBAIJ_2_NaturalOrdering_inplace;
+<a name="line420">420: </a>  C-&gt;assembled           = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line422">422: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(1.333333333333*8*b-&gt;mbs); <font color="#B22222">/* from inverting diagonal blocks */</font>
+<a name="line423">423: </a>  <font color="#4169E1">return</font>(0);
+<a name="line424">424: </a>}
+
+<a name="line426">426: </a><font color="#B22222">/* ----------------------------------------------------------- */</font>
+<a name="line427">427: </a><font color="#B22222">/*</font>
+<a name="line428">428: </a><font color="#B22222">     Version for when blocks are 1 by 1.</font>
+<a name="line429">429: </a><font color="#B22222">*/</font>
+<a name="line430">430: </a><strong><font color="#4169E1"><a name="MatLUFactorNumeric_SeqBAIJ_1"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatLUFactorNumeric_SeqBAIJ_1(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line431">431: </a>{
+<a name="line432">432: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>             C     =B;
+<a name="line433">433: </a>  Mat_SeqBAIJ     *a    =(Mat_SeqBAIJ*)A-&gt;data,*b=(Mat_SeqBAIJ*)C-&gt;data;
+<a name="line434">434: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>              isrow = b-&gt;row,isicol = b-&gt;icol;
+<a name="line435">435: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line436">436: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  *r,*ic,*ics;
+<a name="line437">437: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  n=a-&gt;mbs,*ai=a-&gt;i,*aj=a-&gt;j,*bi=b-&gt;i,*bj=b-&gt;j,*bdiag=b-&gt;diag;
+<a name="line438">438: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        i,j,k,nz,nzL,row,*pj;
+<a name="line439">439: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  *ajtmp,*bjtmp;
+<a name="line440">440: </a>  MatScalar       *rtmp,*pc,multiplier,*pv;
+<a name="line441">441: </a>  const MatScalar *aa=a-&gt;a,*v;
+<a name="line442">442: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       row_identity,col_identity;
+<a name="line443">443: </a>  FactorShiftCtx  sctx;
+<a name="line444">444: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  *ddiag;
+<a name="line445">445: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>       rs;
+<a name="line446">446: </a>  MatScalar       d;
+
+<a name="line449">449: </a>  <font color="#B22222">/* MatPivotSetUp(): initialize shift context sctx */</font>
+<a name="line450">450: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMemzero.html#PetscMemzero">PetscMemzero</a>(&amp;sctx,<font color="#4169E1">sizeof</font>(FactorShiftCtx));
+
+<a name="line452">452: </a>  <font color="#4169E1">if</font> (info-&gt;shifttype == (<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>) MAT_SHIFT_POSITIVE_DEFINITE) { <font color="#B22222">/* set sctx.shift_top=max{rs} */</font>
+<a name="line453">453: </a>    ddiag          = a-&gt;diag;
+<a name="line454">454: </a>    sctx.shift_top = info-&gt;zeropivot;
+<a name="line455">455: </a>    <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line456">456: </a>      <font color="#B22222">/* calculate sum(|aij|)-RealPart(aii), amt of shift needed for this row */</font>
+<a name="line457">457: </a>      d  = (aa)[ddiag[i]];
+<a name="line458">458: </a>      rs = -PetscAbsScalar(d) - <a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d);
+<a name="line459">459: </a>      v  = aa+ai[i];
+<a name="line460">460: </a>      nz = ai[i+1] - ai[i];
+<a name="line461">461: </a>      <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) rs += PetscAbsScalar(v[j]);
+<a name="line462">462: </a>      <font color="#4169E1">if</font> (rs&gt;sctx.shift_top) sctx.shift_top = rs;
+<a name="line463">463: </a>    }
+<a name="line464">464: </a>    sctx.shift_top *= 1.1;
+<a name="line465">465: </a>    sctx.nshift_max = 5;
+<a name="line466">466: </a>    sctx.shift_lo   = 0.;
+<a name="line467">467: </a>    sctx.shift_hi   = 1.;
+<a name="line468">468: </a>  }
+
+<a name="line470">470: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isrow,&amp;r);
+<a name="line471">471: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isicol,&amp;ic);
+<a name="line472">472: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n+1,&amp;rtmp);
+<a name="line473">473: </a>  ics  = ic;
+
+<a name="line475">475: </a>  <font color="#4169E1">do</font> {
+<a name="line476">476: </a>    sctx.newshift = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line477">477: </a>    <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line478">478: </a>      <font color="#B22222">/* zero rtmp */</font>
+<a name="line479">479: </a>      <font color="#B22222">/* L part */</font>
+<a name="line480">480: </a>      nz    = bi[i+1] - bi[i];
+<a name="line481">481: </a>      bjtmp = bj + bi[i];
+<a name="line482">482: </a>      <font color="#4169E1">for</font>  (j=0; j&lt;nz; j++) rtmp[bjtmp[j]] = 0.0;
+
+<a name="line484">484: </a>      <font color="#B22222">/* U part */</font>
+<a name="line485">485: </a>      nz    = bdiag[i]-bdiag[i+1];
+<a name="line486">486: </a>      bjtmp = bj + bdiag[i+1]+1;
+<a name="line487">487: </a>      <font color="#4169E1">for</font>  (j=0; j&lt;nz; j++) rtmp[bjtmp[j]] = 0.0;
+
+<a name="line489">489: </a>      <font color="#B22222">/* load in initial (unfactored row) */</font>
+<a name="line490">490: </a>      nz    = ai[r[i]+1] - ai[r[i]];
+<a name="line491">491: </a>      ajtmp = aj + ai[r[i]];
+<a name="line492">492: </a>      v     = aa + ai[r[i]];
+<a name="line493">493: </a>      <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) rtmp[ics[ajtmp[j]]] = v[j];
+
+<a name="line495">495: </a>      <font color="#B22222">/* ZeropivotApply() */</font>
+<a name="line496">496: </a>      rtmp[i] += sctx.shift_amount;  <font color="#B22222">/* shift the diagonal of the matrix */</font>
+
+<a name="line498">498: </a>      <font color="#B22222">/* elimination */</font>
+<a name="line499">499: </a>      bjtmp = bj + bi[i];
+<a name="line500">500: </a>      row   = *bjtmp++;
+<a name="line501">501: </a>      nzL   = bi[i+1] - bi[i];
+<a name="line502">502: </a>      <font color="#4169E1">for</font> (k=0; k &lt; nzL; k++) {
+<a name="line503">503: </a>        pc = rtmp + row;
+<a name="line504">504: </a>        <font color="#4169E1">if</font> (*pc != (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)0.0) {
+<a name="line505">505: </a>          pv         = b-&gt;a + bdiag[row];
+<a name="line506">506: </a>          multiplier = *pc * (*pv);
+<a name="line507">507: </a>          *pc        = multiplier;
+
+<a name="line509">509: </a>          pj = b-&gt;j + bdiag[row+1]+1; <font color="#B22222">/* beginning of U(row,:) */</font>
+<a name="line510">510: </a>          pv = b-&gt;a + bdiag[row+1]+1;
+<a name="line511">511: </a>          nz = bdiag[row]-bdiag[row+1]-1; <font color="#B22222">/* num of entries in U(row,:) excluding diag */</font>
+<a name="line512">512: </a>          <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) rtmp[pj[j]] -= multiplier * pv[j];
+<a name="line513">513: </a>          <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(2.0*nz);
+<a name="line514">514: </a>        }
+<a name="line515">515: </a>        row = *bjtmp++;
+<a name="line516">516: </a>      }
+
+<a name="line518">518: </a>      <font color="#B22222">/* finished row so stick it into b-&gt;a */</font>
+<a name="line519">519: </a>      rs = 0.0;
+<a name="line520">520: </a>      <font color="#B22222">/* L part */</font>
+<a name="line521">521: </a>      pv = b-&gt;a + bi[i];
+<a name="line522">522: </a>      pj = b-&gt;j + bi[i];
+<a name="line523">523: </a>      nz = bi[i+1] - bi[i];
+<a name="line524">524: </a>      <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line525">525: </a>        pv[j] = rtmp[pj[j]]; rs += PetscAbsScalar(pv[j]);
+<a name="line526">526: </a>      }
+
+<a name="line528">528: </a>      <font color="#B22222">/* U part */</font>
+<a name="line529">529: </a>      pv = b-&gt;a + bdiag[i+1]+1;
+<a name="line530">530: </a>      pj = b-&gt;j + bdiag[i+1]+1;
+<a name="line531">531: </a>      nz = bdiag[i] - bdiag[i+1]-1;
+<a name="line532">532: </a>      <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line533">533: </a>        pv[j] = rtmp[pj[j]]; rs += PetscAbsScalar(pv[j]);
+<a name="line534">534: </a>      }
+
+<a name="line536">536: </a>      sctx.rs = rs;
+<a name="line537">537: </a>      sctx.pv = rtmp[i];
+<a name="line538">538: </a>      MatPivotCheck(B,A,info,&amp;sctx,i);
+<a name="line539">539: </a>      <font color="#4169E1">if</font> (sctx.newshift) <font color="#4169E1">break</font>; <font color="#B22222">/* break for-loop */</font>
+<a name="line540">540: </a>      rtmp[i] = sctx.pv; <font color="#B22222">/* sctx.pv might be updated in the case of MAT_SHIFT_INBLOCKS */</font>
+
+<a name="line542">542: </a>      <font color="#B22222">/* Mark diagonal and invert diagonal for simplier triangular solves */</font>
+<a name="line543">543: </a>      pv  = b-&gt;a + bdiag[i];
+<a name="line544">544: </a>      *pv = (<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)1.0/rtmp[i];
+
+<a name="line546">546: </a>    } <font color="#B22222">/* endof for (i=0; i&lt;n; i++) { */</font>
+
+<a name="line548">548: </a>    <font color="#B22222">/* MatPivotRefine() */</font>
+<a name="line549">549: </a>    <font color="#4169E1">if</font> (info-&gt;shifttype == (<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)MAT_SHIFT_POSITIVE_DEFINITE &amp;&amp; !sctx.newshift &amp;&amp; sctx.shift_fraction&gt;0 &amp;&amp; sctx.nshift&lt;sctx.nshift_max) {
+<a name="line550">550: </a>      <font color="#B22222">/*</font>
+<a name="line551">551: </a><font color="#B22222">       * if no shift in this attempt &amp; shifting &amp; started shifting &amp; can refine,</font>
+<a name="line552">552: </a><font color="#B22222">       * then try lower shift</font>
+<a name="line553">553: </a><font color="#B22222">       */</font>
+<a name="line554">554: </a>      sctx.shift_hi       = sctx.shift_fraction;
+<a name="line555">555: </a>      sctx.shift_fraction = (sctx.shift_hi+sctx.shift_lo)/2.;
+<a name="line556">556: </a>      sctx.shift_amount   = sctx.shift_fraction * sctx.shift_top;
+<a name="line557">557: </a>      sctx.newshift       = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line558">558: </a>      sctx.nshift++;
+<a name="line559">559: </a>    }
+<a name="line560">560: </a>  } <font color="#4169E1">while</font> (sctx.newshift);
+
+<a name="line562">562: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rtmp);
+<a name="line563">563: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isicol,&amp;ic);
+<a name="line564">564: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isrow,&amp;r);
+
+<a name="line566">566: </a>  <a href="../../../../../docs/manualpages/IS/ISIdentity.html#ISIdentity">ISIdentity</a>(isrow,&amp;row_identity);
+<a name="line567">567: </a>  <a href="../../../../../docs/manualpages/IS/ISIdentity.html#ISIdentity">ISIdentity</a>(isicol,&amp;col_identity);
+<a name="line568">568: </a>  <font color="#4169E1">if</font> (row_identity &amp;&amp; col_identity) {
+<a name="line569">569: </a>    C-&gt;ops-&gt;solve          = MatSolve_SeqBAIJ_1_NaturalOrdering;
+<a name="line570">570: </a>    C-&gt;ops-&gt;forwardsolve   = MatForwardSolve_SeqBAIJ_1_NaturalOrdering;
+<a name="line571">571: </a>    C-&gt;ops-&gt;backwardsolve  = MatBackwardSolve_SeqBAIJ_1_NaturalOrdering;
+<a name="line572">572: </a>    C-&gt;ops-&gt;solvetranspose = MatSolveTranspose_SeqBAIJ_1_NaturalOrdering;
+<a name="line573">573: </a>  } <font color="#4169E1">else</font> {
+<a name="line574">574: </a>    C-&gt;ops-&gt;solve          = MatSolve_SeqBAIJ_1;
+<a name="line575">575: </a>    C-&gt;ops-&gt;solvetranspose = MatSolveTranspose_SeqBAIJ_1;
+<a name="line576">576: </a>  }
+<a name="line577">577: </a>  C-&gt;assembled = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line578">578: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(C-&gt;cmap-&gt;n);
+
+<a name="line580">580: </a>  <font color="#B22222">/* MatShiftView(A,info,&amp;sctx) */</font>
+<a name="line581">581: </a>  <font color="#4169E1">if</font> (sctx.nshift) {
+<a name="line582">582: </a>    <font color="#4169E1">if</font> (info-&gt;shifttype == (<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)MAT_SHIFT_POSITIVE_DEFINITE) {
+<a name="line583">583: </a>      PetscInfo4(A,<font color="#666666">"number of shift_pd tries %D, shift_amount %g, diagonal shifted up by %e fraction top_value %e\n"</font>,sctx.nshift,(double)sctx.shift_amount,(double)sctx.shift_fraction,(double)sctx.shift_top);
+<a name="line584">584: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (info-&gt;shifttype == (<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)MAT_SHIFT_NONZERO) {
+<a name="line585">585: </a>      PetscInfo2(A,<font color="#666666">"number of shift_nz tries %D, shift_amount %g\n"</font>,sctx.nshift,(double)sctx.shift_amount);
+<a name="line586">586: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (info-&gt;shifttype == (<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)MAT_SHIFT_INBLOCKS) {
+<a name="line587">587: </a>      PetscInfo2(A,<font color="#666666">"number of shift_inblocks applied %D, each shift_amount %g\n"</font>,sctx.nshift,(double)info-&gt;shiftamount);
+<a name="line588">588: </a>    }
+<a name="line589">589: </a>  }
+<a name="line590">590: </a>  <font color="#4169E1">return</font>(0);
+<a name="line591">591: </a>}
+
+<a name="line593">593: </a><strong><font color="#4169E1"><a name="MatLUFactorNumeric_SeqBAIJ_1_inplace"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatLUFactorNumeric_SeqBAIJ_1_inplace(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> C,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line594">594: </a>{
+<a name="line595">595: </a>  Mat_SeqBAIJ    *a    = (Mat_SeqBAIJ*)A-&gt;data,*b = (Mat_SeqBAIJ*)C-&gt;data;
+<a name="line596">596: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>             isrow = b-&gt;row,isicol = b-&gt;icol;
+<a name="line598">598: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *r,*ic;
+<a name="line599">599: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,n = a-&gt;mbs,*bi = b-&gt;i,*bj = b-&gt;j;
+<a name="line600">600: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *ajtmpold,*ajtmp,nz,row,*ai = a-&gt;i,*aj = a-&gt;j;
+<a name="line601">601: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *diag_offset = b-&gt;diag,diag,*pj;
+<a name="line602">602: </a>  MatScalar      *pv,*v,*rtmp,multiplier,*pc;
+<a name="line603">603: </a>  MatScalar      *ba = b-&gt;a,*aa = a-&gt;a;
+<a name="line604">604: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      row_identity, col_identity;
+
+<a name="line607">607: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isrow,&amp;r);
+<a name="line608">608: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isicol,&amp;ic);
+<a name="line609">609: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n+1,&amp;rtmp);
+
+<a name="line611">611: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line612">612: </a>    nz    = bi[i+1] - bi[i];
+<a name="line613">613: </a>    ajtmp = bj + bi[i];
+<a name="line614">614: </a>    <font color="#4169E1">for</font>  (j=0; j&lt;nz; j++) rtmp[ajtmp[j]] = 0.0;
+
+<a name="line616">616: </a>    <font color="#B22222">/* load in initial (unfactored row) */</font>
+<a name="line617">617: </a>    nz       = ai[r[i]+1] - ai[r[i]];
+<a name="line618">618: </a>    ajtmpold = aj + ai[r[i]];
+<a name="line619">619: </a>    v        = aa + ai[r[i]];
+<a name="line620">620: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) rtmp[ic[ajtmpold[j]]] =  v[j];
+
+<a name="line622">622: </a>    row = *ajtmp++;
+<a name="line623">623: </a>    <font color="#4169E1">while</font> (row &lt; i) {
+<a name="line624">624: </a>      pc = rtmp + row;
+<a name="line625">625: </a>      <font color="#4169E1">if</font> (*pc != 0.0) {
+<a name="line626">626: </a>        pv         = ba + diag_offset[row];
+<a name="line627">627: </a>        pj         = bj + diag_offset[row] + 1;
+<a name="line628">628: </a>        multiplier = *pc * *pv++;
+<a name="line629">629: </a>        *pc        = multiplier;
+<a name="line630">630: </a>        nz         = bi[row+1] - diag_offset[row] - 1;
+<a name="line631">631: </a>        <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) rtmp[pj[j]] -= multiplier * pv[j];
+<a name="line632">632: </a>        <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(1.0+2.0*nz);
+<a name="line633">633: </a>      }
+<a name="line634">634: </a>      row = *ajtmp++;
+<a name="line635">635: </a>    }
+<a name="line636">636: </a>    <font color="#B22222">/* finished row so stick it into b-&gt;a */</font>
+<a name="line637">637: </a>    pv = ba + bi[i];
+<a name="line638">638: </a>    pj = bj + bi[i];
+<a name="line639">639: </a>    nz = bi[i+1] - bi[i];
+<a name="line640">640: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) pv[j] = rtmp[pj[j]];
+<a name="line641">641: </a>    diag = diag_offset[i] - bi[i];
+<a name="line642">642: </a>    <font color="#B22222">/* check pivot entry for current row */</font>
+<a name="line643">643: </a>    <font color="#4169E1">if</font> (pv[diag] == 0.0) <a href="../../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MAT_LU_ZRPVT,<font color="#666666">"Zero pivot: row in original ordering %D in permuted ordering %D"</font>,r[i],i);
+<a name="line644">644: </a>    pv[diag] = 1.0/pv[diag];
+<a name="line645">645: </a>  }
+
+<a name="line647">647: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rtmp);
+<a name="line648">648: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isicol,&amp;ic);
+<a name="line649">649: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isrow,&amp;r);
+<a name="line650">650: </a>  <a href="../../../../../docs/manualpages/IS/ISIdentity.html#ISIdentity">ISIdentity</a>(isrow,&amp;row_identity);
+<a name="line651">651: </a>  <a href="../../../../../docs/manualpages/IS/ISIdentity.html#ISIdentity">ISIdentity</a>(isicol,&amp;col_identity);
+<a name="line652">652: </a>  <font color="#4169E1">if</font> (row_identity &amp;&amp; col_identity) {
+<a name="line653">653: </a>    C-&gt;ops-&gt;solve          = MatSolve_SeqBAIJ_1_NaturalOrdering_inplace;
+<a name="line654">654: </a>    C-&gt;ops-&gt;solvetranspose = MatSolveTranspose_SeqBAIJ_1_NaturalOrdering_inplace;
+<a name="line655">655: </a>  } <font color="#4169E1">else</font> {
+<a name="line656">656: </a>    C-&gt;ops-&gt;solve          = MatSolve_SeqBAIJ_1_inplace;
+<a name="line657">657: </a>    C-&gt;ops-&gt;solvetranspose = MatSolveTranspose_SeqBAIJ_1_inplace;
+<a name="line658">658: </a>  }
+<a name="line659">659: </a>  C-&gt;assembled = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line660">660: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(C-&gt;cmap-&gt;n);
+<a name="line661">661: </a>  <font color="#4169E1">return</font>(0);
+<a name="line662">662: </a>}
+
+<a name="line664">664: </a><strong><font color="#4169E1"><a name="MatGetFactor_seqbaij_petsc"></a>PETSC_INTERN <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatGetFactor_seqbaij_petsc(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MatFactorType</a> ftype,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *B)</font></strong>
+<a name="line665">665: </a>{
+<a name="line666">666: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       n = A-&gt;rmap-&gt;n;
+
+<a name="line670">670: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line671">671: </a>  <font color="#4169E1">if</font> (A-&gt;hermitian &amp;&amp; (ftype == <a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_CHOLESKY</a> || ftype == <a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_ICC</a>)) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Hermitian Factor is not supported"</font>);
+<a name="line672">672: </a><font color="#A020F0">#endif</font>
+<a name="line673">673: </a>  <a href="../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),B);
+<a name="line674">674: </a>  <a href="../../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(*B,n,n,n,n);
+<a name="line675">675: </a>  <font color="#4169E1">if</font> (ftype == <a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_LU</a> || ftype == <a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_ILU</a> || ftype == <a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_ILUDT</a>) {
+<a name="line676">676: </a>    <a href="../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(*B,<a href="../../../../../docs/manualpages/Mat/MATSEQBAIJ.html#MATSEQBAIJ">MATSEQBAIJ</a>);
+
+<a name="line678">678: </a>    (*B)-&gt;ops-&gt;lufactorsymbolic  = MatLUFactorSymbolic_SeqBAIJ;
+<a name="line679">679: </a>    (*B)-&gt;ops-&gt;ilufactorsymbolic = MatILUFactorSymbolic_SeqBAIJ;
+<a name="line680">680: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (ftype == <a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_CHOLESKY</a> || ftype == <a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_ICC</a>) {
+<a name="line681">681: </a>    <a href="../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(*B,<a href="../../../../../docs/manualpages/Mat/MATSEQSBAIJ.html#MATSEQSBAIJ">MATSEQSBAIJ</a>);
+<a name="line682">682: </a>    <a href="../../../../../docs/manualpages/Mat/MatSeqSBAIJSetPreallocation.html#MatSeqSBAIJSetPreallocation">MatSeqSBAIJSetPreallocation</a>(*B,A-&gt;rmap-&gt;bs,MAT_SKIP_ALLOCATION,NULL);
+
+<a name="line684">684: </a>    (*B)-&gt;ops-&gt;iccfactorsymbolic      = MatICCFactorSymbolic_SeqBAIJ;
+<a name="line685">685: </a>    (*B)-&gt;ops-&gt;choleskyfactorsymbolic = MatCholeskyFactorSymbolic_SeqBAIJ;
+<a name="line686">686: </a>  } <font color="#4169E1">else</font> <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Factor type not supported"</font>);
+<a name="line687">687: </a>  (*B)-&gt;factortype = ftype;
+
+<a name="line689">689: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>((*B)-&gt;solvertype);
+<a name="line690">690: </a>  <a href="../../../../../docs/manualpages/Sys/PetscStrallocpy.html#PetscStrallocpy">PetscStrallocpy</a>(MATSOLVERPETSC,&amp;(*B)-&gt;solvertype);
+<a name="line691">691: </a>  <font color="#4169E1">return</font>(0);
+<a name="line692">692: </a>}
+
+<a name="line694">694: </a><font color="#B22222">/* ----------------------------------------------------------- */</font>
+<a name="line695">695: </a><strong><font color="#4169E1"><a name="MatLUFactor_SeqBAIJ"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatLUFactor_SeqBAIJ(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a> row,<a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a> col,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line696">696: </a>{
+<a name="line698">698: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            C;
+
+<a name="line701">701: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetFactor.html#MatGetFactor">MatGetFactor</a>(A,MATSOLVERPETSC,<a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_LU</a>,&amp;C);
+<a name="line702">702: </a>  <a href="../../../../../docs/manualpages/Mat/MatLUFactorSymbolic.html#MatLUFactorSymbolic">MatLUFactorSymbolic</a>(C,A,row,col,info);
+<a name="line703">703: </a>  <a href="../../../../../docs/manualpages/Mat/MatLUFactorNumeric.html#MatLUFactorNumeric">MatLUFactorNumeric</a>(C,A,info);
+
+<a name="line705">705: </a>  A-&gt;ops-&gt;solve          = C-&gt;ops-&gt;solve;
+<a name="line706">706: </a>  A-&gt;ops-&gt;solvetranspose = C-&gt;ops-&gt;solvetranspose;
+
+<a name="line708">708: </a>  MatHeaderMerge(A,&amp;C);
+<a name="line709">709: </a>  PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)((Mat_SeqBAIJ*)(A-&gt;data))-&gt;icol);
+<a name="line710">710: </a>  <font color="#4169E1">return</font>(0);
+<a name="line711">711: </a>}
+
+<a name="line713">713: </a> #include <A href="../../../../../include/../src/mat/impls/sbaij/seq/sbaij.h.html">&lt;../src/mat/impls/sbaij/seq/sbaij.h&gt;</A>
+<a name="line714">714: </a><strong><font color="#4169E1"><a name="MatCholeskyFactorNumeric_SeqBAIJ_N"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatCholeskyFactorNumeric_SeqBAIJ_N(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> C,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line715">715: </a>{
+<a name="line717">717: </a>  Mat_SeqBAIJ    *a=(Mat_SeqBAIJ*)A-&gt;data;
+<a name="line718">718: </a>  Mat_SeqSBAIJ   *b=(Mat_SeqSBAIJ*)C-&gt;data;
+<a name="line719">719: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>             ip=b-&gt;row;
+<a name="line720">720: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *rip;
+<a name="line721">721: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,mbs=a-&gt;mbs,bs=A-&gt;rmap-&gt;bs,*bi=b-&gt;i,*bj=b-&gt;j,*bcol;
+<a name="line722">722: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *ai=a-&gt;i,*aj=a-&gt;j;
+<a name="line723">723: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       k,jmin,jmax,*jl,*il,col,nexti,ili,nz;
+<a name="line724">724: </a>  MatScalar      *rtmp,*ba=b-&gt;a,*bval,*aa=a-&gt;a,dk,uikdi;
+<a name="line725">725: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      rs;
+<a name="line726">726: </a>  FactorShiftCtx sctx;
+
+<a name="line729">729: </a>  <font color="#4169E1">if</font> (bs &gt; 1) { <font color="#B22222">/* convert A to a SBAIJ matrix and apply Cholesky factorization from it */</font>
+<a name="line730">730: </a>    <font color="#4169E1">if</font> (!a-&gt;sbaijMat) {
+<a name="line731">731: </a>      <a href="../../../../../docs/manualpages/Mat/MatConvert.html#MatConvert">MatConvert</a>(A,<a href="../../../../../docs/manualpages/Mat/MATSEQSBAIJ.html#MATSEQSBAIJ">MATSEQSBAIJ</a>,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;a-&gt;sbaijMat);
+<a name="line732">732: </a>    }
+<a name="line733">733: </a>    (a-&gt;sbaijMat)-&gt;ops-&gt;choleskyfactornumeric(C,a-&gt;sbaijMat,info);
+<a name="line734">734: </a>    <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;a-&gt;sbaijMat);
+<a name="line735">735: </a>    <font color="#4169E1">return</font>(0);
+<a name="line736">736: </a>  }
+
+<a name="line738">738: </a>  <font color="#B22222">/* MatPivotSetUp(): initialize shift context sctx */</font>
+<a name="line739">739: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMemzero.html#PetscMemzero">PetscMemzero</a>(&amp;sctx,<font color="#4169E1">sizeof</font>(FactorShiftCtx));
+
+<a name="line741">741: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(ip,&amp;rip);
+<a name="line742">742: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc3.html#PetscMalloc3">PetscMalloc3</a>(mbs,&amp;rtmp,mbs,&amp;il,mbs,&amp;jl);
+
+<a name="line744">744: </a>  sctx.shift_amount = 0.;
+<a name="line745">745: </a>  sctx.nshift       = 0;
+<a name="line746">746: </a>  <font color="#4169E1">do</font> {
+<a name="line747">747: </a>    sctx.newshift = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line748">748: </a>    <font color="#4169E1">for</font> (i=0; i&lt;mbs; i++) {
+<a name="line749">749: </a>      rtmp[i] = 0.0; jl[i] = mbs; il[0] = 0;
+<a name="line750">750: </a>    }
+
+<a name="line752">752: </a>    <font color="#4169E1">for</font> (k = 0; k&lt;mbs; k++) {
+<a name="line753">753: </a>      bval = ba + bi[k];
+<a name="line754">754: </a>      <font color="#B22222">/* initialize k-th row by the perm[k]-th row of A */</font>
+<a name="line755">755: </a>      jmin = ai[rip[k]]; jmax = ai[rip[k]+1];
+<a name="line756">756: </a>      <font color="#4169E1">for</font> (j = jmin; j &lt; jmax; j++) {
+<a name="line757">757: </a>        col = rip[aj[j]];
+<a name="line758">758: </a>        <font color="#4169E1">if</font> (col &gt;= k) { <font color="#B22222">/* only take upper triangular entry */</font>
+<a name="line759">759: </a>          rtmp[col] = aa[j];
+<a name="line760">760: </a>          *bval++   = 0.0; <font color="#B22222">/* for in-place factorization */</font>
+<a name="line761">761: </a>        }
+<a name="line762">762: </a>      }
+
+<a name="line764">764: </a>      <font color="#B22222">/* shift the diagonal of the matrix */</font>
+<a name="line765">765: </a>      <font color="#4169E1">if</font> (sctx.nshift) rtmp[k] += sctx.shift_amount;
+
+<a name="line767">767: </a>      <font color="#B22222">/* modify k-th row by adding in those rows i with U(i,k)!=0 */</font>
+<a name="line768">768: </a>      dk = rtmp[k];
+<a name="line769">769: </a>      i  = jl[k]; <font color="#B22222">/* first row to be added to k_th row  */</font>
+
+<a name="line771">771: </a>      <font color="#4169E1">while</font> (i &lt; k) {
+<a name="line772">772: </a>        nexti = jl[i]; <font color="#B22222">/* next row to be added to k_th row */</font>
+
+<a name="line774">774: </a>        <font color="#B22222">/* compute multiplier, update diag(k) and U(i,k) */</font>
+<a name="line775">775: </a>        ili     = il[i]; <font color="#B22222">/* index of first nonzero element in U(i,k:bms-1) */</font>
+<a name="line776">776: </a>        uikdi   = -ba[ili]*ba[bi[i]]; <font color="#B22222">/* diagonal(k) */</font>
+<a name="line777">777: </a>        dk     += uikdi*ba[ili];
+<a name="line778">778: </a>        ba[ili] = uikdi; <font color="#B22222">/* -U(i,k) */</font>
+
+<a name="line780">780: </a>        <font color="#B22222">/* add multiple of row i to k-th row */</font>
+<a name="line781">781: </a>        jmin = ili + 1; jmax = bi[i+1];
+<a name="line782">782: </a>        <font color="#4169E1">if</font> (jmin &lt; jmax) {
+<a name="line783">783: </a>          <font color="#4169E1">for</font> (j=jmin; j&lt;jmax; j++) rtmp[bj[j]] += uikdi*ba[j];
+<a name="line784">784: </a>          <font color="#B22222">/* update il and jl for row i */</font>
+<a name="line785">785: </a>          il[i] = jmin;
+<a name="line786">786: </a>          j     = bj[jmin]; jl[i] = jl[j]; jl[j] = i;
+<a name="line787">787: </a>        }
+<a name="line788">788: </a>        i = nexti;
+<a name="line789">789: </a>      }
+
+<a name="line791">791: </a>      <font color="#B22222">/* shift the diagonals when zero pivot is detected */</font>
+<a name="line792">792: </a>      <font color="#B22222">/* compute rs=sum of abs(off-diagonal) */</font>
+<a name="line793">793: </a>      rs   = 0.0;
+<a name="line794">794: </a>      jmin = bi[k]+1;
+<a name="line795">795: </a>      nz   = bi[k+1] - jmin;
+<a name="line796">796: </a>      <font color="#4169E1">if</font> (nz) {
+<a name="line797">797: </a>        bcol = bj + jmin;
+<a name="line798">798: </a>        <font color="#4169E1">while</font> (nz--) {
+<a name="line799">799: </a>          rs += PetscAbsScalar(rtmp[*bcol]);
+<a name="line800">800: </a>          bcol++;
+<a name="line801">801: </a>        }
+<a name="line802">802: </a>      }
+
+<a name="line804">804: </a>      sctx.rs = rs;
+<a name="line805">805: </a>      sctx.pv = dk;
+<a name="line806">806: </a>      MatPivotCheck(C,A,info,&amp;sctx,k);
+<a name="line807">807: </a>      <font color="#4169E1">if</font> (sctx.newshift) <font color="#4169E1">break</font>;
+<a name="line808">808: </a>      dk = sctx.pv;
+
+<a name="line810">810: </a>      <font color="#B22222">/* copy data into U(k,:) */</font>
+<a name="line811">811: </a>      ba[bi[k]] = 1.0/dk; <font color="#B22222">/* U(k,k) */</font>
+<a name="line812">812: </a>      jmin      = bi[k]+1; jmax = bi[k+1];
+<a name="line813">813: </a>      <font color="#4169E1">if</font> (jmin &lt; jmax) {
+<a name="line814">814: </a>        <font color="#4169E1">for</font> (j=jmin; j&lt;jmax; j++) {
+<a name="line815">815: </a>          col = bj[j]; ba[j] = rtmp[col]; rtmp[col] = 0.0;
+<a name="line816">816: </a>        }
+<a name="line817">817: </a>        <font color="#B22222">/* add the k-th row into il and jl */</font>
+<a name="line818">818: </a>        il[k] = jmin;
+<a name="line819">819: </a>        i     = bj[jmin]; jl[k] = jl[i]; jl[i] = k;
+<a name="line820">820: </a>      }
+<a name="line821">821: </a>    }
+<a name="line822">822: </a>  } <font color="#4169E1">while</font> (sctx.newshift);
+<a name="line823">823: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(rtmp,il,jl);
+
+<a name="line825">825: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(ip,&amp;rip);
+
+<a name="line827">827: </a>  C-&gt;assembled    = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line828">828: </a>  C-&gt;preallocated = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line830">830: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(C-&gt;rmap-&gt;N);
+<a name="line831">831: </a>  <font color="#4169E1">if</font> (sctx.nshift) {
+<a name="line832">832: </a>    <font color="#4169E1">if</font> (info-&gt;shifttype == (<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)MAT_SHIFT_POSITIVE_DEFINITE) {
+<a name="line833">833: </a>      PetscInfo2(A,<font color="#666666">"number of shiftpd tries %D, shift_amount %g\n"</font>,sctx.nshift,(double)sctx.shift_amount);
+<a name="line834">834: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (info-&gt;shifttype == (<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)MAT_SHIFT_NONZERO) {
+<a name="line835">835: </a>      PetscInfo2(A,<font color="#666666">"number of shiftnz tries %D, shift_amount %g\n"</font>,sctx.nshift,(double)sctx.shift_amount);
+<a name="line836">836: </a>    }
+<a name="line837">837: </a>  }
+<a name="line838">838: </a>  <font color="#4169E1">return</font>(0);
+<a name="line839">839: </a>}
+
+<a name="line841">841: </a><strong><font color="#4169E1"><a name="MatCholeskyFactorNumeric_SeqBAIJ_N_NaturalOrdering"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatCholeskyFactorNumeric_SeqBAIJ_N_NaturalOrdering(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> C,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line842">842: </a>{
+<a name="line843">843: </a>  Mat_SeqBAIJ    *a=(Mat_SeqBAIJ*)A-&gt;data;
+<a name="line844">844: </a>  Mat_SeqSBAIJ   *b=(Mat_SeqSBAIJ*)C-&gt;data;
+<a name="line846">846: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,am=a-&gt;mbs;
+<a name="line847">847: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *ai=a-&gt;i,*aj=a-&gt;j,*bi=b-&gt;i,*bj=b-&gt;j;
+<a name="line848">848: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       k,jmin,*jl,*il,nexti,ili,*acol,*bcol,nz;
+<a name="line849">849: </a>  MatScalar      *rtmp,*ba=b-&gt;a,*aa=a-&gt;a,dk,uikdi,*aval,*bval;
+<a name="line850">850: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      rs;
+<a name="line851">851: </a>  FactorShiftCtx sctx;
+
+<a name="line854">854: </a>  <font color="#B22222">/* MatPivotSetUp(): initialize shift context sctx */</font>
+<a name="line855">855: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMemzero.html#PetscMemzero">PetscMemzero</a>(&amp;sctx,<font color="#4169E1">sizeof</font>(FactorShiftCtx));
+
+<a name="line857">857: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc3.html#PetscMalloc3">PetscMalloc3</a>(am,&amp;rtmp,am,&amp;il,am,&amp;jl);
+
+<a name="line859">859: </a>  <font color="#4169E1">do</font> {
+<a name="line860">860: </a>    sctx.newshift = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line861">861: </a>    <font color="#4169E1">for</font> (i=0; i&lt;am; i++) {
+<a name="line862">862: </a>      rtmp[i] = 0.0; jl[i] = am; il[0] = 0;
+<a name="line863">863: </a>    }
+
+<a name="line865">865: </a>    <font color="#4169E1">for</font> (k = 0; k&lt;am; k++) {
+<a name="line866">866: </a>      <font color="#B22222">/* initialize k-th row with elements nonzero in row perm(k) of A */</font>
+<a name="line867">867: </a>      nz   = ai[k+1] - ai[k];
+<a name="line868">868: </a>      acol = aj + ai[k];
+<a name="line869">869: </a>      aval = aa + ai[k];
+<a name="line870">870: </a>      bval = ba + bi[k];
+<a name="line871">871: </a>      <font color="#4169E1">while</font> (nz--) {
+<a name="line872">872: </a>        <font color="#4169E1">if</font> (*acol &lt; k) { <font color="#B22222">/* skip lower triangular entries */</font>
+<a name="line873">873: </a>          acol++; aval++;
+<a name="line874">874: </a>        } <font color="#4169E1">else</font> {
+<a name="line875">875: </a>          rtmp[*acol++] = *aval++;
+<a name="line876">876: </a>          *bval++       = 0.0; <font color="#B22222">/* for in-place factorization */</font>
+<a name="line877">877: </a>        }
+<a name="line878">878: </a>      }
+
+<a name="line880">880: </a>      <font color="#B22222">/* shift the diagonal of the matrix */</font>
+<a name="line881">881: </a>      <font color="#4169E1">if</font> (sctx.nshift) rtmp[k] += sctx.shift_amount;
+
+<a name="line883">883: </a>      <font color="#B22222">/* modify k-th row by adding in those rows i with U(i,k)!=0 */</font>
+<a name="line884">884: </a>      dk = rtmp[k];
+<a name="line885">885: </a>      i  = jl[k]; <font color="#B22222">/* first row to be added to k_th row  */</font>
+
+<a name="line887">887: </a>      <font color="#4169E1">while</font> (i &lt; k) {
+<a name="line888">888: </a>        nexti = jl[i]; <font color="#B22222">/* next row to be added to k_th row */</font>
+<a name="line889">889: </a>        <font color="#B22222">/* compute multiplier, update D(k) and U(i,k) */</font>
+<a name="line890">890: </a>        ili     = il[i]; <font color="#B22222">/* index of first nonzero element in U(i,k:bms-1) */</font>
+<a name="line891">891: </a>        uikdi   = -ba[ili]*ba[bi[i]];
+<a name="line892">892: </a>        dk     += uikdi*ba[ili];
+<a name="line893">893: </a>        ba[ili] = uikdi; <font color="#B22222">/* -U(i,k) */</font>
+
+<a name="line895">895: </a>        <font color="#B22222">/* add multiple of row i to k-th row ... */</font>
+<a name="line896">896: </a>        jmin = ili + 1;
+<a name="line897">897: </a>        nz   = bi[i+1] - jmin;
+<a name="line898">898: </a>        <font color="#4169E1">if</font> (nz &gt; 0) {
+<a name="line899">899: </a>          bcol = bj + jmin;
+<a name="line900">900: </a>          bval = ba + jmin;
+<a name="line901">901: </a>          <font color="#4169E1">while</font> (nz--) rtmp[*bcol++] += uikdi*(*bval++);
+<a name="line902">902: </a>          <font color="#B22222">/* update il and jl for i-th row */</font>
+<a name="line903">903: </a>          il[i] = jmin;
+<a name="line904">904: </a>          j     = bj[jmin]; jl[i] = jl[j]; jl[j] = i;
+<a name="line905">905: </a>        }
+<a name="line906">906: </a>        i = nexti;
+<a name="line907">907: </a>      }
+
+<a name="line909">909: </a>      <font color="#B22222">/* shift the diagonals when zero pivot is detected */</font>
+<a name="line910">910: </a>      <font color="#B22222">/* compute rs=sum of abs(off-diagonal) */</font>
+<a name="line911">911: </a>      rs   = 0.0;
+<a name="line912">912: </a>      jmin = bi[k]+1;
+<a name="line913">913: </a>      nz   = bi[k+1] - jmin;
+<a name="line914">914: </a>      <font color="#4169E1">if</font> (nz) {
+<a name="line915">915: </a>        bcol = bj + jmin;
+<a name="line916">916: </a>        <font color="#4169E1">while</font> (nz--) {
+<a name="line917">917: </a>          rs += PetscAbsScalar(rtmp[*bcol]);
+<a name="line918">918: </a>          bcol++;
+<a name="line919">919: </a>        }
+<a name="line920">920: </a>      }
+
+<a name="line922">922: </a>      sctx.rs = rs;
+<a name="line923">923: </a>      sctx.pv = dk;
+<a name="line924">924: </a>      MatPivotCheck(C,A,info,&amp;sctx,k);
+<a name="line925">925: </a>      <font color="#4169E1">if</font> (sctx.newshift) <font color="#4169E1">break</font>;    <font color="#B22222">/* sctx.shift_amount is updated */</font>
+<a name="line926">926: </a>      dk = sctx.pv;
+
+<a name="line928">928: </a>      <font color="#B22222">/* copy data into U(k,:) */</font>
+<a name="line929">929: </a>      ba[bi[k]] = 1.0/dk;
+<a name="line930">930: </a>      jmin      = bi[k]+1;
+<a name="line931">931: </a>      nz        = bi[k+1] - jmin;
+<a name="line932">932: </a>      <font color="#4169E1">if</font> (nz) {
+<a name="line933">933: </a>        bcol = bj + jmin;
+<a name="line934">934: </a>        bval = ba + jmin;
+<a name="line935">935: </a>        <font color="#4169E1">while</font> (nz--) {
+<a name="line936">936: </a>          *bval++       = rtmp[*bcol];
+<a name="line937">937: </a>          rtmp[*bcol++] = 0.0;
+<a name="line938">938: </a>        }
+<a name="line939">939: </a>        <font color="#B22222">/* add k-th row into il and jl */</font>
+<a name="line940">940: </a>        il[k] = jmin;
+<a name="line941">941: </a>        i     = bj[jmin]; jl[k] = jl[i]; jl[i] = k;
+<a name="line942">942: </a>      }
+<a name="line943">943: </a>    }
+<a name="line944">944: </a>  } <font color="#4169E1">while</font> (sctx.newshift);
+<a name="line945">945: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(rtmp,il,jl);
+
+<a name="line947">947: </a>  C-&gt;ops-&gt;solve          = MatSolve_SeqSBAIJ_1_NaturalOrdering_inplace;
+<a name="line948">948: </a>  C-&gt;ops-&gt;solvetranspose = MatSolve_SeqSBAIJ_1_NaturalOrdering_inplace;
+<a name="line949">949: </a>  C-&gt;assembled           = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line950">950: </a>  C-&gt;preallocated        = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line952">952: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(C-&gt;rmap-&gt;N);
+<a name="line953">953: </a>  <font color="#4169E1">if</font> (sctx.nshift) {
+<a name="line954">954: </a>    <font color="#4169E1">if</font> (info-&gt;shifttype == (<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)MAT_SHIFT_NONZERO) {
+<a name="line955">955: </a>      PetscInfo2(A,<font color="#666666">"number of shiftnz tries %D, shift_amount %g\n"</font>,sctx.nshift,(double)sctx.shift_amount);
+<a name="line956">956: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (info-&gt;shifttype == (<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)MAT_SHIFT_POSITIVE_DEFINITE) {
+<a name="line957">957: </a>      PetscInfo2(A,<font color="#666666">"number of shiftpd tries %D, shift_amount %g\n"</font>,sctx.nshift,(double)sctx.shift_amount);
+<a name="line958">958: </a>    }
+<a name="line959">959: </a>  }
+<a name="line960">960: </a>  <font color="#4169E1">return</font>(0);
+<a name="line961">961: </a>}
+
+<a name="line963">963: </a> #include <A href="../../../../../include/petscbt.h.html">&lt;petscbt.h&gt;</A>
+<a name="line964">964: </a> #include <A href="../../../../../include/../src/mat/utils/freespace.h.html">&lt;../src/mat/utils/freespace.h&gt;</A>
+<a name="line965">965: </a><strong><font color="#4169E1"><a name="MatICCFactorSymbolic_SeqBAIJ"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatICCFactorSymbolic_SeqBAIJ(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> fact,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a> perm,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line966">966: </a>{
+<a name="line967">967: </a>  Mat_SeqBAIJ        *a = (Mat_SeqBAIJ*)A-&gt;data;
+<a name="line968">968: </a>  Mat_SeqSBAIJ       *b;
+<a name="line969">969: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>                B;
+<a name="line970">970: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line971">971: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>          perm_identity,missing;
+<a name="line972">972: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           reallocs=0,i,*ai=a-&gt;i,*aj=a-&gt;j,am=a-&gt;mbs,bs=A-&gt;rmap-&gt;bs,*ui;
+<a name="line973">973: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     *rip;
+<a name="line974">974: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           jmin,jmax,nzk,k,j,*jl,prow,*il,nextprow;
+<a name="line975">975: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           nlnk,*lnk,*lnk_lvl=NULL,ncols,ncols_upper,*cols,*cols_lvl,*uj,**uj_ptr,**uj_lvl_ptr;
+<a name="line976">976: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>          fill          =info-&gt;fill,levels=info-&gt;levels;
+<a name="line977">977: </a>  PetscFreeSpaceList free_space    =NULL,current_space=NULL;
+<a name="line978">978: </a>  PetscFreeSpaceList free_space_lvl=NULL,current_space_lvl=NULL;
+<a name="line979">979: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBT.html#PetscBT">PetscBT</a>            lnkbt;
+
+<a name="line982">982: </a>  <a href="../../../../../docs/manualpages/Mat/MatMissingDiagonal.html#MatMissingDiagonal">MatMissingDiagonal</a>(A,&amp;missing,&amp;i);
+<a name="line983">983: </a>  <font color="#4169E1">if</font> (missing) <a href="../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Matrix is missing diagonal entry %D"</font>,i);
+
+<a name="line985">985: </a>  <font color="#4169E1">if</font> (bs &gt; 1) {
+<a name="line986">986: </a>    <font color="#4169E1">if</font> (!a-&gt;sbaijMat) {
+<a name="line987">987: </a>      <a href="../../../../../docs/manualpages/Mat/MatConvert.html#MatConvert">MatConvert</a>(A,<a href="../../../../../docs/manualpages/Mat/MATSEQSBAIJ.html#MATSEQSBAIJ">MATSEQSBAIJ</a>,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;a-&gt;sbaijMat);
+<a name="line988">988: </a>    }
+<a name="line989">989: </a>    (fact)-&gt;ops-&gt;iccfactorsymbolic = MatICCFactorSymbolic_SeqSBAIJ;  <font color="#B22222">/* undue the change made in MatGetFactor_seqbaij_petsc */</font>
+
+<a name="line991">991: </a>    <a href="../../../../../docs/manualpages/Mat/MatICCFactorSymbolic.html#MatICCFactorSymbolic">MatICCFactorSymbolic</a>(fact,a-&gt;sbaijMat,perm,info);
+<a name="line992">992: </a>    <font color="#4169E1">return</font>(0);
+<a name="line993">993: </a>  }
+
+<a name="line995">995: </a>  <a href="../../../../../docs/manualpages/IS/ISIdentity.html#ISIdentity">ISIdentity</a>(perm,&amp;perm_identity);
+<a name="line996">996: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(perm,&amp;rip);
+
+<a name="line998">998: </a>  <font color="#B22222">/* special case that simply copies fill pattern */</font>
+<a name="line999">999: </a>  <font color="#4169E1">if</font> (!levels &amp;&amp; perm_identity) {
+<a name="line1000">1000: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(am+1,&amp;ui);
+<a name="line1001">1001: </a>    <font color="#4169E1">for</font> (i=0; i&lt;am; i++) ui[i] = ai[i+1] - a-&gt;diag[i]; <font color="#B22222">/* ui: rowlengths - changes when !perm_identity */</font>
+<a name="line1002">1002: </a>    B    = fact;
+<a name="line1003">1003: </a>    <a href="../../../../../docs/manualpages/Mat/MatSeqSBAIJSetPreallocation.html#MatSeqSBAIJSetPreallocation">MatSeqSBAIJSetPreallocation</a>(B,1,0,ui);
+
+
+<a name="line1006">1006: </a>    b  = (Mat_SeqSBAIJ*)B-&gt;data;
+<a name="line1007">1007: </a>    uj = b-&gt;j;
+<a name="line1008">1008: </a>    <font color="#4169E1">for</font> (i=0; i&lt;am; i++) {
+<a name="line1009">1009: </a>      aj = a-&gt;j + a-&gt;diag[i];
+<a name="line1010">1010: </a>      <font color="#4169E1">for</font> (j=0; j&lt;ui[i]; j++) *uj++ = *aj++;
+<a name="line1011">1011: </a>      b-&gt;ilen[i] = ui[i];
+<a name="line1012">1012: </a>    }
+<a name="line1013">1013: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(ui);
+
+<a name="line1015">1015: </a>    B-&gt;factortype = <a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_NONE</a>;
+
+<a name="line1017">1017: </a>    <a href="../../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(B,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line1018">1018: </a>    <a href="../../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(B,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line1019">1019: </a>    B-&gt;factortype = <a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_ICC</a>;
+
+<a name="line1021">1021: </a>    B-&gt;ops-&gt;choleskyfactornumeric = MatCholeskyFactorNumeric_SeqBAIJ_N_NaturalOrdering;
+<a name="line1022">1022: </a>    <font color="#4169E1">return</font>(0);
+<a name="line1023">1023: </a>  }
+
+<a name="line1025">1025: </a>  <font color="#B22222">/* initialization */</font>
+<a name="line1026">1026: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(am+1,&amp;ui);
+<a name="line1027">1027: </a>  ui[0] = 0;
+<a name="line1028">1028: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(2*am+1,&amp;cols_lvl);
+
+<a name="line1030">1030: </a>  <font color="#B22222">/* jl: linked list for storing indices of the pivot rows</font>
+<a name="line1031">1031: </a><font color="#B22222">     il: il[i] points to the 1st nonzero entry of U(i,k:am-1) */</font>
+<a name="line1032">1032: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(am,&amp;uj_ptr,am,&amp;uj_lvl_ptr,am,&amp;il,am,&amp;jl);
+<a name="line1033">1033: </a>  <font color="#4169E1">for</font> (i=0; i&lt;am; i++) {
+<a name="line1034">1034: </a>    jl[i] = am; il[i] = 0;
+<a name="line1035">1035: </a>  }
+
+<a name="line1037">1037: </a>  <font color="#B22222">/* create and initialize a linked list for storing column indices of the active row k */</font>
+<a name="line1038">1038: </a>  nlnk = am + 1;
+<a name="line1039">1039: </a>  PetscIncompleteLLCreate(am,am,nlnk,lnk,lnk_lvl,lnkbt);
+
+<a name="line1041">1041: </a>  <font color="#B22222">/* initial FreeSpace size is fill*(ai[am]+am)/2 */</font>
+<a name="line1042">1042: </a>  PetscFreeSpaceGet(<a href="../../../../../docs/manualpages/Sys/PetscRealIntMultTruncate.html#PetscRealIntMultTruncate">PetscRealIntMultTruncate</a>(fill,<a href="../../../../../docs/manualpages/Sys/PetscIntSumTruncate.html#PetscIntSumTruncate">PetscIntSumTruncate</a>(ai[am]/2,am/2)),&amp;free_space);
+
+<a name="line1044">1044: </a>  current_space = free_space;
+
+<a name="line1046">1046: </a>  PetscFreeSpaceGet(<a href="../../../../../docs/manualpages/Sys/PetscRealIntMultTruncate.html#PetscRealIntMultTruncate">PetscRealIntMultTruncate</a>(fill,<a href="../../../../../docs/manualpages/Sys/PetscIntSumTruncate.html#PetscIntSumTruncate">PetscIntSumTruncate</a>(ai[am]/2,am/2)),&amp;free_space_lvl);
+<a name="line1047">1047: </a>  current_space_lvl = free_space_lvl;
+
+<a name="line1049">1049: </a>  <font color="#4169E1">for</font> (k=0; k&lt;am; k++) {  <font color="#B22222">/* for each active row k */</font>
+<a name="line1050">1050: </a>    <font color="#B22222">/* initialize lnk by the column indices of row rip[k] of A */</font>
+<a name="line1051">1051: </a>    nzk         = 0;
+<a name="line1052">1052: </a>    ncols       = ai[rip[k]+1] - ai[rip[k]];
+<a name="line1053">1053: </a>    ncols_upper = 0;
+<a name="line1054">1054: </a>    cols        = cols_lvl + am;
+<a name="line1055">1055: </a>    <font color="#4169E1">for</font> (j=0; j&lt;ncols; j++) {
+<a name="line1056">1056: </a>      i = rip[*(aj + ai[rip[k]] + j)];
+<a name="line1057">1057: </a>      <font color="#4169E1">if</font> (i &gt;= k) { <font color="#B22222">/* only take upper triangular entry */</font>
+<a name="line1058">1058: </a>        cols[ncols_upper]     = i;
+<a name="line1059">1059: </a>        cols_lvl[ncols_upper] = -1;  <font color="#B22222">/* initialize level for nonzero entries */</font>
+<a name="line1060">1060: </a>        ncols_upper++;
+<a name="line1061">1061: </a>      }
+<a name="line1062">1062: </a>    }
+<a name="line1063">1063: </a>    PetscIncompleteLLAdd(ncols_upper,cols,levels,cols_lvl,am,nlnk,lnk,lnk_lvl,lnkbt);
+<a name="line1064">1064: </a>    nzk += nlnk;
+
+<a name="line1066">1066: </a>    <font color="#B22222">/* update lnk by computing fill-in for each pivot row to be merged in */</font>
+<a name="line1067">1067: </a>    prow = jl[k]; <font color="#B22222">/* 1st pivot row */</font>
+
+<a name="line1069">1069: </a>    <font color="#4169E1">while</font> (prow &lt; k) {
+<a name="line1070">1070: </a>      nextprow = jl[prow];
+
+<a name="line1072">1072: </a>      <font color="#B22222">/* merge prow into k-th row */</font>
+<a name="line1073">1073: </a>      jmin  = il[prow] + 1; <font color="#B22222">/* index of the 2nd nzero entry in U(prow,k:am-1) */</font>
+<a name="line1074">1074: </a>      jmax  = ui[prow+1];
+<a name="line1075">1075: </a>      ncols = jmax-jmin;
+<a name="line1076">1076: </a>      i     = jmin - ui[prow];
+<a name="line1077">1077: </a>      cols  = uj_ptr[prow] + i; <font color="#B22222">/* points to the 2nd nzero entry in U(prow,k:am-1) */</font>
+<a name="line1078">1078: </a>      <font color="#4169E1">for</font> (j=0; j&lt;ncols; j++) cols_lvl[j] = *(uj_lvl_ptr[prow] + i + j);
+<a name="line1079">1079: </a>      PetscIncompleteLLAddSorted(ncols,cols,levels,cols_lvl,am,nlnk,lnk,lnk_lvl,lnkbt);
+<a name="line1080">1080: </a>      nzk += nlnk;
+
+<a name="line1082">1082: </a>      <font color="#B22222">/* update il and jl for prow */</font>
+<a name="line1083">1083: </a>      <font color="#4169E1">if</font> (jmin &lt; jmax) {
+<a name="line1084">1084: </a>        il[prow] = jmin;
+
+<a name="line1086">1086: </a>        j = *cols; jl[prow] = jl[j]; jl[j] = prow;
+<a name="line1087">1087: </a>      }
+<a name="line1088">1088: </a>      prow = nextprow;
+<a name="line1089">1089: </a>    }
+
+<a name="line1091">1091: </a>    <font color="#B22222">/* if free space is not available, make more free space */</font>
+<a name="line1092">1092: </a>    <font color="#4169E1">if</font> (current_space-&gt;local_remaining&lt;nzk) {
+<a name="line1093">1093: </a>      i    = am - k + 1; <font color="#B22222">/* num of unfactored rows */</font>
+<a name="line1094">1094: </a>      i    = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(<a href="../../../../../docs/manualpages/Sys/PetscIntMultTruncate.html#PetscIntMultTruncate">PetscIntMultTruncate</a>(i,nzk), <a href="../../../../../docs/manualpages/Sys/PetscIntMultTruncate.html#PetscIntMultTruncate">PetscIntMultTruncate</a>(i,i-1)); <font color="#B22222">/* i*nzk, i*(i-1): estimated and max additional space needed */</font>
+<a name="line1095">1095: </a>      PetscFreeSpaceGet(i,&amp;current_space);
+<a name="line1096">1096: </a>      PetscFreeSpaceGet(i,&amp;current_space_lvl);
+<a name="line1097">1097: </a>      reallocs++;
+<a name="line1098">1098: </a>    }
+
+<a name="line1100">1100: </a>    <font color="#B22222">/* copy data into free_space and free_space_lvl, then initialize lnk */</font>
+<a name="line1101">1101: </a>    PetscIncompleteLLClean(am,am,nzk,lnk,lnk_lvl,current_space-&gt;array,current_space_lvl-&gt;array,lnkbt);
+
+<a name="line1103">1103: </a>    <font color="#B22222">/* add the k-th row into il and jl */</font>
+<a name="line1104">1104: </a>    <font color="#4169E1">if</font> (nzk-1 &gt; 0) {
+<a name="line1105">1105: </a>      i     = current_space-&gt;array[1]; <font color="#B22222">/* col value of the first nonzero element in U(k, k+1:am-1) */</font>
+<a name="line1106">1106: </a>      jl[k] = jl[i]; jl[i] = k;
+<a name="line1107">1107: </a>      il[k] = ui[k] + 1;
+<a name="line1108">1108: </a>    }
+<a name="line1109">1109: </a>    uj_ptr[k]     = current_space-&gt;array;
+<a name="line1110">1110: </a>    uj_lvl_ptr[k] = current_space_lvl-&gt;array;
+
+<a name="line1112">1112: </a>    current_space-&gt;array           += nzk;
+<a name="line1113">1113: </a>    current_space-&gt;local_used      += nzk;
+<a name="line1114">1114: </a>    current_space-&gt;local_remaining -= nzk;
+
+<a name="line1116">1116: </a>    current_space_lvl-&gt;array           += nzk;
+<a name="line1117">1117: </a>    current_space_lvl-&gt;local_used      += nzk;
+<a name="line1118">1118: </a>    current_space_lvl-&gt;local_remaining -= nzk;
+
+<a name="line1120">1120: </a>    ui[k+1] = ui[k] + nzk;
+<a name="line1121">1121: </a>  }
+
+<a name="line1123">1123: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(perm,&amp;rip);
+<a name="line1124">1124: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(uj_ptr,uj_lvl_ptr,il,jl);
+<a name="line1125">1125: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(cols_lvl);
+
+<a name="line1127">1127: </a>  <font color="#B22222">/* copy free_space into uj and free free_space; set uj in new datastructure; */</font>
+<a name="line1128">1128: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ui[am]+1,&amp;uj);
+<a name="line1129">1129: </a>  PetscFreeSpaceContiguous(&amp;free_space,uj);
+<a name="line1130">1130: </a>  PetscIncompleteLLDestroy(lnk,lnkbt);
+<a name="line1131">1131: </a>  PetscFreeSpaceDestroy(free_space_lvl);
+
+<a name="line1133">1133: </a>  <font color="#B22222">/* put together the new matrix in <a href="../../../../../docs/manualpages/Mat/MATSEQSBAIJ.html#MATSEQSBAIJ">MATSEQSBAIJ</a> format */</font>
+<a name="line1134">1134: </a>  B    = fact;
+<a name="line1135">1135: </a>  <a href="../../../../../docs/manualpages/Mat/MatSeqSBAIJSetPreallocation.html#MatSeqSBAIJSetPreallocation">MatSeqSBAIJSetPreallocation</a>(B,1,MAT_SKIP_ALLOCATION,NULL);
+
+<a name="line1137">1137: </a>  b                = (Mat_SeqSBAIJ*)B-&gt;data;
+<a name="line1138">1138: </a>  b-&gt;singlemalloc  = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1139">1139: </a>  b-&gt;free_a        = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1140">1140: </a>  b-&gt;free_ij       = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line1142">1142: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ui[am]+1,&amp;b-&gt;a);
+
+<a name="line1144">1144: </a>  b-&gt;j             = uj;
+<a name="line1145">1145: </a>  b-&gt;i             = ui;
+<a name="line1146">1146: </a>  b-&gt;diag          = 0;
+<a name="line1147">1147: </a>  b-&gt;ilen          = 0;
+<a name="line1148">1148: </a>  b-&gt;imax          = 0;
+<a name="line1149">1149: </a>  b-&gt;row           = perm;
+<a name="line1150">1150: </a>  b-&gt;pivotinblocks = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>; <font color="#B22222">/* need to get from <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> */</font>
+
+<a name="line1152">1152: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)perm);
+
+<a name="line1154">1154: </a>  b-&gt;icol = perm;
+
+<a name="line1156">1156: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)perm);
+<a name="line1157">1157: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(am+1,&amp;b-&gt;solve_work);
+<a name="line1158">1158: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B,(ui[am]-am)*(<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)+<font color="#4169E1">sizeof</font>(MatScalar)));
+
+<a name="line1160">1160: </a>  b-&gt;maxnz = b-&gt;nz = ui[am];
+
+<a name="line1162">1162: </a>  B-&gt;info.factor_mallocs   = reallocs;
+<a name="line1163">1163: </a>  B-&gt;info.fill_ratio_given = fill;
+<a name="line1164">1164: </a>  <font color="#4169E1">if</font> (ai[am] != 0.) {
+<a name="line1165">1165: </a>    <font color="#B22222">/* nonzeros in lower triangular part of A (includign diagonals)= (ai[am]+am)/2 */</font>
+<a name="line1166">1166: </a>    B-&gt;info.fill_ratio_needed = ((<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)2*ui[am])/(ai[am]+am);
+<a name="line1167">1167: </a>  } <font color="#4169E1">else</font> {
+<a name="line1168">1168: </a>    B-&gt;info.fill_ratio_needed = 0.0;
+<a name="line1169">1169: </a>  }
+<a name="line1170">1170: </a><font color="#A020F0">#if defined(PETSC_USE_INFO)</font>
+<a name="line1171">1171: </a>  <font color="#4169E1">if</font> (ai[am] != 0) {
+<a name="line1172">1172: </a>    <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> af = B-&gt;info.fill_ratio_needed;
+<a name="line1173">1173: </a>    PetscInfo3(A,<font color="#666666">"Reallocs %D Fill ratio:given %g needed %g\n"</font>,reallocs,(double)fill,(double)af);
+<a name="line1174">1174: </a>    PetscInfo1(A,<font color="#666666">"Run with -pc_factor_fill %g or use \n"</font>,(double)af);
+<a name="line1175">1175: </a>    PetscInfo1(A,<font color="#666666">"<a href="../../../../../docs/manualpages/PC/PCFactorSetFill.html#PCFactorSetFill">PCFactorSetFill</a>(pc,%g) for best performance.\n"</font>,(double)af);
+<a name="line1176">1176: </a>  } <font color="#4169E1">else</font> {
+<a name="line1177">1177: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscInfo.html#PetscInfo">PetscInfo</a>(A,<font color="#666666">"Empty matrix.\n"</font>);
+<a name="line1178">1178: </a>  }
+<a name="line1179">1179: </a><font color="#A020F0">#endif</font>
+<a name="line1180">1180: </a>  <font color="#4169E1">if</font> (perm_identity) {
+<a name="line1181">1181: </a>    B-&gt;ops-&gt;solve                 = MatSolve_SeqSBAIJ_1_NaturalOrdering_inplace;
+<a name="line1182">1182: </a>    B-&gt;ops-&gt;solvetranspose        = MatSolve_SeqSBAIJ_1_NaturalOrdering_inplace;
+<a name="line1183">1183: </a>    B-&gt;ops-&gt;choleskyfactornumeric = MatCholeskyFactorNumeric_SeqBAIJ_N_NaturalOrdering;
+<a name="line1184">1184: </a>  } <font color="#4169E1">else</font> {
+<a name="line1185">1185: </a>    (fact)-&gt;ops-&gt;choleskyfactornumeric = MatCholeskyFactorNumeric_SeqBAIJ_N;
+<a name="line1186">1186: </a>  }
+<a name="line1187">1187: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1188">1188: </a>}
+
+<a name="line1190">1190: </a><strong><font color="#4169E1"><a name="MatCholeskyFactorSymbolic_SeqBAIJ"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatCholeskyFactorSymbolic_SeqBAIJ(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> fact,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a> perm,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line1191">1191: </a>{
+<a name="line1192">1192: </a>  Mat_SeqBAIJ        *a = (Mat_SeqBAIJ*)A-&gt;data;
+<a name="line1193">1193: </a>  Mat_SeqSBAIJ       *b;
+<a name="line1194">1194: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>                B;
+<a name="line1195">1195: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1196">1196: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>          perm_identity,missing;
+<a name="line1197">1197: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>          fill = info-&gt;fill;
+<a name="line1198">1198: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     *rip;
+<a name="line1199">1199: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           i,mbs=a-&gt;mbs,bs=A-&gt;rmap-&gt;bs,*ai=a-&gt;i,*aj=a-&gt;j,reallocs=0,prow;
+<a name="line1200">1200: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           *jl,jmin,jmax,nzk,*ui,k,j,*il,nextprow;
+<a name="line1201">1201: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           nlnk,*lnk,ncols,ncols_upper,*cols,*uj,**ui_ptr,*uj_ptr;
+<a name="line1202">1202: </a>  PetscFreeSpaceList free_space=NULL,current_space=NULL;
+<a name="line1203">1203: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBT.html#PetscBT">PetscBT</a>            lnkbt;
+
+<a name="line1206">1206: </a>  <font color="#4169E1">if</font> (bs &gt; 1) { <font color="#B22222">/* convert to seqsbaij */</font>
+<a name="line1207">1207: </a>    <font color="#4169E1">if</font> (!a-&gt;sbaijMat) {
+<a name="line1208">1208: </a>      <a href="../../../../../docs/manualpages/Mat/MatConvert.html#MatConvert">MatConvert</a>(A,<a href="../../../../../docs/manualpages/Mat/MATSEQSBAIJ.html#MATSEQSBAIJ">MATSEQSBAIJ</a>,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;a-&gt;sbaijMat);
+<a name="line1209">1209: </a>    }
+<a name="line1210">1210: </a>    (fact)-&gt;ops-&gt;choleskyfactorsymbolic = MatCholeskyFactorSymbolic_SeqSBAIJ; <font color="#B22222">/* undue the change made in MatGetFactor_seqbaij_petsc */</font>
+
+<a name="line1212">1212: </a>    <a href="../../../../../docs/manualpages/Mat/MatCholeskyFactorSymbolic.html#MatCholeskyFactorSymbolic">MatCholeskyFactorSymbolic</a>(fact,a-&gt;sbaijMat,perm,info);
+<a name="line1213">1213: </a>    <font color="#4169E1">return</font>(0);
+<a name="line1214">1214: </a>  }
+
+<a name="line1216">1216: </a>  <a href="../../../../../docs/manualpages/Mat/MatMissingDiagonal.html#MatMissingDiagonal">MatMissingDiagonal</a>(A,&amp;missing,&amp;i);
+<a name="line1217">1217: </a>  <font color="#4169E1">if</font> (missing) <a href="../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Matrix is missing diagonal entry %D"</font>,i);
+
+<a name="line1219">1219: </a>  <font color="#B22222">/* check whether perm is the identity mapping */</font>
+<a name="line1220">1220: </a>  <a href="../../../../../docs/manualpages/IS/ISIdentity.html#ISIdentity">ISIdentity</a>(perm,&amp;perm_identity);
+<a name="line1221">1221: </a>  <font color="#4169E1">if</font> (!perm_identity) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Matrix reordering is not supported"</font>);
+<a name="line1222">1222: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(perm,&amp;rip);
+
+<a name="line1224">1224: </a>  <font color="#B22222">/* initialization */</font>
+<a name="line1225">1225: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(mbs+1,&amp;ui);
+<a name="line1226">1226: </a>  ui[0] = 0;
+
+<a name="line1228">1228: </a>  <font color="#B22222">/* jl: linked list for storing indices of the pivot rows</font>
+<a name="line1229">1229: </a><font color="#B22222">     il: il[i] points to the 1st nonzero entry of U(i,k:mbs-1) */</font>
+<a name="line1230">1230: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(mbs,&amp;ui_ptr,mbs,&amp;il,mbs,&amp;jl,mbs,&amp;cols);
+<a name="line1231">1231: </a>  <font color="#4169E1">for</font> (i=0; i&lt;mbs; i++) {
+<a name="line1232">1232: </a>    jl[i] = mbs; il[i] = 0;
+<a name="line1233">1233: </a>  }
+
+<a name="line1235">1235: </a>  <font color="#B22222">/* create and initialize a linked list for storing column indices of the active row k */</font>
+<a name="line1236">1236: </a>  nlnk = mbs + 1;
+<a name="line1237">1237: </a>  PetscLLCreate(mbs,mbs,nlnk,lnk,lnkbt);
+
+<a name="line1239">1239: </a>  <font color="#B22222">/* initial FreeSpace size is fill* (ai[mbs]+mbs)/2 */</font>
+<a name="line1240">1240: </a>  PetscFreeSpaceGet(<a href="../../../../../docs/manualpages/Sys/PetscRealIntMultTruncate.html#PetscRealIntMultTruncate">PetscRealIntMultTruncate</a>(fill,<a href="../../../../../docs/manualpages/Sys/PetscIntSumTruncate.html#PetscIntSumTruncate">PetscIntSumTruncate</a>(ai[mbs]/2,mbs/2)),&amp;free_space);
+
+<a name="line1242">1242: </a>  current_space = free_space;
+
+<a name="line1244">1244: </a>  <font color="#4169E1">for</font> (k=0; k&lt;mbs; k++) {  <font color="#B22222">/* for each active row k */</font>
+<a name="line1245">1245: </a>    <font color="#B22222">/* initialize lnk by the column indices of row rip[k] of A */</font>
+<a name="line1246">1246: </a>    nzk         = 0;
+<a name="line1247">1247: </a>    ncols       = ai[rip[k]+1] - ai[rip[k]];
+<a name="line1248">1248: </a>    ncols_upper = 0;
+<a name="line1249">1249: </a>    <font color="#4169E1">for</font> (j=0; j&lt;ncols; j++) {
+<a name="line1250">1250: </a>      i = rip[*(aj + ai[rip[k]] + j)];
+<a name="line1251">1251: </a>      <font color="#4169E1">if</font> (i &gt;= k) { <font color="#B22222">/* only take upper triangular entry */</font>
+<a name="line1252">1252: </a>        cols[ncols_upper] = i;
+<a name="line1253">1253: </a>        ncols_upper++;
+<a name="line1254">1254: </a>      }
+<a name="line1255">1255: </a>    }
+<a name="line1256">1256: </a>    PetscLLAdd(ncols_upper,cols,mbs,nlnk,lnk,lnkbt);
+<a name="line1257">1257: </a>    nzk += nlnk;
+
+<a name="line1259">1259: </a>    <font color="#B22222">/* update lnk by computing fill-in for each pivot row to be merged in */</font>
+<a name="line1260">1260: </a>    prow = jl[k]; <font color="#B22222">/* 1st pivot row */</font>
+
+<a name="line1262">1262: </a>    <font color="#4169E1">while</font> (prow &lt; k) {
+<a name="line1263">1263: </a>      nextprow = jl[prow];
+<a name="line1264">1264: </a>      <font color="#B22222">/* merge prow into k-th row */</font>
+<a name="line1265">1265: </a>      jmin   = il[prow] + 1; <font color="#B22222">/* index of the 2nd nzero entry in U(prow,k:mbs-1) */</font>
+<a name="line1266">1266: </a>      jmax   = ui[prow+1];
+<a name="line1267">1267: </a>      ncols  = jmax-jmin;
+<a name="line1268">1268: </a>      uj_ptr = ui_ptr[prow] + jmin - ui[prow]; <font color="#B22222">/* points to the 2nd nzero entry in U(prow,k:mbs-1) */</font>
+<a name="line1269">1269: </a>      PetscLLAddSorted(ncols,uj_ptr,mbs,nlnk,lnk,lnkbt);
+<a name="line1270">1270: </a>      nzk   += nlnk;
+
+<a name="line1272">1272: </a>      <font color="#B22222">/* update il and jl for prow */</font>
+<a name="line1273">1273: </a>      <font color="#4169E1">if</font> (jmin &lt; jmax) {
+<a name="line1274">1274: </a>        il[prow] = jmin;
+<a name="line1275">1275: </a>        j        = *uj_ptr;
+<a name="line1276">1276: </a>        jl[prow] = jl[j];
+<a name="line1277">1277: </a>        jl[j]    = prow;
+<a name="line1278">1278: </a>      }
+<a name="line1279">1279: </a>      prow = nextprow;
+<a name="line1280">1280: </a>    }
+
+<a name="line1282">1282: </a>    <font color="#B22222">/* if free space is not available, make more free space */</font>
+<a name="line1283">1283: </a>    <font color="#4169E1">if</font> (current_space-&gt;local_remaining&lt;nzk) {
+<a name="line1284">1284: </a>      i    = mbs - k + 1; <font color="#B22222">/* num of unfactored rows */</font>
+<a name="line1285">1285: </a>      i    = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(<a href="../../../../../docs/manualpages/Sys/PetscIntMultTruncate.html#PetscIntMultTruncate">PetscIntMultTruncate</a>(i,nzk), <a href="../../../../../docs/manualpages/Sys/PetscIntMultTruncate.html#PetscIntMultTruncate">PetscIntMultTruncate</a>(i,i-1)); <font color="#B22222">/* i*nzk, i*(i-1): estimated and max additional space needed */</font>
+<a name="line1286">1286: </a>      PetscFreeSpaceGet(i,&amp;current_space);
+<a name="line1287">1287: </a>      reallocs++;
+<a name="line1288">1288: </a>    }
+
+<a name="line1290">1290: </a>    <font color="#B22222">/* copy data into free space, then initialize lnk */</font>
+<a name="line1291">1291: </a>    PetscLLClean(mbs,mbs,nzk,lnk,current_space-&gt;array,lnkbt);
+
+<a name="line1293">1293: </a>    <font color="#B22222">/* add the k-th row into il and jl */</font>
+<a name="line1294">1294: </a>    <font color="#4169E1">if</font> (nzk-1 &gt; 0) {
+<a name="line1295">1295: </a>      i     = current_space-&gt;array[1]; <font color="#B22222">/* col value of the first nonzero element in U(k, k+1:mbs-1) */</font>
+<a name="line1296">1296: </a>      jl[k] = jl[i]; jl[i] = k;
+<a name="line1297">1297: </a>      il[k] = ui[k] + 1;
+<a name="line1298">1298: </a>    }
+<a name="line1299">1299: </a>    ui_ptr[k]                       = current_space-&gt;array;
+<a name="line1300">1300: </a>    current_space-&gt;array           += nzk;
+<a name="line1301">1301: </a>    current_space-&gt;local_used      += nzk;
+<a name="line1302">1302: </a>    current_space-&gt;local_remaining -= nzk;
+
+<a name="line1304">1304: </a>    ui[k+1] = ui[k] + nzk;
+<a name="line1305">1305: </a>  }
+
+<a name="line1307">1307: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(perm,&amp;rip);
+<a name="line1308">1308: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(ui_ptr,il,jl,cols);
+
+<a name="line1310">1310: </a>  <font color="#B22222">/* copy free_space into uj and free free_space; set uj in new datastructure; */</font>
+<a name="line1311">1311: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ui[mbs]+1,&amp;uj);
+<a name="line1312">1312: </a>  PetscFreeSpaceContiguous(&amp;free_space,uj);
+<a name="line1313">1313: </a>  PetscLLDestroy(lnk,lnkbt);
+
+<a name="line1315">1315: </a>  <font color="#B22222">/* put together the new matrix in <a href="../../../../../docs/manualpages/Mat/MATSEQSBAIJ.html#MATSEQSBAIJ">MATSEQSBAIJ</a> format */</font>
+<a name="line1316">1316: </a>  B    = fact;
+<a name="line1317">1317: </a>  <a href="../../../../../docs/manualpages/Mat/MatSeqSBAIJSetPreallocation.html#MatSeqSBAIJSetPreallocation">MatSeqSBAIJSetPreallocation</a>(B,bs,MAT_SKIP_ALLOCATION,NULL);
+
+<a name="line1319">1319: </a>  b               = (Mat_SeqSBAIJ*)B-&gt;data;
+<a name="line1320">1320: </a>  b-&gt;singlemalloc = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1321">1321: </a>  b-&gt;free_a       = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1322">1322: </a>  b-&gt;free_ij      = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line1324">1324: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ui[mbs]+1,&amp;b-&gt;a);
+
+<a name="line1326">1326: </a>  b-&gt;j             = uj;
+<a name="line1327">1327: </a>  b-&gt;i             = ui;
+<a name="line1328">1328: </a>  b-&gt;diag          = 0;
+<a name="line1329">1329: </a>  b-&gt;ilen          = 0;
+<a name="line1330">1330: </a>  b-&gt;imax          = 0;
+<a name="line1331">1331: </a>  b-&gt;row           = perm;
+<a name="line1332">1332: </a>  b-&gt;pivotinblocks = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>; <font color="#B22222">/* need to get from <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> */</font>
+
+<a name="line1334">1334: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)perm);
+<a name="line1335">1335: </a>  b-&gt;icol  = perm;
+<a name="line1336">1336: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)perm);
+<a name="line1337">1337: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(mbs+1,&amp;b-&gt;solve_work);
+<a name="line1338">1338: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B,(ui[mbs]-mbs)*(<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)+<font color="#4169E1">sizeof</font>(MatScalar)));
+<a name="line1339">1339: </a>  b-&gt;maxnz = b-&gt;nz = ui[mbs];
+
+<a name="line1341">1341: </a>  B-&gt;info.factor_mallocs   = reallocs;
+<a name="line1342">1342: </a>  B-&gt;info.fill_ratio_given = fill;
+<a name="line1343">1343: </a>  <font color="#4169E1">if</font> (ai[mbs] != 0.) {
+<a name="line1344">1344: </a>    <font color="#B22222">/* nonzeros in lower triangular part of A = (ai[mbs]+mbs)/2 */</font>
+<a name="line1345">1345: </a>    B-&gt;info.fill_ratio_needed = ((<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)2*ui[mbs])/(ai[mbs]+mbs);
+<a name="line1346">1346: </a>  } <font color="#4169E1">else</font> {
+<a name="line1347">1347: </a>    B-&gt;info.fill_ratio_needed = 0.0;
+<a name="line1348">1348: </a>  }
+<a name="line1349">1349: </a><font color="#A020F0">#if defined(PETSC_USE_INFO)</font>
+<a name="line1350">1350: </a>  <font color="#4169E1">if</font> (ai[mbs] != 0.) {
+<a name="line1351">1351: </a>    <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> af = B-&gt;info.fill_ratio_needed;
+<a name="line1352">1352: </a>    PetscInfo3(A,<font color="#666666">"Reallocs %D Fill ratio:given %g needed %g\n"</font>,reallocs,(double)fill,(double)af);
+<a name="line1353">1353: </a>    PetscInfo1(A,<font color="#666666">"Run with -pc_factor_fill %g or use \n"</font>,(double)af);
+<a name="line1354">1354: </a>    PetscInfo1(A,<font color="#666666">"<a href="../../../../../docs/manualpages/PC/PCFactorSetFill.html#PCFactorSetFill">PCFactorSetFill</a>(pc,%g) for best performance.\n"</font>,(double)af);
+<a name="line1355">1355: </a>  } <font color="#4169E1">else</font> {
+<a name="line1356">1356: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscInfo.html#PetscInfo">PetscInfo</a>(A,<font color="#666666">"Empty matrix.\n"</font>);
+<a name="line1357">1357: </a>  }
+<a name="line1358">1358: </a><font color="#A020F0">#endif</font>
+<a name="line1359">1359: </a>  <font color="#4169E1">if</font> (perm_identity) {
+<a name="line1360">1360: </a>    B-&gt;ops-&gt;choleskyfactornumeric = MatCholeskyFactorNumeric_SeqBAIJ_N_NaturalOrdering;
+<a name="line1361">1361: </a>  } <font color="#4169E1">else</font> {
+<a name="line1362">1362: </a>    B-&gt;ops-&gt;choleskyfactornumeric = MatCholeskyFactorNumeric_SeqBAIJ_N;
+<a name="line1363">1363: </a>  }
+<a name="line1364">1364: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1365">1365: </a>}
+
+<a name="line1367">1367: </a><strong><font color="#4169E1"><a name="MatSolve_SeqBAIJ_N_NaturalOrdering"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSolve_SeqBAIJ_N_NaturalOrdering(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> bb,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xx)</font></strong>
+<a name="line1368">1368: </a>{
+<a name="line1369">1369: </a>  Mat_SeqBAIJ       *a=(Mat_SeqBAIJ*)A-&gt;data;
+<a name="line1370">1370: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line1371">1371: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *ai=a-&gt;i,*aj=a-&gt;j,*adiag=a-&gt;diag,*vi;
+<a name="line1372">1372: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i,k,n=a-&gt;mbs;
+<a name="line1373">1373: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          nz,bs=A-&gt;rmap-&gt;bs,bs2=a-&gt;bs2;
+<a name="line1374">1374: </a>  const MatScalar   *aa=a-&gt;a,*v;
+<a name="line1375">1375: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *x,*s,*t,*ls;
+<a name="line1376">1376: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *b;
+
+<a name="line1379">1379: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(bb,&amp;b);
+<a name="line1380">1380: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(xx,&amp;x);
+<a name="line1381">1381: </a>  t    = a-&gt;solve_work;
+
+<a name="line1383">1383: </a>  <font color="#B22222">/* forward solve the lower triangular */</font>
+<a name="line1384">1384: </a>  <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(t,b,bs); <font color="#B22222">/* copy 1st block of b to t */</font>
+
+<a name="line1386">1386: </a>  <font color="#4169E1">for</font> (i=1; i&lt;n; i++) {
+<a name="line1387">1387: </a>    v    = aa + bs2*ai[i];
+<a name="line1388">1388: </a>    vi   = aj + ai[i];
+<a name="line1389">1389: </a>    nz   = ai[i+1] - ai[i];
+<a name="line1390">1390: </a>    s    = t + bs*i;
+<a name="line1391">1391: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(s,b+bs*i,bs); <font color="#B22222">/* copy i_th block of b to t */</font>
+<a name="line1392">1392: </a>    <font color="#4169E1">for</font> (k=0;k&lt;nz;k++) {
+<a name="line1393">1393: </a>      PetscKernel_v_gets_v_minus_A_times_w(bs,s,v,t+bs*vi[k]);
+<a name="line1394">1394: </a>      v += bs2;
+<a name="line1395">1395: </a>    }
+<a name="line1396">1396: </a>  }
+
+<a name="line1398">1398: </a>  <font color="#B22222">/* backward solve the upper triangular */</font>
+<a name="line1399">1399: </a>  ls = a-&gt;solve_work + A-&gt;cmap-&gt;n;
+<a name="line1400">1400: </a>  <font color="#4169E1">for</font> (i=n-1; i&gt;=0; i--) {
+<a name="line1401">1401: </a>    v    = aa + bs2*(adiag[i+1]+1);
+<a name="line1402">1402: </a>    vi   = aj + adiag[i+1]+1;
+<a name="line1403">1403: </a>    nz   = adiag[i] - adiag[i+1]-1;
+<a name="line1404">1404: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(ls,t+i*bs,bs);
+<a name="line1405">1405: </a>    <font color="#4169E1">for</font> (k=0; k&lt;nz; k++) {
+<a name="line1406">1406: </a>      PetscKernel_v_gets_v_minus_A_times_w(bs,ls,v,t+bs*vi[k]);
+<a name="line1407">1407: </a>      v += bs2;
+<a name="line1408">1408: </a>    }
+<a name="line1409">1409: </a>    PetscKernel_w_gets_A_times_v(bs,ls,aa+bs2*adiag[i],t+i*bs); <font color="#B22222">/* *inv(diagonal[i]) */</font>
+<a name="line1410">1410: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(x+i*bs,t+i*bs,bs);
+<a name="line1411">1411: </a>  }
+
+<a name="line1413">1413: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(bb,&amp;b);
+<a name="line1414">1414: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(xx,&amp;x);
+<a name="line1415">1415: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(2.0*(a-&gt;bs2)*(a-&gt;nz) - A-&gt;rmap-&gt;bs*A-&gt;cmap-&gt;n);
+<a name="line1416">1416: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1417">1417: </a>}
+
+<a name="line1419">1419: </a><strong><font color="#4169E1"><a name="MatSolve_SeqBAIJ_N"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSolve_SeqBAIJ_N(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> bb,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xx)</font></strong>
+<a name="line1420">1420: </a>{
+<a name="line1421">1421: </a>  Mat_SeqBAIJ        *a   =(Mat_SeqBAIJ*)A-&gt;data;
+<a name="line1422">1422: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>                 iscol=a-&gt;col,isrow=a-&gt;row;
+<a name="line1423">1423: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line1424">1424: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     *r,*c,*rout,*cout,*ai=a-&gt;i,*aj=a-&gt;j,*adiag=a-&gt;diag,*vi;
+<a name="line1425">1425: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           i,m,n=a-&gt;mbs;
+<a name="line1426">1426: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           nz,bs=A-&gt;rmap-&gt;bs,bs2=a-&gt;bs2;
+<a name="line1427">1427: </a>  const MatScalar    *aa=a-&gt;a,*v;
+<a name="line1428">1428: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>        *x,*s,*t,*ls;
+<a name="line1429">1429: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>  *b;
+
+<a name="line1432">1432: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(bb,&amp;b);
+<a name="line1433">1433: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(xx,&amp;x);
+<a name="line1434">1434: </a>  t    = a-&gt;solve_work;
+
+<a name="line1436">1436: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isrow,&amp;rout); r = rout;
+<a name="line1437">1437: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(iscol,&amp;cout); c = cout;
+
+<a name="line1439">1439: </a>  <font color="#B22222">/* forward solve the lower triangular */</font>
+<a name="line1440">1440: </a>  <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(t,b+bs*r[0],bs);
+<a name="line1441">1441: </a>  <font color="#4169E1">for</font> (i=1; i&lt;n; i++) {
+<a name="line1442">1442: </a>    v    = aa + bs2*ai[i];
+<a name="line1443">1443: </a>    vi   = aj + ai[i];
+<a name="line1444">1444: </a>    nz   = ai[i+1] - ai[i];
+<a name="line1445">1445: </a>    s    = t + bs*i;
+<a name="line1446">1446: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(s,b+bs*r[i],bs);
+<a name="line1447">1447: </a>    <font color="#4169E1">for</font> (m=0; m&lt;nz; m++) {
+<a name="line1448">1448: </a>      PetscKernel_v_gets_v_minus_A_times_w(bs,s,v,t+bs*vi[m]);
+<a name="line1449">1449: </a>      v += bs2;
+<a name="line1450">1450: </a>    }
+<a name="line1451">1451: </a>  }
+
+<a name="line1453">1453: </a>  <font color="#B22222">/* backward solve the upper triangular */</font>
+<a name="line1454">1454: </a>  ls = a-&gt;solve_work + A-&gt;cmap-&gt;n;
+<a name="line1455">1455: </a>  <font color="#4169E1">for</font> (i=n-1; i&gt;=0; i--) {
+<a name="line1456">1456: </a>    v    = aa + bs2*(adiag[i+1]+1);
+<a name="line1457">1457: </a>    vi   = aj + adiag[i+1]+1;
+<a name="line1458">1458: </a>    nz   = adiag[i] - adiag[i+1] - 1;
+<a name="line1459">1459: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(ls,t+i*bs,bs);
+<a name="line1460">1460: </a>    <font color="#4169E1">for</font> (m=0; m&lt;nz; m++) {
+<a name="line1461">1461: </a>      PetscKernel_v_gets_v_minus_A_times_w(bs,ls,v,t+bs*vi[m]);
+<a name="line1462">1462: </a>      v += bs2;
+<a name="line1463">1463: </a>    }
+<a name="line1464">1464: </a>    PetscKernel_w_gets_A_times_v(bs,ls,v,t+i*bs); <font color="#B22222">/* *inv(diagonal[i]) */</font>
+<a name="line1465">1465: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(x + bs*c[i],t+i*bs,bs);
+<a name="line1466">1466: </a>  }
+<a name="line1467">1467: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isrow,&amp;rout);
+<a name="line1468">1468: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(iscol,&amp;cout);
+<a name="line1469">1469: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(bb,&amp;b);
+<a name="line1470">1470: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(xx,&amp;x);
+<a name="line1471">1471: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(2.0*(a-&gt;bs2)*(a-&gt;nz) - A-&gt;rmap-&gt;bs*A-&gt;cmap-&gt;n);
+<a name="line1472">1472: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1473">1473: </a>}
+
+<a name="line1475">1475: </a><font color="#B22222">/*</font>
+<a name="line1476">1476: </a><font color="#B22222">    For each block in an block array saves the largest absolute value in the block into another array</font>
+<a name="line1477">1477: </a><font color="#B22222">*/</font>
+<a name="line1478">1478: </a><strong><font color="#4169E1"><a name="MatBlockAbs_private"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatBlockAbs_private(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nbs,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> bs2,<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *blockarray,<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *absarray)</font></strong>
+<a name="line1479">1479: </a>{
+<a name="line1481">1481: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j;
+
+<a name="line1484">1484: </a>  <a href="../../../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(absarray,nbs+1);
+<a name="line1485">1485: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nbs; i++) {
+<a name="line1486">1486: </a>    <font color="#4169E1">for</font> (j=0; j&lt;bs2; j++) {
+<a name="line1487">1487: </a>      <font color="#4169E1">if</font> (absarray[i] &lt; PetscAbsScalar(blockarray[i*nbs+j])) absarray[i] = PetscAbsScalar(blockarray[i*nbs+j]);
+<a name="line1488">1488: </a>    }
+<a name="line1489">1489: </a>  }
+<a name="line1490">1490: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1491">1491: </a>}
+
+<a name="line1493">1493: </a><font color="#B22222">/*</font>
+<a name="line1494">1494: </a><font color="#B22222">     This needs to be renamed and called by the regular MatILUFactor_SeqBAIJ when drop tolerance is used</font>
+<a name="line1495">1495: </a><font color="#B22222">*/</font>
+<a name="line1496">1496: </a><strong><font color="#4169E1"><a name="MatILUDTFactor_SeqBAIJ"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatILUDTFactor_SeqBAIJ(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a> isrow,<a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a> iscol,const <a href="../../../../../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *fact)</font></strong>
+<a name="line1497">1497: </a>{
+<a name="line1498">1498: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            B = *fact;
+<a name="line1499">1499: </a>  Mat_SeqBAIJ    *a=(Mat_SeqBAIJ*)A-&gt;data,*b;
+<a name="line1500">1500: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>             isicol;
+<a name="line1502">1502: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *r,*ic;
+<a name="line1503">1503: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,mbs=a-&gt;mbs,bs=A-&gt;rmap-&gt;bs,bs2=a-&gt;bs2,*ai=a-&gt;i,*aj=a-&gt;j,*ajtmp,*adiag;
+<a name="line1504">1504: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *bi,*bj,*bdiag;
+
+<a name="line1506">1506: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  row,nzi,nzi_bl,nzi_bu,*im,dtcount,nzi_al,nzi_au;
+<a name="line1507">1507: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  nlnk,*lnk;
+<a name="line1508">1508: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBT.html#PetscBT">PetscBT</a>   lnkbt;
+<a name="line1509">1509: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> row_identity,icol_identity;
+<a name="line1510">1510: </a>  MatScalar *aatmp,*pv,*batmp,*ba,*rtmp,*pc,*multiplier,*vtmp;
+<a name="line1511">1511: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  j,nz,*pj,*bjtmp,k,ncut,*jtmp;
+
+<a name="line1513">1513: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> dt=info-&gt;dt;          <font color="#B22222">/* shift=info-&gt;shiftamount; */</font>
+<a name="line1514">1514: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  nnz_max;
+<a name="line1515">1515: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> missing;
+<a name="line1516">1516: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *vtmp_abs;
+<a name="line1517">1517: </a>  MatScalar *v_work;
+<a name="line1518">1518: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  *v_pivots;
+<a name="line1519">1519: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> allowzeropivot,zeropivotdetected=<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+
+<a name="line1522">1522: </a>  <font color="#B22222">/* ------- symbolic factorization, can be reused ---------*/</font>
+<a name="line1523">1523: </a>  <a href="../../../../../docs/manualpages/Mat/MatMissingDiagonal.html#MatMissingDiagonal">MatMissingDiagonal</a>(A,&amp;missing,&amp;i);
+<a name="line1524">1524: </a>  <font color="#4169E1">if</font> (missing) <a href="../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Matrix is missing diagonal entry %D"</font>,i);
+<a name="line1525">1525: </a>  adiag=a-&gt;diag;
+
+<a name="line1527">1527: </a>  <a href="../../../../../docs/manualpages/IS/ISInvertPermutation.html#ISInvertPermutation">ISInvertPermutation</a>(iscol,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,&amp;isicol);
+
+<a name="line1529">1529: </a>  <font color="#B22222">/* bdiag is location of diagonal in factor */</font>
+<a name="line1530">1530: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(mbs+1,&amp;bdiag);
+
+<a name="line1532">1532: </a>  <font color="#B22222">/* allocate row pointers bi */</font>
+<a name="line1533">1533: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(2*mbs+2,&amp;bi);
+
+<a name="line1535">1535: </a>  <font color="#B22222">/* allocate bj and ba; max num of nonzero entries is (ai[n]+2*n*dtcount+2) */</font>
+<a name="line1536">1536: </a>  dtcount = (<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)info-&gt;dtcount;
+<a name="line1537">1537: </a>  <font color="#4169E1">if</font> (dtcount &gt; mbs-1) dtcount = mbs-1;
+<a name="line1538">1538: </a>  nnz_max = ai[mbs]+2*mbs*dtcount +2;
+<a name="line1539">1539: </a>  <font color="#B22222">/* printf("MatILUDTFactor_SeqBAIJ, bs %d, ai[mbs] %d, nnz_max  %d, dtcount %d\n",bs,ai[mbs],nnz_max,dtcount); */</font>
+<a name="line1540">1540: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nnz_max,&amp;bj);
+<a name="line1541">1541: </a>  nnz_max = nnz_max*bs2;
+<a name="line1542">1542: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nnz_max,&amp;ba);
+
+<a name="line1544">1544: </a>  <font color="#B22222">/* put together the new matrix */</font>
+<a name="line1545">1545: </a>  <a href="../../../../../docs/manualpages/Mat/MatSeqBAIJSetPreallocation.html#MatSeqBAIJSetPreallocation">MatSeqBAIJSetPreallocation</a>(B,bs,MAT_SKIP_ALLOCATION,NULL);
+<a name="line1546">1546: </a>  PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)isicol);
+
+<a name="line1548">1548: </a>  b               = (Mat_SeqBAIJ*)(B)-&gt;data;
+<a name="line1549">1549: </a>  b-&gt;free_a       = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1550">1550: </a>  b-&gt;free_ij      = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1551">1551: </a>  b-&gt;singlemalloc = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+
+<a name="line1553">1553: </a>  b-&gt;a    = ba;
+<a name="line1554">1554: </a>  b-&gt;j    = bj;
+<a name="line1555">1555: </a>  b-&gt;i    = bi;
+<a name="line1556">1556: </a>  b-&gt;diag = bdiag;
+<a name="line1557">1557: </a>  b-&gt;ilen = 0;
+<a name="line1558">1558: </a>  b-&gt;imax = 0;
+<a name="line1559">1559: </a>  b-&gt;row  = isrow;
+<a name="line1560">1560: </a>  b-&gt;col  = iscol;
+
+<a name="line1562">1562: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)isrow);
+<a name="line1563">1563: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)iscol);
+
+<a name="line1565">1565: </a>  b-&gt;icol  = isicol;
+<a name="line1566">1566: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(bs*(mbs+1),&amp;b-&gt;solve_work);
+<a name="line1567">1567: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B,nnz_max*(<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)+<font color="#4169E1">sizeof</font>(MatScalar)));
+<a name="line1568">1568: </a>  b-&gt;maxnz = nnz_max/bs2;
+
+<a name="line1570">1570: </a>  (B)-&gt;factortype            = <a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_ILUDT</a>;
+<a name="line1571">1571: </a>  (B)-&gt;info.factor_mallocs   = 0;
+<a name="line1572">1572: </a>  (B)-&gt;info.fill_ratio_given = ((<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)nnz_max)/((<a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)(ai[mbs]*bs2));
+<a name="line1573">1573: </a>  <font color="#B22222">/* ------- end of symbolic factorization ---------*/</font>
+<a name="line1574">1574: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isrow,&amp;r);
+<a name="line1575">1575: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isicol,&amp;ic);
+
+<a name="line1577">1577: </a>  <font color="#B22222">/* linked list for storing column indices of the active row */</font>
+<a name="line1578">1578: </a>  nlnk = mbs + 1;
+<a name="line1579">1579: </a>  PetscLLCreate(mbs,mbs,nlnk,lnk,lnkbt);
+
+<a name="line1581">1581: </a>  <font color="#B22222">/* im: used by PetscLLAddSortedLU(); jtmp: working array for column indices of active row */</font>
+<a name="line1582">1582: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(mbs,&amp;im,mbs,&amp;jtmp);
+<a name="line1583">1583: </a>  <font color="#B22222">/* rtmp, vtmp: working arrays for sparse and contiguous row entries of active row */</font>
+<a name="line1584">1584: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(mbs*bs2,&amp;rtmp,mbs*bs2,&amp;vtmp);
+<a name="line1585">1585: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(mbs+1,&amp;vtmp_abs);
+<a name="line1586">1586: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc3.html#PetscMalloc3">PetscMalloc3</a>(bs,&amp;v_work,bs2,&amp;multiplier,bs,&amp;v_pivots);
+
+<a name="line1588">1588: </a>  allowzeropivot = <a href="../../../../../docs/manualpages/Sys/PetscNot.html#PetscNot">PetscNot</a>(A-&gt;erroriffailure);
+<a name="line1589">1589: </a>  bi[0]       = 0;
+<a name="line1590">1590: </a>  bdiag[0]    = (nnz_max/bs2)-1; <font color="#B22222">/* location of diagonal in factor B */</font>
+<a name="line1591">1591: </a>  bi[2*mbs+1] = bdiag[0]+1; <font color="#B22222">/* endof bj and ba array */</font>
+<a name="line1592">1592: </a>  <font color="#4169E1">for</font> (i=0; i&lt;mbs; i++) {
+<a name="line1593">1593: </a>    <font color="#B22222">/* copy initial fill into linked list */</font>
+<a name="line1594">1594: </a>    nzi = ai[r[i]+1] - ai[r[i]];
+<a name="line1595">1595: </a>    <font color="#4169E1">if</font> (!nzi) <a href="../../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MAT_LU_ZRPVT,<font color="#666666">"Empty row in matrix: row in original ordering %D in permuted ordering %D"</font>,r[i],i);
+<a name="line1596">1596: </a>    nzi_al = adiag[r[i]] - ai[r[i]];
+<a name="line1597">1597: </a>    nzi_au = ai[r[i]+1] - adiag[r[i]] -1;
+
+<a name="line1599">1599: </a>    <font color="#B22222">/* load in initial unfactored row */</font>
+<a name="line1600">1600: </a>    ajtmp = aj + ai[r[i]];
+<a name="line1601">1601: </a>    PetscLLAddPerm(nzi,ajtmp,ic,mbs,nlnk,lnk,lnkbt);
+<a name="line1602">1602: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(rtmp,mbs*bs2);
+<a name="line1603">1603: </a>    aatmp = a-&gt;a + bs2*ai[r[i]];
+<a name="line1604">1604: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nzi; j++) {
+<a name="line1605">1605: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(rtmp+bs2*ic[ajtmp[j]],aatmp+bs2*j,bs2);
+<a name="line1606">1606: </a>    }
+
+<a name="line1608">1608: </a>    <font color="#B22222">/* add pivot rows into linked list */</font>
+<a name="line1609">1609: </a>    row = lnk[mbs];
+<a name="line1610">1610: </a>    <font color="#4169E1">while</font> (row &lt; i) {
+<a name="line1611">1611: </a>      nzi_bl = bi[row+1] - bi[row] + 1;
+<a name="line1612">1612: </a>      bjtmp  = bj + bdiag[row+1]+1; <font color="#B22222">/* points to 1st column next to the diagonal in U */</font>
+<a name="line1613">1613: </a>      PetscLLAddSortedLU(bjtmp,row,nlnk,lnk,lnkbt,i,nzi_bl,im);
+<a name="line1614">1614: </a>      nzi   += nlnk;
+<a name="line1615">1615: </a>      row    = lnk[row];
+<a name="line1616">1616: </a>    }
+
+<a name="line1618">1618: </a>    <font color="#B22222">/* copy data from lnk into jtmp, then initialize lnk */</font>
+<a name="line1619">1619: </a>    PetscLLClean(mbs,mbs,nzi,lnk,jtmp,lnkbt);
+
+<a name="line1621">1621: </a>    <font color="#B22222">/* numerical factorization */</font>
+<a name="line1622">1622: </a>    bjtmp = jtmp;
+<a name="line1623">1623: </a>    row   = *bjtmp++; <font color="#B22222">/* 1st pivot row */</font>
+
+<a name="line1625">1625: </a>    <font color="#4169E1">while</font>  (row &lt; i) {
+<a name="line1626">1626: </a>      pc = rtmp + bs2*row;
+<a name="line1627">1627: </a>      pv = ba + bs2*bdiag[row]; <font color="#B22222">/* inv(diag) of the pivot row */</font>
+<a name="line1628">1628: </a>      PetscKernel_A_gets_A_times_B(bs,pc,pv,multiplier); <font color="#B22222">/* pc= multiplier = pc*inv(diag[row]) */</font>
+<a name="line1629">1629: </a>      MatBlockAbs_private(1,bs2,pc,vtmp_abs);
+<a name="line1630">1630: </a>      <font color="#4169E1">if</font> (vtmp_abs[0] &gt; dt) { <font color="#B22222">/* apply tolerance dropping rule */</font>
+<a name="line1631">1631: </a>        pj = bj + bdiag[row+1] + 1;         <font color="#B22222">/* point to 1st entry of U(row,:) */</font>
+<a name="line1632">1632: </a>        pv = ba + bs2*(bdiag[row+1] + 1);
+<a name="line1633">1633: </a>        nz = bdiag[row] - bdiag[row+1] - 1;         <font color="#B22222">/* num of entries in U(row,:), excluding diagonal */</font>
+<a name="line1634">1634: </a>        <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line1635">1635: </a>          PetscKernel_A_gets_A_minus_B_times_C(bs,rtmp+bs2*pj[j],pc,pv+bs2*j);
+<a name="line1636">1636: </a>        }
+<a name="line1637">1637: </a>        <font color="#B22222">/* <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(bslog*(nz+1.0)-bs); */</font>
+<a name="line1638">1638: </a>      }
+<a name="line1639">1639: </a>      row = *bjtmp++;
+<a name="line1640">1640: </a>    }
+
+<a name="line1642">1642: </a>    <font color="#B22222">/* copy sparse rtmp into contiguous vtmp; separate L and U part */</font>
+<a name="line1643">1643: </a>    nzi_bl = 0; j = 0;
+<a name="line1644">1644: </a>    <font color="#4169E1">while</font> (jtmp[j] &lt; i) { <font color="#B22222">/* L-part. Note: jtmp is sorted */</font>
+<a name="line1645">1645: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(vtmp+bs2*j,rtmp+bs2*jtmp[j],bs2);
+<a name="line1646">1646: </a>      nzi_bl++; j++;
+<a name="line1647">1647: </a>    }
+<a name="line1648">1648: </a>    nzi_bu = nzi - nzi_bl -1;
+
+<a name="line1650">1650: </a>    <font color="#4169E1">while</font> (j &lt; nzi) { <font color="#B22222">/* U-part */</font>
+<a name="line1651">1651: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(vtmp+bs2*j,rtmp+bs2*jtmp[j],bs2);
+<a name="line1652">1652: </a>      j++;
+<a name="line1653">1653: </a>    }
+
+<a name="line1655">1655: </a>    MatBlockAbs_private(nzi,bs2,vtmp,vtmp_abs);
+
+<a name="line1657">1657: </a>    bjtmp = bj + bi[i];
+<a name="line1658">1658: </a>    batmp = ba + bs2*bi[i];
+<a name="line1659">1659: </a>    <font color="#B22222">/* apply level dropping rule to L part */</font>
+<a name="line1660">1660: </a>    ncut = nzi_al + dtcount;
+<a name="line1661">1661: </a>    <font color="#4169E1">if</font> (ncut &lt; nzi_bl) {
+<a name="line1662">1662: </a>      <a href="../../../../../docs/manualpages/Sys/PetscSortSplitReal.html#PetscSortSplitReal">PetscSortSplitReal</a>(ncut,nzi_bl,vtmp_abs,jtmp);
+<a name="line1663">1663: </a>      <a href="../../../../../docs/manualpages/Sys/PetscSortIntWithScalarArray.html#PetscSortIntWithScalarArray">PetscSortIntWithScalarArray</a>(ncut,jtmp,vtmp);
+<a name="line1664">1664: </a>    } <font color="#4169E1">else</font> {
+<a name="line1665">1665: </a>      ncut = nzi_bl;
+<a name="line1666">1666: </a>    }
+<a name="line1667">1667: </a>    <font color="#4169E1">for</font> (j=0; j&lt;ncut; j++) {
+<a name="line1668">1668: </a>      bjtmp[j] = jtmp[j];
+<a name="line1669">1669: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(batmp+bs2*j,rtmp+bs2*bjtmp[j],bs2);
+<a name="line1670">1670: </a>    }
+<a name="line1671">1671: </a>    bi[i+1] = bi[i] + ncut;
+<a name="line1672">1672: </a>    nzi     = ncut + 1;
+
+<a name="line1674">1674: </a>    <font color="#B22222">/* apply level dropping rule to U part */</font>
+<a name="line1675">1675: </a>    ncut = nzi_au + dtcount;
+<a name="line1676">1676: </a>    <font color="#4169E1">if</font> (ncut &lt; nzi_bu) {
+<a name="line1677">1677: </a>      <a href="../../../../../docs/manualpages/Sys/PetscSortSplitReal.html#PetscSortSplitReal">PetscSortSplitReal</a>(ncut,nzi_bu,vtmp_abs+nzi_bl+1,jtmp+nzi_bl+1);
+<a name="line1678">1678: </a>      <a href="../../../../../docs/manualpages/Sys/PetscSortIntWithScalarArray.html#PetscSortIntWithScalarArray">PetscSortIntWithScalarArray</a>(ncut,jtmp+nzi_bl+1,vtmp+nzi_bl+1);
+<a name="line1679">1679: </a>    } <font color="#4169E1">else</font> {
+<a name="line1680">1680: </a>      ncut = nzi_bu;
+<a name="line1681">1681: </a>    }
+<a name="line1682">1682: </a>    nzi += ncut;
+
+<a name="line1684">1684: </a>    <font color="#B22222">/* mark bdiagonal */</font>
+<a name="line1685">1685: </a>    bdiag[i+1]    = bdiag[i] - (ncut + 1);
+<a name="line1686">1686: </a>    bi[2*mbs - i] = bi[2*mbs - i +1] - (ncut + 1);
+
+<a name="line1688">1688: </a>    bjtmp  = bj + bdiag[i];
+<a name="line1689">1689: </a>    batmp  = ba + bs2*bdiag[i];
+<a name="line1690">1690: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(batmp,rtmp+bs2*i,bs2);
+<a name="line1691">1691: </a>    *bjtmp = i;
+
+<a name="line1693">1693: </a>    bjtmp = bj + bdiag[i+1]+1;
+<a name="line1694">1694: </a>    batmp = ba + (bdiag[i+1]+1)*bs2;
+
+<a name="line1696">1696: </a>    <font color="#4169E1">for</font> (k=0; k&lt;ncut; k++) {
+<a name="line1697">1697: </a>      bjtmp[k] = jtmp[nzi_bl+1+k];
+<a name="line1698">1698: </a>      <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(batmp+bs2*k,rtmp+bs2*bjtmp[k],bs2);
+<a name="line1699">1699: </a>    }
+
+<a name="line1701">1701: </a>    im[i] = nzi; <font color="#B22222">/* used by PetscLLAddSortedLU() */</font>
+
+<a name="line1703">1703: </a>    <font color="#B22222">/* invert diagonal block for simplier triangular solves - add shift??? */</font>
+<a name="line1704">1704: </a>    batmp = ba + bs2*bdiag[i];
+
+<a name="line1706">1706: </a>    PetscKernel_A_gets_inverse_A(bs,batmp,v_pivots,v_work,allowzeropivot,&amp;zeropivotdetected);
+<a name="line1707">1707: </a>    <font color="#4169E1">if</font> (zeropivotdetected) B-&gt;factorerrortype = MAT_FACTOR_NUMERIC_ZEROPIVOT;
+<a name="line1708">1708: </a>  } <font color="#B22222">/* for (i=0; i&lt;mbs; i++) */</font>
+<a name="line1709">1709: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(v_work,multiplier,v_pivots);
+
+<a name="line1711">1711: </a>  <font color="#B22222">/* printf("end of L %d, beginning of U %d\n",bi[mbs],bdiag[mbs]); */</font>
+<a name="line1712">1712: </a>  <font color="#4169E1">if</font> (bi[mbs] &gt;= bdiag[mbs]) <a href="../../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_SIZ,<font color="#666666">"end of L array %d cannot &gt;= the beginning of U array %d"</font>,bi[mbs],bdiag[mbs]);
+
+<a name="line1714">1714: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isrow,&amp;r);
+<a name="line1715">1715: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isicol,&amp;ic);
+
+<a name="line1717">1717: </a>  PetscLLDestroy(lnk,lnkbt);
+
+<a name="line1719">1719: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(im,jtmp);
+<a name="line1720">1720: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(rtmp,vtmp);
+
+<a name="line1722">1722: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(bs2*B-&gt;cmap-&gt;n);
+<a name="line1723">1723: </a>  b-&gt;maxnz = b-&gt;nz = bi[mbs] + bdiag[0] - bdiag[mbs];
+
+<a name="line1725">1725: </a>  <a href="../../../../../docs/manualpages/IS/ISIdentity.html#ISIdentity">ISIdentity</a>(isrow,&amp;row_identity);
+<a name="line1726">1726: </a>  <a href="../../../../../docs/manualpages/IS/ISIdentity.html#ISIdentity">ISIdentity</a>(isicol,&amp;icol_identity);
+<a name="line1727">1727: </a>  <font color="#4169E1">if</font> (row_identity &amp;&amp; icol_identity) {
+<a name="line1728">1728: </a>    B-&gt;ops-&gt;solve = MatSolve_SeqBAIJ_N_NaturalOrdering;
+<a name="line1729">1729: </a>  } <font color="#4169E1">else</font> {
+<a name="line1730">1730: </a>    B-&gt;ops-&gt;solve = MatSolve_SeqBAIJ_N;
+<a name="line1731">1731: </a>  }
+
+<a name="line1733">1733: </a>  B-&gt;ops-&gt;solveadd          = 0;
+<a name="line1734">1734: </a>  B-&gt;ops-&gt;solvetranspose    = 0;
+<a name="line1735">1735: </a>  B-&gt;ops-&gt;solvetransposeadd = 0;
+<a name="line1736">1736: </a>  B-&gt;ops-&gt;matsolve          = 0;
+<a name="line1737">1737: </a>  B-&gt;assembled              = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1738">1738: </a>  B-&gt;preallocated           = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1739">1739: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1740">1740: </a>}
+</pre>
+</body>
+
+</html>

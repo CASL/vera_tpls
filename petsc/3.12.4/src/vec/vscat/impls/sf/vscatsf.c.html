@@ -1,0 +1,761 @@
+<center><a href="vscatsf.c">Actual source code: vscatsf.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/vec/vscat/impls/sf/vscatsf.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:39:58+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/vec/vscat/impls/sf/vscatsf.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a> #include <A href="../../../../../include/petsc/private/vecscatterimpl.h.html">&lt;petsc/private/vecscatterimpl.h&gt;</A>
+<a name="line2">  2: </a> #include <A href="../../../../../include/petsc/private/sfimpl.h.html">&lt;petsc/private/sfimpl.h&gt;</A>
+<a name="line3">  3: </a><font color="#A020F0">#include &lt;../src/vec/is/sf/impls/basic/sfbasic.h&gt; </font><font color="#B22222">/* for VecScatterRemap_SF */</font><font color="#A020F0"></font>
+<a name="line4">  4: </a> #include <A href="../../../../../include/../src/vec/is/sf/impls/basic/sfpack.h.html">&lt;../src/vec/is/sf/impls/basic/sfpack.h&gt;</A>
+
+<a name="line6">  6: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line7">  7: </a> #include <A href="../../../../../include/../src/vec/vec/impls/seq/seqcuda/cudavecimpl.h.html">&lt;../src/vec/vec/impls/seq/seqcuda/cudavecimpl.h&gt;</A>
+<a name="line8">  8: </a><font color="#A020F0">#endif</font>
+
+<a name="line10"> 10: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line11"> 11: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>           sf;     <font color="#B22222">/* the whole scatter, including local and remote */</font>
+<a name="line12"> 12: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>           lsf;    <font color="#B22222">/* the local part of the scatter, used for <a href="../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">SCATTER_LOCAL</a> */</font>
+<a name="line13"> 13: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          bs;     <font color="#B22222">/* block size */</font>
+<a name="line14"> 14: </a>  MPI_Datatype      unit;   <font color="#B22222">/* one unit = bs PetscScalars */</font>
+<a name="line15"> 15: </a>} VecScatter_SF;
+
+<a name="line17"> 17: </a><strong><font color="#4169E1"><a name="VecScatterBegin_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterBegin_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y,<a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">InsertMode</a> addv,<a href="../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">ScatterMode</a> mode)</font></strong>
+<a name="line18"> 18: </a>{
+<a name="line19"> 19: </a>  VecScatter_SF  *data=(VecScatter_SF*)vscat-&gt;data;
+<a name="line20"> 20: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>        sf;
+<a name="line21"> 21: </a>  MPI_Op         mop=MPI_OP_NULL;
+<a name="line22"> 22: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+
+<a name="line26"> 26: </a>  <font color="#4169E1">if</font> (x != y) {<a href="../../../../docs/manualpages/Vec/VecLockReadPush.html#VecLockReadPush">VecLockReadPush</a>(x);}
+
+<a name="line28"> 28: </a>  <font color="#4169E1">if</font> (use_gpu_aware_mpi) {
+<a name="line29"> 29: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayReadInPlace.html#VecGetArrayReadInPlace">VecGetArrayReadInPlace</a>(x,&amp;vscat-&gt;xdata);
+<a name="line30"> 30: </a>  } <font color="#4169E1">else</font> {
+<a name="line31"> 31: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line32"> 32: </a>    <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> is_cudatype = <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line33"> 33: </a>    <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompareAny.html#PetscObjectTypeCompareAny">PetscObjectTypeCompareAny</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x,&amp;is_cudatype,<a href="../../../../docs/manualpages/Vec/VECSEQCUDA.html#VECSEQCUDA">VECSEQCUDA</a>,<a href="../../../../docs/manualpages/Vec/VECMPICUDA.html#VECMPICUDA">VECMPICUDA</a>,VECCUDA,<font color="#666666">""</font>);
+<a name="line34"> 34: </a>    <font color="#4169E1">if</font> (is_cudatype) {
+<a name="line35"> 35: </a>      VecCUDAAllocateCheckHost(x);
+<a name="line36"> 36: </a>      <font color="#4169E1">if</font> (x-&gt;offloadmask == <a href="../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_GPU</a>) {
+<a name="line37"> 37: </a>        <font color="#4169E1">if</font> (x-&gt;spptr &amp;&amp; vscat-&gt;spptr) {VecCUDACopyFromGPUSome_Public(x,(PetscCUDAIndices)vscat-&gt;spptr,mode);}
+<a name="line38"> 38: </a>        <font color="#4169E1">else</font> {VecCUDACopyFromGPU(x);}
+<a name="line39"> 39: </a>      }
+<a name="line40"> 40: </a>      vscat-&gt;xdata = *((<a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>**)x-&gt;data);
+<a name="line41"> 41: </a>    } <font color="#4169E1">else</font>
+<a name="line42"> 42: </a><font color="#A020F0">#endif</font>
+<a name="line43"> 43: </a>    {<a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(x,&amp;vscat-&gt;xdata);}
+<a name="line44"> 44: </a>  }
+
+<a name="line46"> 46: </a>  <font color="#4169E1">if</font> (x != y) {
+<a name="line47"> 47: </a>    <font color="#4169E1">if</font> (use_gpu_aware_mpi) {<a href="../../../../docs/manualpages/Vec/VecGetArrayInPlace.html#VecGetArrayInPlace">VecGetArrayInPlace</a>(y,&amp;vscat-&gt;ydata);}
+<a name="line48"> 48: </a>    <font color="#4169E1">else</font> {<a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(y,&amp;vscat-&gt;ydata);}
+<a name="line49"> 49: </a>  } <font color="#4169E1">else</font> vscat-&gt;ydata = (<a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *)vscat-&gt;xdata;
+<a name="line50"> 50: </a>  <a href="../../../../docs/manualpages/Vec/VecLockWriteSet_Private.html#VecLockWriteSet_Private">VecLockWriteSet_Private</a>(y,<a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+
+<a name="line52"> 52: </a>  <font color="#B22222">/* <a href="../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">SCATTER_LOCAL</a> indicates ignoring inter-process communication */</font>
+<a name="line53"> 53: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)data-&gt;sf),&amp;size);
+<a name="line54"> 54: </a>  <font color="#4169E1">if</font> ((mode &amp; <a href="../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">SCATTER_LOCAL</a>) &amp;&amp; size &gt; 1) { <font color="#B22222">/* Lazy creation of data-&gt;lsf since <a href="../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">SCATTER_LOCAL</a> is uncommon */</font>
+<a name="line55"> 55: </a>    <font color="#4169E1">if</font> (!data-&gt;lsf) {PetscSFCreateLocalSF_Private(data-&gt;sf,&amp;data-&gt;lsf);}
+<a name="line56"> 56: </a>    sf = data-&gt;lsf;
+<a name="line57"> 57: </a>  } <font color="#4169E1">else</font> {
+<a name="line58"> 58: </a>    sf = data-&gt;sf;
+<a name="line59"> 59: </a>  }
+
+<a name="line61"> 61: </a>  <font color="#4169E1">if</font> (addv == <a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>)   mop = MPIU_REPLACE;
+<a name="line62"> 62: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (addv == <a href="../../../../docs/manualpages/Sys/ADD_VALUES.html#ADD_VALUES">ADD_VALUES</a>) mop = MPIU_SUM; <font color="#B22222">/* Petsc defines its own MPI datatype and SUM operation for __float128 etc. */</font>
+<a name="line63"> 63: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (addv == <a href="../../../../docs/manualpages/Sys/MAX_VALUES.html#MAX_VALUES">MAX_VALUES</a>) mop = MPIU_MAX;
+<a name="line64"> 64: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (addv == <a href="../../../../docs/manualpages/Sys/MIN_VALUES.html#MIN_VALUES">MIN_VALUES</a>) mop = MPIU_MIN;
+<a name="line65"> 65: </a>  <font color="#4169E1">else</font> <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)sf),PETSC_ERR_SUP,<font color="#666666">"Unsupported <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">InsertMode</a> %D in <a href="../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>/End"</font>,addv);
+
+<a name="line67"> 67: </a>  <font color="#4169E1">if</font> (mode &amp; <a href="../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>) { <font color="#B22222">/* REVERSE indicates leaves to root scatter. Note that x and y are swapped in input */</font>
+<a name="line68"> 68: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFReduceBegin.html#PetscSFReduceBegin">PetscSFReduceBegin</a>(sf,data-&gt;unit,vscat-&gt;xdata,vscat-&gt;ydata,mop);
+<a name="line69"> 69: </a>  } <font color="#4169E1">else</font> { <font color="#B22222">/* FORWARD indicates x to y scatter, where x is root and y is leaf */</font>
+<a name="line70"> 70: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFBcastAndOpBegin.html#PetscSFBcastAndOpBegin">PetscSFBcastAndOpBegin</a>(sf,data-&gt;unit,vscat-&gt;xdata,vscat-&gt;ydata,mop);
+<a name="line71"> 71: </a>  }
+<a name="line72"> 72: </a>  <font color="#4169E1">return</font>(0);
+<a name="line73"> 73: </a>}
+
+<a name="line75"> 75: </a><strong><font color="#4169E1"><a name="VecScatterEnd_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterEnd_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y,<a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">InsertMode</a> addv,<a href="../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">ScatterMode</a> mode)</font></strong>
+<a name="line76"> 76: </a>{
+<a name="line77"> 77: </a>  VecScatter_SF  *data=(VecScatter_SF*)vscat-&gt;data;
+<a name="line78"> 78: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>        sf;
+<a name="line79"> 79: </a>  MPI_Op         mop=MPI_OP_NULL;
+<a name="line80"> 80: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+
+<a name="line84"> 84: </a>  <font color="#B22222">/* <a href="../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">SCATTER_LOCAL</a> indicates ignoring inter-process communication */</font>
+<a name="line85"> 85: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)data-&gt;sf),&amp;size);
+<a name="line86"> 86: </a>  sf = ((mode &amp; <a href="../../../../docs/manualpages/Vec/ScatterMode.html#ScatterMode">SCATTER_LOCAL</a>) &amp;&amp; size &gt; 1) ? data-&gt;lsf : data-&gt;sf;
+
+<a name="line88"> 88: </a>  <font color="#4169E1">if</font> (addv == <a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>)   mop = MPIU_REPLACE;
+<a name="line89"> 89: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (addv == <a href="../../../../docs/manualpages/Sys/ADD_VALUES.html#ADD_VALUES">ADD_VALUES</a>) mop = MPIU_SUM;
+<a name="line90"> 90: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (addv == <a href="../../../../docs/manualpages/Sys/MAX_VALUES.html#MAX_VALUES">MAX_VALUES</a>) mop = MPIU_MAX;
+<a name="line91"> 91: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (addv == <a href="../../../../docs/manualpages/Sys/MIN_VALUES.html#MIN_VALUES">MIN_VALUES</a>) mop = MPIU_MIN;
+<a name="line92"> 92: </a>  <font color="#4169E1">else</font> <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)sf),PETSC_ERR_SUP,<font color="#666666">"Unsupported <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">InsertMode</a> %D in <a href="../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>/End"</font>,addv);
+
+<a name="line94"> 94: </a>  <font color="#4169E1">if</font> (mode &amp; <a href="../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>) { <font color="#B22222">/* reverse scatter sends leaves to roots. Note that x and y are swapped in input */</font>
+<a name="line95"> 95: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFReduceEnd.html#PetscSFReduceEnd">PetscSFReduceEnd</a>(sf,data-&gt;unit,vscat-&gt;xdata,vscat-&gt;ydata,mop);
+<a name="line96"> 96: </a>  } <font color="#4169E1">else</font> { <font color="#B22222">/* forward scatter sends roots to leaves, i.e., x to y */</font>
+<a name="line97"> 97: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFBcastAndOpEnd.html#PetscSFBcastAndOpEnd">PetscSFBcastAndOpEnd</a>(sf,data-&gt;unit,vscat-&gt;xdata,vscat-&gt;ydata,mop);
+<a name="line98"> 98: </a>  }
+
+<a name="line100">100: </a>  <font color="#4169E1">if</font> (x != y) {
+<a name="line101">101: </a>    <font color="#4169E1">if</font> (use_gpu_aware_mpi) {<a href="../../../../docs/manualpages/Vec/VecRestoreArrayReadInPlace.html#VecRestoreArrayReadInPlace">VecRestoreArrayReadInPlace</a>(x,&amp;vscat-&gt;xdata);}
+<a name="line102">102: </a>    <font color="#4169E1">else</font> {<a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(x,&amp;vscat-&gt;xdata);}
+<a name="line103">103: </a>    <a href="../../../../docs/manualpages/Vec/VecLockReadPop.html#VecLockReadPop">VecLockReadPop</a>(x);
+<a name="line104">104: </a>  }
+
+<a name="line106">106: </a>  <font color="#4169E1">if</font> (use_gpu_aware_mpi) {<a href="../../../../docs/manualpages/Vec/VecRestoreArrayInPlace.html#VecRestoreArrayInPlace">VecRestoreArrayInPlace</a>(y,&amp;vscat-&gt;ydata);}
+<a name="line107">107: </a>  <font color="#4169E1">else</font> {<a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(y,&amp;vscat-&gt;ydata);}
+<a name="line108">108: </a>  <a href="../../../../docs/manualpages/Vec/VecLockWriteSet_Private.html#VecLockWriteSet_Private">VecLockWriteSet_Private</a>(y,<a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+
+<a name="line110">110: </a>  <font color="#4169E1">return</font>(0);
+<a name="line111">111: </a>}
+
+<a name="line113">113: </a><strong><font color="#4169E1"><a name="VecScatterCopy_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterCopy_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat,<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> ctx)</font></strong>
+<a name="line114">114: </a>{
+<a name="line115">115: </a>  VecScatter_SF  *data=(VecScatter_SF*)vscat-&gt;data,*out;
+
+<a name="line119">119: </a>  <a href="../../../../docs/manualpages/Sys/PetscMemcpy.html#PetscMemcpy">PetscMemcpy</a>(ctx-&gt;ops,vscat-&gt;ops,<font color="#4169E1">sizeof</font>(vscat-&gt;ops));
+<a name="line120">120: </a>  <a href="../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(ctx,&amp;out);
+<a name="line121">121: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFDuplicate.html#PetscSFDuplicate">PetscSFDuplicate</a>(data-&gt;sf,<a href="../../../../docs/manualpages/PetscSF/PetscSFDuplicateOption.html#PetscSFDuplicateOption">PETSCSF_DUPLICATE_GRAPH</a>,&amp;out-&gt;sf);
+<a name="line122">122: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFSetUp.html#PetscSFSetUp">PetscSFSetUp</a>(out-&gt;sf);
+<a name="line123">123: </a>  <font color="#B22222">/* Do not copy lsf. Build it on demand since it is rarely used */</font>
+
+<a name="line125">125: </a>  out-&gt;bs = data-&gt;bs;
+<a name="line126">126: </a>  <font color="#4169E1">if</font> (out-&gt;bs &gt; 1) {
+<a name="line127">127: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_dup.html#MPI_Type_dup">MPI_Type_dup</a>(data-&gt;unit,&amp;out-&gt;unit); <font color="#B22222">/* Since oldtype is committed, so is newtype, according to MPI */</font>
+<a name="line128">128: </a>  } <font color="#4169E1">else</font> {
+<a name="line129">129: </a>    out-&gt;unit = <a href="../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>;
+<a name="line130">130: </a>  }
+<a name="line131">131: </a>  ctx-&gt;data = (void*)out;
+<a name="line132">132: </a>  <font color="#4169E1">return</font>(0);
+<a name="line133">133: </a>}
+
+<a name="line135">135: </a><strong><font color="#4169E1"><a name="VecScatterDestroy_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterDestroy_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat)</font></strong>
+<a name="line136">136: </a>{
+<a name="line137">137: </a>  VecScatter_SF *data = (VecScatter_SF *)vscat-&gt;data;
+
+<a name="line141">141: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFDestroy.html#PetscSFDestroy">PetscSFDestroy</a>(&amp;data-&gt;sf);
+<a name="line142">142: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFDestroy.html#PetscSFDestroy">PetscSFDestroy</a>(&amp;data-&gt;lsf);
+<a name="line143">143: </a>  <font color="#4169E1">if</font> (data-&gt;bs &gt; 1) {<a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_free.html#MPI_Type_free">MPI_Type_free</a>(&amp;data-&gt;unit);}
+<a name="line144">144: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vscat-&gt;data);
+<a name="line145">145: </a>  <font color="#4169E1">return</font>(0);
+<a name="line146">146: </a>}
+
+<a name="line148">148: </a><strong><font color="#4169E1"><a name="VecScatterView_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterView_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat,<a href="../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line149">149: </a>{
+<a name="line150">150: </a>  VecScatter_SF *data = (VecScatter_SF *)vscat-&gt;data;
+
+<a name="line154">154: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFView.html#PetscSFView">PetscSFView</a>(data-&gt;sf,viewer);
+<a name="line155">155: </a>  <font color="#4169E1">return</font>(0);
+<a name="line156">156: </a>}
+
+<a name="line158">158: </a><font color="#B22222">/* <a href="../../../../docs/manualpages/Vec/VecScatterRemap.html#VecScatterRemap">VecScatterRemap</a> provides a light way to slightly modify a <a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>. Suppose the input vscat scatters</font>
+<a name="line159">159: </a><font color="#B22222">   x[i] to y[j], tomap gives a plan to change vscat to scatter x[tomap[i]] to y[j]. Note that in SF,</font>
+<a name="line160">160: </a><font color="#B22222">   x is roots. That means we need to change incoming stuffs such as bas-&gt;irootloc[].</font>
+<a name="line161">161: </a><font color="#B22222"> */</font>
+<a name="line162">162: </a><strong><font color="#4169E1"><a name="VecScatterRemap_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterRemap_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *tomap,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *frommap)</font></strong>
+<a name="line163">163: </a>{
+<a name="line164">164: </a>  VecScatter_SF  *data = (VecScatter_SF *)vscat-&gt;data;
+<a name="line165">165: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>        sf = data-&gt;sf;
+<a name="line166">166: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,bs = data-&gt;bs;
+<a name="line167">167: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+<a name="line168">168: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      ident = <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>,isbasic,isneighbor;
+<a name="line169">169: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFType.html#PetscSFType">PetscSFType</a>    type;
+<a name="line170">170: </a>  PetscSF_Basic  *bas = NULL;
+
+<a name="line174">174: </a>  <font color="#B22222">/* check if it is an identity map. If it is, do nothing */</font>
+<a name="line175">175: </a>  <font color="#4169E1">if</font> (tomap) {
+<a name="line176">176: </a>    <font color="#4169E1">for</font> (i=0; i&lt;sf-&gt;nroots*bs; i++) {<font color="#4169E1">if</font> (i != tomap[i]) {ident = <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>; <font color="#4169E1">break</font>; } }
+<a name="line177">177: </a>    <font color="#4169E1">if</font> (ident) <font color="#4169E1">return</font>(0);
+<a name="line178">178: </a>  }
+<a name="line179">179: </a>  <font color="#4169E1">if</font> (frommap) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Unable to remap the FROM in scatters yet"</font>);
+<a name="line180">180: </a>  <font color="#4169E1">if</font> (!tomap) <font color="#4169E1">return</font>(0);
+
+<a name="line182">182: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)data-&gt;sf),&amp;size);
+
+<a name="line184">184: </a>  <font color="#B22222">/* Since the indices changed, we must also update the local SF. But we do not do it since</font>
+<a name="line185">185: </a><font color="#B22222">     lsf is rarely used. We just destroy lsf and rebuild it on demand from updated data-&gt;sf.</font>
+<a name="line186">186: </a><font color="#B22222">  */</font>
+<a name="line187">187: </a>  <font color="#4169E1">if</font> (data-&gt;lsf) {<a href="../../../../docs/manualpages/PetscSF/PetscSFDestroy.html#PetscSFDestroy">PetscSFDestroy</a>(&amp;data-&gt;lsf);}
+
+<a name="line189">189: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFGetType.html#PetscSFGetType">PetscSFGetType</a>(sf,&amp;type);
+<a name="line190">190: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)sf,PETSCSFBASIC,&amp;isbasic);
+<a name="line191">191: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)sf,PETSCSFNEIGHBOR,&amp;isneighbor);
+<a name="line192">192: </a>  <font color="#4169E1">if</font> (!isbasic &amp;&amp; !isneighbor) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)sf),PETSC_ERR_SUP,<font color="#666666">"<a href="../../../../docs/manualpages/Vec/VecScatterRemap.html#VecScatterRemap">VecScatterRemap</a> on SF type %s is not supported"</font>,type);
+
+<a name="line194">194: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFSetUp.html#PetscSFSetUp">PetscSFSetUp</a>(sf); <font color="#B22222">/* to bulid sf-&gt;irootloc if SetUp is not yet called */</font>
+
+<a name="line196">196: </a>  <font color="#B22222">/* Root indices are going to be remapped. This is tricky for SF. Root indices are used in sf-&gt;rremote,</font>
+<a name="line197">197: </a><font color="#B22222">    sf-&gt;remote and bas-&gt;irootloc. The latter one is cheap to remap, but the former two are not.</font>
+<a name="line198">198: </a><font color="#B22222">    To remap them, we have to do a bcast from roots to leaves, to let leaves know their updated roots.</font>
+<a name="line199">199: </a><font color="#B22222">    Since <a href="../../../../docs/manualpages/Vec/VecScatterRemap.html#VecScatterRemap">VecScatterRemap</a> is supposed to be a cheap routine to adapt a vecscatter by only changing where</font>
+<a name="line200">200: </a><font color="#B22222">    x[] data is taken, we do not remap sf-&gt;rremote, sf-&gt;remote. The consequence is that operations</font>
+<a name="line201">201: </a><font color="#B22222">    accessing them (such as <a href="../../../../docs/manualpages/PetscSF/PetscSFCompose.html#PetscSFCompose">PetscSFCompose</a>) may get stale info. Considering <a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> does not need</font>
+<a name="line202">202: </a><font color="#B22222">    that complicated SF operations, we do not remap sf-&gt;rremote, sf-&gt;remote, instead we destroy them</font>
+<a name="line203">203: </a><font color="#B22222">    so that code accessing them (if any) will crash (instead of get silent errors). Note that BcastAndOp/Reduce,</font>
+<a name="line204">204: </a><font color="#B22222">    which are used by <a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> and only rely on bas-&gt;irootloc, are updated and correct.</font>
+<a name="line205">205: </a><font color="#B22222">  */</font>
+<a name="line206">206: </a>  sf-&gt;remote = NULL;
+<a name="line207">207: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(sf-&gt;remote_alloc);
+<a name="line208">208: </a>  <font color="#B22222">/* Not easy to free sf-&gt;rremote since it was allocated with <a href="../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(), so just give it crazy values */</font>
+<a name="line209">209: </a>  <font color="#4169E1">for</font> (i=0; i&lt;sf-&gt;roffset[sf-&gt;nranks]; i++) sf-&gt;rremote[i] = PETSC_MIN_INT;
+
+<a name="line211">211: </a>  <font color="#B22222">/* Indices in tomap[] are for each indivisual vector entry. But indices in sf are for each</font>
+<a name="line212">212: </a><font color="#B22222">     block in the vector. So before the remapping, we have to expand indices in sf by bs, and</font>
+<a name="line213">213: </a><font color="#B22222">     after the remapping, we have to shrink them back.</font>
+<a name="line214">214: </a><font color="#B22222">   */</font>
+<a name="line215">215: </a>  bas = (PetscSF_Basic*)sf-&gt;data;
+<a name="line216">216: </a>  <font color="#4169E1">for</font> (i=0; i&lt;bas-&gt;ioffset[bas-&gt;niranks]; i++) bas-&gt;irootloc[i] = tomap[bas-&gt;irootloc[i]*bs]/bs;
+<a name="line217">217: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line218">218: </a>  <font color="#B22222">/* Free the irootloc copy on device. We allocate a new copy and get the updated value on demand. See PetscSFGetRootIndicesWithMemType_Basic() */</font>
+<a name="line219">219: </a>  <font color="#4169E1">if</font> (bas-&gt;irootloc_d) {cudaError_t err = cudaFree(bas-&gt;irootloc_d);CHKERRCUDA(err);bas-&gt;irootloc_d=NULL;}
+<a name="line220">220: </a><font color="#A020F0">#endif</font>
+<a name="line221">221: </a>  <font color="#B22222">/* Destroy and then rebuild root packing optimizations since indices are changed */</font>
+<a name="line222">222: </a>  PetscSFPackDestroyOptimizations_Basic(sf);
+<a name="line223">223: </a>  PetscSFPackSetupOptimizations_Basic(sf);
+<a name="line224">224: </a>  <font color="#4169E1">return</font>(0);
+<a name="line225">225: </a>}
+
+<a name="line227">227: </a><strong><font color="#4169E1"><a name="VecScatterGetRemoteCount_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterGetRemoteCount_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat,<a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> send,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *num_procs,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *num_entries)</font></strong>
+<a name="line228">228: </a>{
+<a name="line229">229: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line230">230: </a>  VecScatter_SF     *data = (VecScatter_SF *)vscat-&gt;data;
+<a name="line231">231: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>           sf = data-&gt;sf;
+<a name="line232">232: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          nranks,remote_start;
+<a name="line233">233: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>       rank;
+<a name="line234">234: </a>  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *offset;
+<a name="line235">235: </a>  const <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a> *ranks;
+
+<a name="line238">238: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)sf),&amp;rank);
+
+<a name="line240">240: </a>  <font color="#B22222">/* This routine is mainly used for <a href="../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a>'s Mvctx. In Mvctx, we scatter an MPI vector x to a sequential vector lvec.</font>
+<a name="line241">241: </a><font color="#B22222">     Remember x is roots and lvec is leaves. 'send' means roots to leaves communication. If 'send' is true, we need to</font>
+<a name="line242">242: </a><font color="#B22222">     get info about which ranks this processor needs to send to. In other words, we need to call <a href="../../../../docs/manualpages/PetscSF/PetscSFGetLeafRanks.html#PetscSFGetLeafRanks">PetscSFGetLeafRanks</a>().</font>
+<a name="line243">243: </a><font color="#B22222">     If send is false, we do the opposite, calling <a href="../../../../docs/manualpages/PetscSF/PetscSFGetRootRanks.html#PetscSFGetRootRanks">PetscSFGetRootRanks</a>().</font>
+<a name="line244">244: </a><font color="#B22222">  */</font>
+<a name="line245">245: </a>  <font color="#4169E1">if</font> (send) {<a href="../../../../docs/manualpages/PetscSF/PetscSFGetLeafRanks.html#PetscSFGetLeafRanks">PetscSFGetLeafRanks</a>(sf,&amp;nranks,&amp;ranks,&amp;offset,NULL);}
+<a name="line246">246: </a>  <font color="#4169E1">else</font> {<a href="../../../../docs/manualpages/PetscSF/PetscSFGetRootRanks.html#PetscSFGetRootRanks">PetscSFGetRootRanks</a>(sf,&amp;nranks,&amp;ranks,&amp;offset,NULL,NULL);}
+<a name="line247">247: </a>  <font color="#4169E1">if</font> (nranks) {
+<a name="line248">248: </a>    remote_start = (rank == ranks[0])? 1 : 0;
+<a name="line249">249: </a>    <font color="#4169E1">if</font> (num_procs)   *num_procs   = nranks - remote_start;
+<a name="line250">250: </a>    <font color="#4169E1">if</font> (num_entries) *num_entries = offset[nranks] - offset[remote_start];
+<a name="line251">251: </a>  } <font color="#4169E1">else</font> {
+<a name="line252">252: </a>    <font color="#4169E1">if</font> (num_procs)   *num_procs   = 0;
+<a name="line253">253: </a>    <font color="#4169E1">if</font> (num_entries) *num_entries = 0;
+<a name="line254">254: </a>  }
+<a name="line255">255: </a>  <font color="#4169E1">return</font>(0);
+<a name="line256">256: </a>}
+
+<a name="line258">258: </a><strong><font color="#4169E1"><a name="VecScatterGetRemote_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterGetRemote_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat,<a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> send,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *n,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> **starts,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> **indices,const <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a> **procs,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *bs)</font></strong>
+<a name="line259">259: </a>{
+<a name="line260">260: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line261">261: </a>  VecScatter_SF     *data = (VecScatter_SF *)vscat-&gt;data;
+<a name="line262">262: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>           sf = data-&gt;sf;
+<a name="line263">263: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          nranks,remote_start;
+<a name="line264">264: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>       rank;
+<a name="line265">265: </a>  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *offset,*location;
+<a name="line266">266: </a>  const <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a> *ranks;
+
+<a name="line269">269: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)sf),&amp;rank);
+
+<a name="line271">271: </a>  <font color="#4169E1">if</font> (send) {<a href="../../../../docs/manualpages/PetscSF/PetscSFGetLeafRanks.html#PetscSFGetLeafRanks">PetscSFGetLeafRanks</a>(sf,&amp;nranks,&amp;ranks,&amp;offset,&amp;location);}
+<a name="line272">272: </a>  <font color="#4169E1">else</font> {<a href="../../../../docs/manualpages/PetscSF/PetscSFGetRootRanks.html#PetscSFGetRootRanks">PetscSFGetRootRanks</a>(sf,&amp;nranks,&amp;ranks,&amp;offset,&amp;location,NULL);}
+
+<a name="line274">274: </a>  <font color="#4169E1">if</font> (nranks) {
+<a name="line275">275: </a>    remote_start = (rank == ranks[0])? 1 : 0;
+<a name="line276">276: </a>    <font color="#4169E1">if</font> (n)       *n       = nranks - remote_start;
+<a name="line277">277: </a>    <font color="#4169E1">if</font> (starts)  *starts  = &amp;offset[remote_start];
+<a name="line278">278: </a>    <font color="#4169E1">if</font> (indices) *indices = location; <font color="#B22222">/* not &amp;location[offset[remote_start]]. Starts[0] may point to the middle of indices[] */</font>
+<a name="line279">279: </a>    <font color="#4169E1">if</font> (procs)   *procs   = &amp;ranks[remote_start];
+<a name="line280">280: </a>  } <font color="#4169E1">else</font> {
+<a name="line281">281: </a>    <font color="#4169E1">if</font> (n)       *n       = 0;
+<a name="line282">282: </a>    <font color="#4169E1">if</font> (starts)  *starts  = NULL;
+<a name="line283">283: </a>    <font color="#4169E1">if</font> (indices) *indices = NULL;
+<a name="line284">284: </a>    <font color="#4169E1">if</font> (procs)   *procs   = NULL;
+<a name="line285">285: </a>  }
+
+<a name="line287">287: </a>  <font color="#4169E1">if</font> (bs) *bs = 1;
+<a name="line288">288: </a>  <font color="#4169E1">return</font>(0);
+<a name="line289">289: </a>}
+
+<a name="line291">291: </a><strong><font color="#4169E1"><a name="VecScatterGetRemoteOrdered_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterGetRemoteOrdered_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat,<a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> send,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *n,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> **starts,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> **indices,const <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a> **procs,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *bs)</font></strong>
+<a name="line292">292: </a>{
+
+<a name="line296">296: </a>  VecScatterGetRemote_SF(vscat,send,n,starts,indices,procs,bs);
+<a name="line297">297: </a>  <font color="#4169E1">return</font>(0);
+<a name="line298">298: </a>}
+
+<a name="line300">300: </a><strong><font color="#4169E1"><a name="VecScatterRestoreRemote_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterRestoreRemote_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat,<a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> send,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *n,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> **starts,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> **indices,const <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a> **procs,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *bs)</font></strong>
+<a name="line301">301: </a>{
+<a name="line303">303: </a>  <font color="#4169E1">if</font> (starts)   *starts  = NULL;
+<a name="line304">304: </a>  <font color="#4169E1">if</font> (indices)  *indices = NULL;
+<a name="line305">305: </a>  <font color="#4169E1">if</font> (procs)    *procs   = NULL;
+<a name="line306">306: </a>  <font color="#4169E1">return</font>(0);
+<a name="line307">307: </a>}
+
+<a name="line309">309: </a><strong><font color="#4169E1"><a name="VecScatterRestoreRemoteOrdered_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterRestoreRemoteOrdered_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat,<a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> send,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *n,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> **starts,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> **indices,const <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a> **procs,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *bs)</font></strong>
+<a name="line310">310: </a>{
+<a name="line313">313: </a>  VecScatterRestoreRemote_SF(vscat,send,n,starts,indices,procs,bs);
+<a name="line314">314: </a>  <font color="#4169E1">return</font>(0);
+<a name="line315">315: </a>}
+
+<a name="line317">317: </a><font color="#4169E1">typedef</font> <font color="#4169E1">enum</font> {IS_INVALID, IS_GENERAL, IS_BLOCK, IS_STRIDE} ISTypeID;
+
+<a name="line319">319: </a><strong><font color="#4169E1"><a name="ISGetTypeID_Private"></a>PETSC_STATIC_INLINE <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> ISGetTypeID_Private(<a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> is,ISTypeID *id)</font></strong>
+<a name="line320">320: </a>{
+<a name="line322">322: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      same;
+
+<a name="line325">325: </a>  *id  = IS_INVALID;
+<a name="line326">326: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)is,ISGENERAL,&amp;same);
+<a name="line327">327: </a>  <font color="#4169E1">if</font> (same) {*id = IS_GENERAL; <font color="#4169E1">goto</font> functionend;}
+<a name="line328">328: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)is,ISBLOCK,&amp;same);
+<a name="line329">329: </a>  <font color="#4169E1">if</font> (same) {*id = IS_BLOCK; <font color="#4169E1">goto</font> functionend;}
+<a name="line330">330: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)is,ISSTRIDE,&amp;same);
+<a name="line331">331: </a>  <font color="#4169E1">if</font> (same) {*id = IS_STRIDE; <font color="#4169E1">goto</font> functionend;}
+<a name="line332">332: </a><strong><font color="#FF0000">functionend:</font></strong>
+<a name="line333">333: </a>  <font color="#4169E1">return</font>(0);
+<a name="line334">334: </a>}
+
+<a name="line336">336: </a><strong><font color="#4169E1"><a name="VecScatterSetUp_SF"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterSetUp_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> vscat)</font></strong>
+<a name="line337">337: </a>{
+<a name="line339">339: </a>  VecScatter_SF  *data;
+<a name="line340">340: </a>  <a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>       xcomm,ycomm,bigcomm;
+<a name="line341">341: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            x=vscat-&gt;from_v,y=vscat-&gt;to_v,xx,yy;
+<a name="line342">342: </a>  <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>             ix=vscat-&gt;from_is,iy=vscat-&gt;to_is,ixx,iyy;
+<a name="line343">343: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    xcommsize,ycommsize,rank;
+<a name="line344">344: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,n,N,nroots,nleaves,*ilocal,xstart,ystart,ixsize,iysize,xlen,ylen;
+<a name="line345">345: </a>  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *xindices,*yindices;
+<a name="line346">346: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFNode.html#PetscSFNode">PetscSFNode</a>    *iremote;
+<a name="line347">347: </a>  <a href="../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a>    xlayout,ylayout;
+<a name="line348">348: </a>  ISTypeID       ixid,iyid;
+<a name="line349">349: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       bs,bsx,bsy,min,max,m[2],ixfirst,ixstep,iyfirst,iystep;
+<a name="line350">350: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      can_do_block_opt=<a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+
+<a name="line353">353: </a>  <a href="../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(vscat,&amp;data);
+<a name="line354">354: </a>  data-&gt;bs   = 1; <font color="#B22222">/* default, no blocking */</font>
+<a name="line355">355: </a>  data-&gt;unit = <a href="../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>;
+
+<a name="line357">357: </a>  <font color="#B22222">/*</font>
+<a name="line358">358: </a><font color="#B22222">   Let P and S stand for parallel and sequential vectors respectively. There are four combinations of vecscatters: PtoP, PtoS,</font>
+<a name="line359">359: </a><font color="#B22222">   StoP and StoS. The assumption of <a href="../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> ix,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y,<a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a> iy,<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> *newctx) is: if x is parallel, then ix</font>
+<a name="line360">360: </a><font color="#B22222">   contains global indices of x. If x is sequential, ix contains local indices of x. Similarily for y and iy.</font>
+
+<a name="line362">362: </a><font color="#B22222">   SF builds around concepts of local leaves and remote roots. We treat source vector x as roots and destination vector y as</font>
+<a name="line363">363: </a><font color="#B22222">   leaves. A PtoS scatter can be naturally mapped to SF. We transform PtoP and StoP to PtoS, and treat StoS as trivial PtoS.</font>
+<a name="line364">364: </a><font color="#B22222">  */</font>
+<a name="line365">365: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x,&amp;xcomm);
+<a name="line366">366: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)y,&amp;ycomm);
+<a name="line367">367: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(xcomm,&amp;xcommsize);
+<a name="line368">368: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(ycomm,&amp;ycommsize);
+
+<a name="line370">370: </a>  <font color="#B22222">/* NULL ix or iy in <a href="../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(x,ix,y,iy,newctx) has special meaning. Recover them for these cases */</font>
+<a name="line371">371: </a>  <font color="#4169E1">if</font> (!ix) {
+<a name="line372">372: </a>    <font color="#4169E1">if</font> (xcommsize &gt; 1 &amp;&amp; ycommsize == 1) { <font color="#B22222">/* PtoS: null ix means the whole x will be scattered to each seq y */</font>
+<a name="line373">373: </a>      <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(x,&amp;N);
+<a name="line374">374: </a>      <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,N,0,1,&amp;ix);
+<a name="line375">375: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* PtoP, StoP or StoS: null ix means the whole local part of x will be scattered */</font>
+<a name="line376">376: </a>      <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(x,&amp;n);
+<a name="line377">377: </a>      <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(x,&amp;xstart,NULL);
+<a name="line378">378: </a>      <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,n,xstart,1,&amp;ix);
+<a name="line379">379: </a>    }
+<a name="line380">380: </a>  }
+
+<a name="line382">382: </a>  <font color="#4169E1">if</font> (!iy) {
+<a name="line383">383: </a>    <font color="#4169E1">if</font> (xcommsize == 1 &amp;&amp; ycommsize &gt; 1) { <font color="#B22222">/* StoP: null iy means the whole y will be scattered to from each seq x */</font>
+<a name="line384">384: </a>      <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(y,&amp;N);
+<a name="line385">385: </a>      <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,N,0,1,&amp;iy);
+<a name="line386">386: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* PtoP, StoP or StoS: null iy means the whole local part of y will be scattered to */</font>
+<a name="line387">387: </a>      <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(y,&amp;n);
+<a name="line388">388: </a>      <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(y,&amp;ystart,NULL);
+<a name="line389">389: </a>      <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,n,ystart,1,&amp;iy);
+<a name="line390">390: </a>    }
+<a name="line391">391: </a>  }
+
+<a name="line393">393: </a>  <font color="#B22222">/* Do error checking immediately after we have non-empty ix, iy */</font>
+<a name="line394">394: </a>  <a href="../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(ix,&amp;ixsize);
+<a name="line395">395: </a>  <a href="../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(iy,&amp;iysize);
+<a name="line396">396: </a>  <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(x,&amp;xlen);
+<a name="line397">397: </a>  <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(y,&amp;ylen);
+<a name="line398">398: </a>  <font color="#4169E1">if</font> (ixsize != iysize) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_SIZ,<font color="#666666">"Scatter sizes of ix and iy don't match locally"</font>);
+<a name="line399">399: </a>  <a href="../../../../docs/manualpages/IS/ISGetMinMax.html#ISGetMinMax">ISGetMinMax</a>(ix,&amp;min,&amp;max);
+<a name="line400">400: </a>  <font color="#4169E1">if</font> (min &lt; 0 || max &gt;= xlen) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Scatter indices in ix are out of range"</font>);
+<a name="line401">401: </a>  <a href="../../../../docs/manualpages/IS/ISGetMinMax.html#ISGetMinMax">ISGetMinMax</a>(iy,&amp;min,&amp;max);
+<a name="line402">402: </a>  <font color="#4169E1">if</font> (min &lt; 0 || max &gt;= ylen) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Scatter indices in iy are out of range"</font>);
+
+<a name="line404">404: </a>  <font color="#B22222">/* Extract info about ix, iy for further test */</font>
+<a name="line405">405: </a>  ISGetTypeID_Private(ix,&amp;ixid);
+<a name="line406">406: </a>  ISGetTypeID_Private(iy,&amp;iyid);
+<a name="line407">407: </a>  <font color="#4169E1">if</font> (ixid == IS_BLOCK)       {<a href="../../../../docs/manualpages/IS/ISGetBlockSize.html#ISGetBlockSize">ISGetBlockSize</a>(ix,&amp;bsx);}
+<a name="line408">408: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (ixid == IS_STRIDE) {<a href="../../../../docs/manualpages/IS/ISStrideGetInfo.html#ISStrideGetInfo">ISStrideGetInfo</a>(ix,&amp;ixfirst,&amp;ixstep);}
+
+<a name="line410">410: </a>  <font color="#4169E1">if</font> ( iyid == IS_BLOCK)      {<a href="../../../../docs/manualpages/IS/ISGetBlockSize.html#ISGetBlockSize">ISGetBlockSize</a>(iy,&amp;bsy);}
+<a name="line411">411: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (iyid == IS_STRIDE) {<a href="../../../../docs/manualpages/IS/ISStrideGetInfo.html#ISStrideGetInfo">ISStrideGetInfo</a>(iy,&amp;iyfirst,&amp;iystep);}
+
+<a name="line413">413: </a>  <font color="#B22222">/* Check if a PtoS is special ToAll/ToZero scatters, which can be results of <a href="../../../../docs/manualpages/Vec/VecScatterCreateToAll.html#VecScatterCreateToAll">VecScatterCreateToAll</a>/Zero.</font>
+<a name="line414">414: </a><font color="#B22222">     ToAll means a whole MPI vector is copied to a seq vector on every process. ToZero means a whole MPI</font>
+<a name="line415">415: </a><font color="#B22222">     vector is copied to a seq vector on rank 0 and other processes do nothing(i.e.,they input empty ix,iy).</font>
+
+<a name="line417">417: </a><font color="#B22222">     We can optimize these scatters with MPI collectives. We can also avoid costly analysis used for general scatters.</font>
+<a name="line418">418: </a><font color="#B22222">  */</font>
+<a name="line419">419: </a>  <font color="#4169E1">if</font> (xcommsize &gt; 1 &amp;&amp; ycommsize == 1) { <font color="#B22222">/* Ranks do not diverge at this if-test */</font>
+<a name="line420">420: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    pattern[2] = {0, 0}; <font color="#B22222">/* A boolean array with pattern[0] for allgather-like (ToAll) and pattern[1] for gather-like (ToZero) */</font>
+<a name="line421">421: </a>    <a href="../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a> map;
+
+<a name="line423">423: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(xcomm,&amp;rank);
+<a name="line424">424: </a>    <a href="../../../../docs/manualpages/Vec/VecGetLayout.html#VecGetLayout">VecGetLayout</a>(x,&amp;map);
+<a name="line425">425: </a>    <font color="#4169E1">if</font> (!rank) {
+<a name="line426">426: </a>      <font color="#4169E1">if</font> (ixid == IS_STRIDE &amp;&amp; iyid == IS_STRIDE &amp;&amp; ixsize == xlen &amp;&amp; ixfirst == 0 &amp;&amp; ixstep == 1 &amp;&amp; iyfirst == 0 &amp;&amp; iystep == 1) {
+<a name="line427">427: </a>        <font color="#B22222">/* Rank 0 scatters the whole mpi x to seq y, so it is either a ToAll or a ToZero candidate in its view */</font>
+<a name="line428">428: </a>        pattern[0] = pattern[1] = 1;
+<a name="line429">429: </a>      }
+<a name="line430">430: </a>    } <font color="#4169E1">else</font> {
+<a name="line431">431: </a>      <font color="#4169E1">if</font> (ixid == IS_STRIDE &amp;&amp; iyid == IS_STRIDE &amp;&amp; ixsize == xlen &amp;&amp; ixfirst == 0 &amp;&amp; ixstep == 1 &amp;&amp; iyfirst == 0 &amp;&amp; iystep == 1) {
+<a name="line432">432: </a>        <font color="#B22222">/* Other ranks also scatter the whole mpi x to seq y, so it is a ToAll candidate in their view */</font>
+<a name="line433">433: </a>        pattern[0] = 1;
+<a name="line434">434: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (ixsize == 0) {
+<a name="line435">435: </a>        <font color="#B22222">/* Other ranks do nothing, so it is a ToZero candiate */</font>
+<a name="line436">436: </a>        pattern[1] = 1;
+<a name="line437">437: </a>      }
+<a name="line438">438: </a>    }
+
+<a name="line440">440: </a>    <font color="#B22222">/* One stone (the expensive allreduce) two birds: pattern[] tells if it is ToAll or ToZero */</font>
+<a name="line441">441: </a>    <a href="../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(MPI_IN_PLACE,pattern,2,<a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,MPI_LAND,xcomm);
+
+<a name="line443">443: </a>    <font color="#4169E1">if</font> (pattern[0] || pattern[1]) {
+<a name="line444">444: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSFCreate.html#PetscSFCreate">PetscSFCreate</a>(xcomm,&amp;data-&gt;sf);
+<a name="line445">445: </a>      <a href="../../../../docs/manualpages/PetscSF/PetscSFSetGraphWithPattern.html#PetscSFSetGraphWithPattern">PetscSFSetGraphWithPattern</a>(data-&gt;sf,map,pattern[0] ? <a href="../../../../docs/manualpages/PetscSF/PetscSFPattern.html#PetscSFPattern">PETSCSF_PATTERN_ALLGATHER</a> : <a href="../../../../docs/manualpages/PetscSF/PetscSFPattern.html#PetscSFPattern">PETSCSF_PATTERN_GATHER</a>);
+<a name="line446">446: </a>      <font color="#4169E1">goto</font> functionend; <font color="#B22222">/* No further analysis needed. What a big win! */</font>
+<a name="line447">447: </a>    }
+<a name="line448">448: </a>  }
+
+<a name="line450">450: </a>  <font color="#B22222">/* Continue ...</font>
+<a name="line451">451: </a><font color="#B22222">     Do block optimization by taking advantage of high level info available in ix, iy.</font>
+<a name="line452">452: </a><font color="#B22222">     The block optimization is valid when all of the following conditions are met:</font>
+<a name="line453">453: </a><font color="#B22222">     1) ix, iy are blocked or can be blocked (i.e., strided with step=1);</font>
+<a name="line454">454: </a><font color="#B22222">     2) ix, iy have the same block size;</font>
+<a name="line455">455: </a><font color="#B22222">     3) all processors agree on one block size;</font>
+<a name="line456">456: </a><font color="#B22222">     4) no blocks span more than one process;</font>
+<a name="line457">457: </a><font color="#B22222">   */</font>
+<a name="line458">458: </a>  bigcomm = (xcommsize == 1) ? ycomm : xcomm;
+
+<a name="line460">460: </a>  <font color="#B22222">/* Processors could go through different path in this if-else test */</font>
+<a name="line461">461: </a>  m[0] = m[1] = PETSC_MPI_INT_MIN;
+<a name="line462">462: </a>  <font color="#4169E1">if</font> (ixid == IS_BLOCK &amp;&amp; iyid == IS_BLOCK) {
+<a name="line463">463: </a>    m[0] = <a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(bsx,bsy);
+<a name="line464">464: </a>    m[1] = -<a href="../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(bsx,bsy);
+<a name="line465">465: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (ixid == IS_BLOCK  &amp;&amp; iyid == IS_STRIDE &amp;&amp; iystep==1 &amp;&amp; iyfirst%bsx==0) {
+<a name="line466">466: </a>    m[0] = bsx;
+<a name="line467">467: </a>    m[1] = -bsx;
+<a name="line468">468: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (ixid == IS_STRIDE &amp;&amp; iyid == IS_BLOCK  &amp;&amp; ixstep==1 &amp;&amp; ixfirst%bsy==0) {
+<a name="line469">469: </a>    m[0] = bsy;
+<a name="line470">470: </a>    m[1] = -bsy;
+<a name="line471">471: </a>  }
+<a name="line472">472: </a>  <font color="#B22222">/* Get max and min of bsx,bsy over all processes in one allreduce */</font>
+<a name="line473">473: </a>  <a href="../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(MPI_IN_PLACE,m,2,<a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,MPI_MAX,bigcomm);
+<a name="line474">474: </a>  max = m[0]; min = -m[1];
+
+<a name="line476">476: </a>  <font color="#B22222">/* Since we used allreduce above, all ranks will have the same min and max. min==max</font>
+<a name="line477">477: </a><font color="#B22222">     implies all ranks have the same bs. Do further test to see if local vectors are dividable</font>
+<a name="line478">478: </a><font color="#B22222">     by bs on ALL ranks. If they are, we are ensured that no blocks span more than one processor.</font>
+<a name="line479">479: </a><font color="#B22222">   */</font>
+<a name="line480">480: </a>  <font color="#4169E1">if</font> (min == max &amp;&amp; min &gt; 1) {
+<a name="line481">481: </a>    <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(x,&amp;xlen);
+<a name="line482">482: </a>    <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(y,&amp;ylen);
+<a name="line483">483: </a>    m[0] = xlen%min;
+<a name="line484">484: </a>    m[1] = ylen%min;
+<a name="line485">485: </a>    <a href="../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(MPI_IN_PLACE,m,2,<a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,MPI_LOR,bigcomm);
+<a name="line486">486: </a>    <font color="#4169E1">if</font> (!m[0] &amp;&amp; !m[1]) can_do_block_opt = <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line487">487: </a>  }
+
+<a name="line489">489: </a>  <font color="#B22222">/* If can_do_block_opt, then shrink x, y, ix and iy by bs to get xx, yy, ixx and iyy, whose indices</font>
+<a name="line490">490: </a><font color="#B22222">     and layout are actually used in building SF. Suppose blocked ix representing {0,1,2,6,7,8} has</font>
+<a name="line491">491: </a><font color="#B22222">     indices {0,2} and bs=3, then ixx = {0,2}; suppose strided iy={3,4,5,6,7,8}, then iyy={1,2}.</font>
+
+<a name="line493">493: </a><font color="#B22222">     xx is a little special. If x is seq, then xx is the concatenation of seq x's on ycomm. In this way,</font>
+<a name="line494">494: </a><font color="#B22222">     we can treat PtoP and StoP uniformly as PtoS.</font>
+<a name="line495">495: </a><font color="#B22222">   */</font>
+<a name="line496">496: </a>  <font color="#4169E1">if</font> (can_do_block_opt) {
+<a name="line497">497: </a>    const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *indices;
+
+<a name="line499">499: </a>    data-&gt;bs = bs = min;
+<a name="line500">500: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_contiguous.html#MPI_Type_contiguous">MPI_Type_contiguous</a>(bs,<a href="../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>,&amp;data-&gt;unit);
+<a name="line501">501: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_commit.html#MPI_Type_commit">MPI_Type_commit</a>(&amp;data-&gt;unit);
+
+<a name="line503">503: </a>    <font color="#B22222">/* Shrink x and ix */</font>
+<a name="line504">504: </a>    <a href="../../../../docs/manualpages/Vec/VecCreateMPIWithArray.html#VecCreateMPIWithArray">VecCreateMPIWithArray</a>(bigcomm,1,xlen/bs,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,NULL,&amp;xx); <font color="#B22222">/* We only care xx's layout */</font>
+<a name="line505">505: </a>    <font color="#4169E1">if</font> (ixid == IS_BLOCK) {
+<a name="line506">506: </a>      <a href="../../../../docs/manualpages/IS/ISBlockGetIndices.html#ISBlockGetIndices">ISBlockGetIndices</a>(ix,&amp;indices);
+<a name="line507">507: </a>      <a href="../../../../docs/manualpages/IS/ISBlockGetLocalSize.html#ISBlockGetLocalSize">ISBlockGetLocalSize</a>(ix,&amp;ixsize);
+<a name="line508">508: </a>      <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,ixsize,indices,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;ixx);
+<a name="line509">509: </a>      <a href="../../../../docs/manualpages/IS/ISBlockRestoreIndices.html#ISBlockRestoreIndices">ISBlockRestoreIndices</a>(ix,&amp;indices);
+<a name="line510">510: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* ixid == IS_STRIDE */</font>
+<a name="line511">511: </a>      <a href="../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(ix,&amp;ixsize);
+<a name="line512">512: </a>      <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,ixsize/bs,ixfirst/bs,1,&amp;ixx);
+<a name="line513">513: </a>    }
+
+<a name="line515">515: </a>    <font color="#B22222">/* Shrink y and iy */</font>
+<a name="line516">516: </a>    <a href="../../../../docs/manualpages/Vec/VecCreateMPIWithArray.html#VecCreateMPIWithArray">VecCreateMPIWithArray</a>(ycomm,1,ylen/bs,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,NULL,&amp;yy);
+<a name="line517">517: </a>    <font color="#4169E1">if</font> (iyid == IS_BLOCK) {
+<a name="line518">518: </a>      <a href="../../../../docs/manualpages/IS/ISBlockGetIndices.html#ISBlockGetIndices">ISBlockGetIndices</a>(iy,&amp;indices);
+<a name="line519">519: </a>      <a href="../../../../docs/manualpages/IS/ISBlockGetLocalSize.html#ISBlockGetLocalSize">ISBlockGetLocalSize</a>(iy,&amp;iysize);
+<a name="line520">520: </a>      <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,iysize,indices,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;iyy);
+<a name="line521">521: </a>      <a href="../../../../docs/manualpages/IS/ISBlockRestoreIndices.html#ISBlockRestoreIndices">ISBlockRestoreIndices</a>(iy,&amp;indices);
+<a name="line522">522: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* iyid == IS_STRIDE */</font>
+<a name="line523">523: </a>      <a href="../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(iy,&amp;iysize);
+<a name="line524">524: </a>      <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,iysize/bs,iyfirst/bs,1,&amp;iyy);
+<a name="line525">525: </a>    }
+<a name="line526">526: </a>  } <font color="#4169E1">else</font> {
+<a name="line527">527: </a>    ixx = ix;
+<a name="line528">528: </a>    iyy = iy;
+<a name="line529">529: </a>    yy  = y;
+<a name="line530">530: </a>    <font color="#4169E1">if</font> (xcommsize == 1) {<a href="../../../../docs/manualpages/Vec/VecCreateMPIWithArray.html#VecCreateMPIWithArray">VecCreateMPIWithArray</a>(bigcomm,1,xlen,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,NULL,&amp;xx);} <font color="#4169E1">else</font> xx = x;
+<a name="line531">531: </a>  }
+
+<a name="line533">533: </a>  <font color="#B22222">/* Now it is ready to build SF with preprocessed (xx, yy) and (ixx, iyy) */</font>
+<a name="line534">534: </a>  <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(ixx,&amp;xindices);
+<a name="line535">535: </a>  <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(iyy,&amp;yindices);
+<a name="line536">536: </a>  <a href="../../../../docs/manualpages/Vec/VecGetLayout.html#VecGetLayout">VecGetLayout</a>(xx,&amp;xlayout);
+
+<a name="line538">538: </a>  <font color="#4169E1">if</font> (ycommsize &gt; 1) {
+<a name="line539">539: </a>    <font color="#B22222">/* PtoP or StoP */</font>
+
+<a name="line541">541: </a>    <font color="#B22222">/* Below is a piece of complex code with a very simple goal: move global index pairs (xindices[i], yindices[i]),</font>
+<a name="line542">542: </a><font color="#B22222">       to owner process of yindices[i] according to ylayout, i = 0..n.</font>
+
+<a name="line544">544: </a><font color="#B22222">       I did it through a temp sf, but later I thought the old design was inefficient and also distorted log view.</font>
+<a name="line545">545: </a><font color="#B22222">       We want to mape one <a href="../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>() call to one <a href="../../../../docs/manualpages/PetscSF/PetscSFCreate.html#PetscSFCreate">PetscSFCreate</a>() call. The old design mapped to three</font>
+<a name="line546">546: </a><font color="#B22222">       <a href="../../../../docs/manualpages/PetscSF/PetscSFCreate.html#PetscSFCreate">PetscSFCreate</a>() calls. This code is on critical path of <a href="../../../../docs/manualpages/Vec/VecScatterSetUp.html#VecScatterSetUp">VecScatterSetUp</a> and is used by every <a href="../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>.</font>
+<a name="line547">547: </a><font color="#B22222">       So I commented it out and did another optimized implementation. The commented code is left here for reference.</font>
+<a name="line548">548: </a><font color="#B22222">     */</font>
+<a name="line549">549: </a><font color="#A020F0">#if 0</font>
+<a name="line550">550: </a>    const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *degree;
+<a name="line551">551: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a>        tmpsf;
+<a name="line552">552: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       inedges=0,*leafdata,*rootdata;
+
+<a name="line554">554: </a>    <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(xx,&amp;xstart,NULL);
+<a name="line555">555: </a>    <a href="../../../../docs/manualpages/Vec/VecGetLayout.html#VecGetLayout">VecGetLayout</a>(yy,&amp;ylayout);
+<a name="line556">556: </a>    <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(yy,&amp;ystart,NULL);
+
+<a name="line558">558: </a>    <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(yy,&amp;nroots);
+<a name="line559">559: </a>    <a href="../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(iyy,&amp;nleaves);
+<a name="line560">560: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(nleaves,&amp;iremote,nleaves*2,&amp;leafdata);
+
+<a name="line562">562: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nleaves; i++) {
+<a name="line563">563: </a>      <a href="../../../../docs/manualpages/IS/PetscLayoutFindOwnerIndex.html#PetscLayoutFindOwnerIndex">PetscLayoutFindOwnerIndex</a>(ylayout,yindices[i],&amp;iremote[i].rank,&amp;iremote[i].index);
+<a name="line564">564: </a>      leafdata[2*i]   = yindices[i];
+<a name="line565">565: </a>      leafdata[2*i+1] = (xcommsize &gt; 1)? xindices[i] : xindices[i] + xstart;
+<a name="line566">566: </a>    }
+
+<a name="line568">568: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFCreate.html#PetscSFCreate">PetscSFCreate</a>(ycomm,&amp;tmpsf);
+<a name="line569">569: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFSetGraph.html#PetscSFSetGraph">PetscSFSetGraph</a>(tmpsf,nroots,nleaves,NULL,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_USE_POINTER</a>,iremote,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_USE_POINTER</a>);
+
+<a name="line571">571: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFComputeDegreeBegin.html#PetscSFComputeDegreeBegin">PetscSFComputeDegreeBegin</a>(tmpsf,&amp;degree);
+<a name="line572">572: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFComputeDegreeEnd.html#PetscSFComputeDegreeEnd">PetscSFComputeDegreeEnd</a>(tmpsf,&amp;degree);
+
+<a name="line574">574: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nroots; i++) inedges += degree[i];
+<a name="line575">575: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(inedges*2,&amp;rootdata);
+<a name="line576">576: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFGatherBegin.html#PetscSFGatherBegin">PetscSFGatherBegin</a>(tmpsf,MPIU_2INT,leafdata,rootdata);
+<a name="line577">577: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFGatherEnd.html#PetscSFGatherEnd">PetscSFGatherEnd</a>(tmpsf,MPIU_2INT,leafdata,rootdata);
+
+<a name="line579">579: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(iremote,leafdata);
+<a name="line580">580: </a>    <a href="../../../../docs/manualpages/PetscSF/PetscSFDestroy.html#PetscSFDestroy">PetscSFDestroy</a>(&amp;tmpsf);
+
+<a name="line582">582: </a>    <font color="#B22222">/* rootdata contains global index pairs (i, j). j's are owned by the current process, but i's can point to anywhere.</font>
+<a name="line583">583: </a><font color="#B22222">       We convert j to local, and convert i to (rank, index). In the end, we get an PtoS suitable for building SF.</font>
+<a name="line584">584: </a><font color="#B22222">     */</font>
+<a name="line585">585: </a>    nleaves = inedges;
+<a name="line586">586: </a>    <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(xx,&amp;nroots);
+<a name="line587">587: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nleaves,&amp;ilocal);
+<a name="line588">588: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nleaves,&amp;iremote);
+
+<a name="line590">590: </a>    <font color="#4169E1">for</font> (i=0; i&lt;inedges; i++) {
+<a name="line591">591: </a>      ilocal[i] = rootdata[2*i] - ystart; <font color="#B22222">/* covert y's global index to local index */</font>
+<a name="line592">592: </a>      <a href="../../../../docs/manualpages/IS/PetscLayoutFindOwnerIndex.html#PetscLayoutFindOwnerIndex">PetscLayoutFindOwnerIndex</a>(xlayout,rootdata[2*i+1],&amp;iremote[i].rank,&amp;iremote[i].index); <font color="#B22222">/* convert x's global index to (rank, index) */</font>
+<a name="line593">593: </a>    }
+<a name="line594">594: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rootdata);
+<a name="line595">595: </a><font color="#A020F0">#else</font>
+<a name="line596">596: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       j,k,n,disp,rlentotal,*sstart,*xindices_sorted,*yindices_sorted;
+<a name="line597">597: </a>    const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *yrange;
+<a name="line598">598: </a>    <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    nsend,nrecv,nreq,count,yrank,*slens,*rlens,*sendto,*recvfrom,tag1,tag2;
+<a name="line599">599: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *rxindices,*ryindices;
+<a name="line600">600: </a>    MPI_Request    *reqs,*sreqs,*rreqs;
+
+<a name="line602">602: </a>    <font color="#B22222">/* Sorting makes code simpler, faster and also helps getting rid of many O(P) arrays, which hurt scalability at large scale</font>
+<a name="line603">603: </a><font color="#B22222">       yindices_sorted - sorted yindices</font>
+<a name="line604">604: </a><font color="#B22222">       xindices_sorted - xindices sorted along with yindces</font>
+<a name="line605">605: </a><font color="#B22222">     */</font>
+<a name="line606">606: </a>    <a href="../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(ixx,&amp;n); <font color="#B22222">/*ixx, iyy have the same local size */</font>
+<a name="line607">607: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(n,&amp;xindices_sorted,n,&amp;yindices_sorted);
+<a name="line608">608: </a>    <a href="../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(xindices_sorted,xindices,n);
+<a name="line609">609: </a>    <a href="../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(yindices_sorted,yindices,n);
+<a name="line610">610: </a>    <a href="../../../../docs/manualpages/Sys/PetscSortIntWithArray.html#PetscSortIntWithArray">PetscSortIntWithArray</a>(n,yindices_sorted,xindices_sorted);
+<a name="line611">611: </a>    <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(xx,&amp;xstart,NULL);
+<a name="line612">612: </a>    <font color="#4169E1">if</font> (xcommsize == 1) {<font color="#4169E1">for</font> (i=0; i&lt;n; i++) xindices_sorted[i] += xstart;} <font color="#B22222">/* Convert to global indices */</font>
+
+<a name="line614">614: </a>    <font color="#B22222">/*=============================================================================</font>
+<a name="line615">615: </a><font color="#B22222">             Calculate info about messages I need to send</font>
+<a name="line616">616: </a><font color="#B22222">      =============================================================================*/</font>
+<a name="line617">617: </a>    <font color="#B22222">/* nsend    - number of non-empty messages to send</font>
+<a name="line618">618: </a><font color="#B22222">       sendto   - [nsend] ranks I will send messages to</font>
+<a name="line619">619: </a><font color="#B22222">       sstart   - [nsend+1] sstart[i] is the start index in xsindices_sorted[] I send to rank sendto[i]</font>
+<a name="line620">620: </a><font color="#B22222">       slens    - [ycommsize] I want to send slens[i] entries to rank i.</font>
+<a name="line621">621: </a><font color="#B22222">     */</font>
+<a name="line622">622: </a>    <a href="../../../../docs/manualpages/Vec/VecGetLayout.html#VecGetLayout">VecGetLayout</a>(yy,&amp;ylayout);
+<a name="line623">623: </a>    <a href="../../../../docs/manualpages/IS/PetscLayoutGetRanges.html#PetscLayoutGetRanges">PetscLayoutGetRanges</a>(ylayout,&amp;yrange);
+<a name="line624">624: </a>    <a href="../../../../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(ycommsize,&amp;slens); <font color="#B22222">/* The only O(P) array in this algorithm */</font>
+
+<a name="line626">626: </a>    i = j = nsend = 0;
+<a name="line627">627: </a>    <font color="#4169E1">while</font> (i &lt; n) {
+<a name="line628">628: </a>      <font color="#4169E1">if</font> (yindices_sorted[i] &gt;= yrange[j+1]) { <font color="#B22222">/* If i-th index is out of rank j's bound */</font>
+<a name="line629">629: </a>        <font color="#4169E1">do</font> {j++;} <font color="#4169E1">while</font> (yindices_sorted[i] &gt;= yrange[j+1] &amp;&amp; j &lt; ycommsize); <font color="#B22222">/* Increase j until i-th index falls in rank j's bound */</font>
+<a name="line630">630: </a>        <font color="#4169E1">if</font> (j == ycommsize) <a href="../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_PLIB,<font color="#666666">"Index %D not owned by any process, upper bound %D"</font>,yindices_sorted[i],yrange[ycommsize]);
+<a name="line631">631: </a>      }
+<a name="line632">632: </a>      i++;
+<a name="line633">633: </a>      <font color="#4169E1">if</font> (!slens[j]++) nsend++;
+<a name="line634">634: </a>    }
+
+<a name="line636">636: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(nsend+1,&amp;sstart,nsend,&amp;sendto);
+
+<a name="line638">638: </a>    sstart[0] = 0;
+<a name="line639">639: </a>    <font color="#4169E1">for</font> (i=j=0; i&lt;ycommsize; i++) {
+<a name="line640">640: </a>      <font color="#4169E1">if</font> (slens[i]) {
+<a name="line641">641: </a>        sendto[j]   = (<a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>)i;
+<a name="line642">642: </a>        sstart[j+1] = sstart[j] + slens[i];
+<a name="line643">643: </a>        j++;
+<a name="line644">644: </a>      }
+<a name="line645">645: </a>    }
+
+<a name="line647">647: </a>    <font color="#B22222">/*=============================================================================</font>
+<a name="line648">648: </a><font color="#B22222">      Calculate the reverse info about messages I will recv</font>
+<a name="line649">649: </a><font color="#B22222">      =============================================================================*/</font>
+<a name="line650">650: </a>    <font color="#B22222">/* nrecv     - number of messages I will recv</font>
+<a name="line651">651: </a><font color="#B22222">       recvfrom  - [nrecv] ranks I recv from</font>
+<a name="line652">652: </a><font color="#B22222">       rlens     - [nrecv] I will recv rlens[i] entries from rank recvfrom[i]</font>
+<a name="line653">653: </a><font color="#B22222">       rlentotal - sum of rlens[]</font>
+<a name="line654">654: </a><font color="#B22222">       rxindices - [rlentotal] recv buffer for xindices_sorted</font>
+<a name="line655">655: </a><font color="#B22222">       ryindices - [rlentotal] recv buffer for yindices_sorted</font>
+<a name="line656">656: </a><font color="#B22222">     */</font>
+<a name="line657">657: </a>    <a href="../../../../docs/manualpages/Sys/PetscGatherNumberOfMessages.html#PetscGatherNumberOfMessages">PetscGatherNumberOfMessages</a>(ycomm,NULL,slens,&amp;nrecv);
+<a name="line658">658: </a>    <a href="../../../../docs/manualpages/Sys/PetscGatherMessageLengths.html#PetscGatherMessageLengths">PetscGatherMessageLengths</a>(ycomm,nsend,nrecv,slens,&amp;recvfrom,&amp;rlens);
+<a name="line659">659: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(slens); <font color="#B22222">/* Free the O(P) array ASAP */</font>
+<a name="line660">660: </a>    rlentotal = 0; <font color="#4169E1">for</font> (i=0; i&lt;nrecv; i++) rlentotal += rlens[i];
+
+<a name="line662">662: </a>    <font color="#B22222">/*=============================================================================</font>
+<a name="line663">663: </a><font color="#B22222">      Communicate with processors in recvfrom[] to populate rxindices and ryindices</font>
+<a name="line664">664: </a><font color="#B22222">      ============================================================================*/</font>
+<a name="line665">665: </a>    <a href="../../../../docs/manualpages/Sys/PetscCommGetNewTag.html#PetscCommGetNewTag">PetscCommGetNewTag</a>(ycomm,&amp;tag1);
+<a name="line666">666: </a>    <a href="../../../../docs/manualpages/Sys/PetscCommGetNewTag.html#PetscCommGetNewTag">PetscCommGetNewTag</a>(ycomm,&amp;tag2);
+<a name="line667">667: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(rlentotal,&amp;rxindices,rlentotal,&amp;ryindices);
+<a name="line668">668: </a>    <a href="../../../../docs/manualpages/Sys/PetscMPIIntCast.html#PetscMPIIntCast">PetscMPIIntCast</a>((nsend+nrecv)*2,&amp;nreq);
+<a name="line669">669: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nreq,&amp;reqs);
+<a name="line670">670: </a>    sreqs = reqs;
+<a name="line671">671: </a>    rreqs = reqs + nsend*2;
+
+<a name="line673">673: </a>    <font color="#4169E1">for</font> (i=disp=0; i&lt;nrecv; i++) {
+<a name="line674">674: </a>      count = rlens[i];
+<a name="line675">675: </a>      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Irecv.html#MPI_Irecv">MPI_Irecv</a>(rxindices+disp,count,<a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,recvfrom[i],tag1,ycomm,rreqs+i);
+<a name="line676">676: </a>      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Irecv.html#MPI_Irecv">MPI_Irecv</a>(ryindices+disp,count,<a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,recvfrom[i],tag2,ycomm,rreqs+nrecv+i);
+<a name="line677">677: </a>      disp += rlens[i];
+<a name="line678">678: </a>    }
+
+<a name="line680">680: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nsend; i++) {
+<a name="line681">681: </a>      <a href="../../../../docs/manualpages/Sys/PetscMPIIntCast.html#PetscMPIIntCast">PetscMPIIntCast</a>(sstart[i+1]-sstart[i],&amp;count);
+<a name="line682">682: </a>      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Isend.html#MPI_Isend">MPI_Isend</a>(xindices_sorted+sstart[i],count,<a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,sendto[i],tag1,ycomm,sreqs+i);
+<a name="line683">683: </a>      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Isend.html#MPI_Isend">MPI_Isend</a>(yindices_sorted+sstart[i],count,<a href="../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,sendto[i],tag2,ycomm,sreqs+nsend+i);
+<a name="line684">684: </a>    }
+<a name="line685">685: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Waitall.html#MPI_Waitall">MPI_Waitall</a>(nreq,reqs,MPI_STATUS_IGNORE);
+
+<a name="line687">687: </a>    <font color="#B22222">/* Transform <a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> into SF */</font>
+<a name="line688">688: </a>    nleaves = rlentotal;
+<a name="line689">689: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nleaves,&amp;ilocal);
+<a name="line690">690: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nleaves,&amp;iremote);
+<a name="line691">691: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(ycomm,&amp;yrank);
+<a name="line692">692: </a>    <font color="#4169E1">for</font> (i=disp=0; i&lt;nrecv; i++) {
+<a name="line693">693: </a>      <font color="#4169E1">for</font> (j=0; j&lt;rlens[i]; j++) {
+<a name="line694">694: </a>        k         = disp + j; <font color="#B22222">/* k-th index pair */</font>
+<a name="line695">695: </a>        ilocal[k] = ryindices[k] - yrange[yrank]; <font color="#B22222">/* Convert y's global index to local index */</font>
+<a name="line696">696: </a>        <a href="../../../../docs/manualpages/IS/PetscLayoutFindOwnerIndex.html#PetscLayoutFindOwnerIndex">PetscLayoutFindOwnerIndex</a>(xlayout,rxindices[k],&amp;iremote[k].rank,&amp;iremote[k].index); <font color="#B22222">/* Convert x's global index to (rank, index) */</font>
+<a name="line697">697: </a>      }
+<a name="line698">698: </a>      disp += rlens[i];
+<a name="line699">699: </a>    }
+
+<a name="line701">701: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(sstart,sendto);
+<a name="line702">702: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(slens);
+<a name="line703">703: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rlens);
+<a name="line704">704: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(recvfrom);
+<a name="line705">705: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(reqs);
+<a name="line706">706: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(rxindices,ryindices);
+<a name="line707">707: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(xindices_sorted,yindices_sorted);
+<a name="line708">708: </a><font color="#A020F0">#endif</font>
+<a name="line709">709: </a>  } <font color="#4169E1">else</font> {
+<a name="line710">710: </a>    <font color="#B22222">/* PtoS or StoS */</font>
+<a name="line711">711: </a>    <a href="../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(iyy,&amp;nleaves);
+<a name="line712">712: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nleaves,&amp;ilocal);
+<a name="line713">713: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nleaves,&amp;iremote);
+<a name="line714">714: </a>    <a href="../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(ilocal,yindices,nleaves);
+<a name="line715">715: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nleaves; i++) {<a href="../../../../docs/manualpages/IS/PetscLayoutFindOwnerIndex.html#PetscLayoutFindOwnerIndex">PetscLayoutFindOwnerIndex</a>(xlayout,xindices[i],&amp;iremote[i].rank,&amp;iremote[i].index);}
+<a name="line716">716: </a>  }
+
+<a name="line718">718: </a>  <font color="#B22222">/* MUST build SF on xx's comm, which is not necessarily identical to yy's comm.</font>
+<a name="line719">719: </a><font color="#B22222">     In SF's view, xx contains the roots (i.e., the remote) and iremote[].rank are ranks in xx's comm.</font>
+<a name="line720">720: </a><font color="#B22222">     yy contains leaves, which are local and can be thought as part of <a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>. */</font>
+<a name="line721">721: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFCreate.html#PetscSFCreate">PetscSFCreate</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)xx),&amp;data-&gt;sf);
+<a name="line722">722: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFSetFromOptions.html#PetscSFSetFromOptions">PetscSFSetFromOptions</a>(data-&gt;sf);
+<a name="line723">723: </a>  <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(xx,&amp;nroots);
+<a name="line724">724: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFSetGraph.html#PetscSFSetGraph">PetscSFSetGraph</a>(data-&gt;sf,nroots,nleaves,ilocal,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>,iremote,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>); <font color="#B22222">/* Give ilocal/iremote to petsc and no need to free them here */</font>
+
+<a name="line726">726: </a>  <font color="#B22222">/* Free memory no longer needed */</font>
+<a name="line727">727: </a>  <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(ixx,&amp;xindices);
+<a name="line728">728: </a>  <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(iyy,&amp;yindices);
+<a name="line729">729: </a>  <font color="#4169E1">if</font> (can_do_block_opt) {
+<a name="line730">730: </a>    <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;xx);
+<a name="line731">731: </a>    <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;yy);
+<a name="line732">732: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;ixx);
+<a name="line733">733: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;iyy);
+<a name="line734">734: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (xcommsize == 1) {
+<a name="line735">735: </a>    <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;xx);
+<a name="line736">736: </a>  }
+
+<a name="line738">738: </a><strong><font color="#FF0000">functionend:</font></strong>
+<a name="line739">739: </a>  <font color="#4169E1">if</font> (!vscat-&gt;from_is) {<a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;ix);}
+<a name="line740">740: </a>  <font color="#4169E1">if</font> (!vscat-&gt;to_is  ) {<a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;iy);}
+
+<a name="line742">742: </a>  <font color="#B22222">/* vecscatter uses eager setup */</font>
+<a name="line743">743: </a>  <a href="../../../../docs/manualpages/PetscSF/PetscSFSetUp.html#PetscSFSetUp">PetscSFSetUp</a>(data-&gt;sf);
+
+<a name="line745">745: </a>  vscat-&gt;data                      = (void*)data;
+<a name="line746">746: </a>  vscat-&gt;ops-&gt;begin                = VecScatterBegin_SF;
+<a name="line747">747: </a>  vscat-&gt;ops-&gt;end                  = VecScatterEnd_SF;
+<a name="line748">748: </a>  vscat-&gt;ops-&gt;remap                = VecScatterRemap_SF;
+<a name="line749">749: </a>  vscat-&gt;ops-&gt;copy                 = VecScatterCopy_SF;
+<a name="line750">750: </a>  vscat-&gt;ops-&gt;destroy              = VecScatterDestroy_SF;
+<a name="line751">751: </a>  vscat-&gt;ops-&gt;view                 = VecScatterView_SF;
+<a name="line752">752: </a>  vscat-&gt;ops-&gt;getremotecount       = VecScatterGetRemoteCount_SF;
+<a name="line753">753: </a>  vscat-&gt;ops-&gt;getremote            = VecScatterGetRemote_SF;
+<a name="line754">754: </a>  vscat-&gt;ops-&gt;getremoteordered     = VecScatterGetRemoteOrdered_SF;
+<a name="line755">755: </a>  vscat-&gt;ops-&gt;restoreremote        = VecScatterRestoreRemote_SF;
+<a name="line756">756: </a>  vscat-&gt;ops-&gt;restoreremoteordered = VecScatterRestoreRemoteOrdered_SF;
+<a name="line757">757: </a>  <font color="#4169E1">return</font>(0);
+<a name="line758">758: </a>}
+
+<a name="line760">760: </a><strong><font color="#4169E1"><a name="VecScatterCreate_SF"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecScatterCreate_SF(<a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> ctx)</font></strong>
+<a name="line761">761: </a>{
+
+<a name="line765">765: </a>  ctx-&gt;ops-&gt;setup = VecScatterSetUp_SF;
+<a name="line766">766: </a>  PetscObjectChangeTypeName((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ctx,VECSCATTERSF);
+<a name="line767">767: </a>  <a href="../../../../docs/manualpages/Profiling/PetscInfo.html#PetscInfo">PetscInfo</a>(ctx,<font color="#666666">"Using StarForest for vector scatter\n"</font>);
+<a name="line768">768: </a>  <font color="#4169E1">return</font>(0);
+<a name="line769">769: </a>}
+</pre>
+</body>
+
+</html>

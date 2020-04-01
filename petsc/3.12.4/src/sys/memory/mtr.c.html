@@ -1,0 +1,917 @@
+<center><a href="mtr.c">Actual source code: mtr.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/sys/memory/mtr.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:31:06+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/sys/memory/mtr.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a><font color="#B22222">/*</font>
+<a name="line3">  3: </a><font color="#B22222">     Interface to malloc() and free(). This code allows for logging of memory usage and some error checking</font>
+<a name="line4">  4: </a><font color="#B22222">*/</font>
+<a name="line5">  5: </a> #include <A href="../../../include/petscsys.h.html">&lt;petscsys.h&gt;</A>
+<a name="line6">  6: </a> #include <A href="../../../include/petscviewer.h.html">&lt;petscviewer.h&gt;</A>
+<a name="line7">  7: </a><font color="#A020F0">#if defined(PETSC_HAVE_MALLOC_H)</font>
+<a name="line8">  8: </a><font color="#A020F0">#include &lt;malloc.h&gt;</font>
+<a name="line9">  9: </a><font color="#A020F0">#endif</font>
+
+<a name="line11"> 11: </a><font color="#B22222">/*</font>
+<a name="line12"> 12: </a><font color="#B22222">     These are defined in mal.c and ensure that malloced space is <a href="../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> aligned</font>
+<a name="line13"> 13: </a><font color="#B22222">*/</font>
+<a name="line14"> 14: </a><strong><font color="#4169E1">PETSC_EXTERN <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscMallocAlign(size_t,<a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>,int,const char[],const char[],void**)</font></strong>;
+<a name="line15"> 15: </a><strong><font color="#4169E1">PETSC_EXTERN <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFreeAlign(void*,int,const char[],const char[])</font></strong>;
+<a name="line16"> 16: </a><strong><font color="#4169E1">PETSC_EXTERN <a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscReallocAlign(size_t,int,const char[],const char[],void**)</font></strong>;
+
+<a name="line18"> 18: </a><strong><font color="#228B22">#define CLASSID_VALUE  ((<a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>) 0xf0e0d0c9)</font></strong>
+<a name="line19"> 19: </a><strong><font color="#228B22">#define ALREADY_FREED  ((<a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>) 0x0f0e0d9c)</font></strong>
+
+<a name="line21"> 21: </a><font color="#B22222">/*  this is the header put at the beginning of each malloc() using for tracking allocated space and checking of allocated space heap */</font>
+<a name="line22"> 22: </a><font color="#4169E1"><a name="_trSPACE"></a>typedef struct _trSPACE </font>{
+<a name="line23"> 23: </a>  size_t          size;
+<a name="line24"> 24: </a>  int             id;
+<a name="line25"> 25: </a>  int             lineno;
+<a name="line26"> 26: </a>  const char      *filename;
+<a name="line27"> 27: </a>  const char      *functionname;
+<a name="line28"> 28: </a>  <a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>    classid;
+<a name="line29"> 29: </a><font color="#A020F0">#if defined(PETSC_USE_DEBUG)</font>
+<a name="line30"> 30: </a>  PetscStack      stack;
+<a name="line31"> 31: </a><font color="#A020F0">#endif</font>
+<a name="line32"> 32: </a>  <font color="#4169E1">struct _trSPACE</font> *next,*prev;
+<a name="line33"> 33: </a>} TRSPACE;
+
+<a name="line35"> 35: </a><font color="#B22222">/* HEADER_BYTES is the number of bytes in a <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>() header.</font>
+<a name="line36"> 36: </a><font color="#B22222">   It is sizeof(trSPACE) padded to be a multiple of PETSC_MEMALIGN.</font>
+<a name="line37"> 37: </a><font color="#B22222">*/</font>
+<a name="line38"> 38: </a><strong><font color="#228B22">#define HEADER_BYTES  ((sizeof(TRSPACE)+(PETSC_MEMALIGN-1)) &amp; ~(PETSC_MEMALIGN-1))</font></strong>
+
+<a name="line40"> 40: </a><font color="#B22222">/* This union is used to insure that the block passed to the user retains</font>
+<a name="line41"> 41: </a><font color="#B22222">   a minimum alignment of PETSC_MEMALIGN.</font>
+<a name="line42"> 42: </a><font color="#B22222">*/</font>
+<a name="line43"> 43: </a><font color="#4169E1">typedef</font> <font color="#4169E1">union</font> {
+<a name="line44"> 44: </a>  TRSPACE sp;
+<a name="line45"> 45: </a>  char    v[HEADER_BYTES];
+<a name="line46"> 46: </a>} TrSPACE;
+
+<a name="line48"> 48: </a><strong><font color="#228B22">#define MAXTRMAXMEMS 50</font></strong>
+<a name="line49"> 49: </a>static size_t    TRallocated          = 0;
+<a name="line50"> 50: </a>static int       TRfrags              = 0;
+<a name="line51"> 51: </a>static TRSPACE   *TRhead              = NULL;
+<a name="line52"> 52: </a>static int       TRid                 = 0;
+<a name="line53"> 53: </a>static <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> TRdebugLevel         = <a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line54"> 54: </a>static <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> TRdebugIintializenan = <a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line55"> 55: </a>static size_t    TRMaxMem             = 0;
+<a name="line56"> 56: </a>static int       NumTRMaxMems         = 0;
+<a name="line57"> 57: </a>static size_t    TRMaxMems[MAXTRMAXMEMS];
+<a name="line58"> 58: </a>static int       TRMaxMemsEvents[MAXTRMAXMEMS];
+<a name="line59"> 59: </a><font color="#B22222">/*</font>
+<a name="line60"> 60: </a><font color="#B22222">      Arrays to log information on mallocs for <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>()</font>
+<a name="line61"> 61: </a><font color="#B22222">*/</font>
+<a name="line62"> 62: </a>static int        PetscLogMallocMax       = 10000;
+<a name="line63"> 63: </a>static int        PetscLogMalloc          = -1;
+<a name="line64"> 64: </a>static size_t     PetscLogMallocThreshold = 0;
+<a name="line65"> 65: </a>static size_t     *PetscLogMallocLength;
+<a name="line66"> 66: </a>static const char **PetscLogMallocFile,**PetscLogMallocFunction;
+
+<a name="line68"> 68: </a><font color="#B22222">/*@C</font>
+<a name="line69"> 69: </a><font color="#B22222">   <a href="../../../docs/manualpages/Sys/PetscMallocValidate.html#PetscMallocValidate">PetscMallocValidate</a> - Test the memory for corruption.  This can be called at any time between <a href="../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>() and <a href="../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>()</font>
+
+<a name="line71"> 71: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line72"> 72: </a><font color="#B22222">+  line - line number where call originated.</font>
+<a name="line73"> 73: </a><font color="#B22222">.  function - name of function calling</font>
+<a name="line74"> 74: </a><font color="#B22222">-  file - file where function is</font>
+
+<a name="line76"> 76: </a><font color="#B22222">   Return value:</font>
+<a name="line77"> 77: </a><font color="#B22222">   The number of errors detected.</font>
+
+<a name="line79"> 79: </a><font color="#B22222">   Options Database:.</font>
+<a name="line80"> 80: </a><font color="#B22222">+  -malloc_test - turns this feature on when PETSc was not configured with --with-debugging=0</font>
+<a name="line81"> 81: </a><font color="#B22222">-  -malloc_debug - turns this feature on anytime</font>
+
+<a name="line83"> 83: </a><font color="#B22222">   Output Effect:</font>
+<a name="line84"> 84: </a><font color="#B22222">   Error messages are written to stdout.</font>
+
+<a name="line86"> 86: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line88"> 88: </a><font color="#B22222">   Notes:</font>
+<a name="line89"> 89: </a><font color="#B22222">    This is only run if <a href="../../../docs/manualpages/Sys/PetscMallocSetDebug.html#PetscMallocSetDebug">PetscMallocSetDebug</a>() has been called which is set by -malloc_test (if debugging is turned on) or -malloc_debug (any time)</font>
+
+<a name="line91"> 91: </a><font color="#B22222">    You should generally use <a href="../../../docs/manualpages/Sys/CHKMEMQ.html#CHKMEMQ">CHKMEMQ</a> as a short cut for calling this  routine.</font>
+
+<a name="line93"> 93: </a><font color="#B22222">    The Fortran calling sequence is simply <a href="../../../docs/manualpages/Sys/PetscMallocValidate.html#PetscMallocValidate">PetscMallocValidate</a>(ierr)</font>
+
+<a name="line95"> 95: </a><font color="#B22222">   No output is generated if there are no problems detected.</font>
+
+<a name="line97"> 97: </a><font color="#B22222">   Developers Note:</font>
+<a name="line98"> 98: </a><font color="#B22222">     Uses the flg TRdebugLevel (set as the first argument to <a href="../../../docs/manualpages/Sys/PetscMallocSetDebug.html#PetscMallocSetDebug">PetscMallocSetDebug</a>()) to determine if it should run</font>
+
+<a name="line100">100: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/CHKMEMQ.html#CHKMEMQ">CHKMEMQ</a></font>
+
+<a name="line102">102: </a><font color="#B22222">@*/</font>
+<a name="line103">103: </a><strong><font color="#4169E1"><a name="PetscMallocValidate"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../docs/manualpages/Sys/PetscMallocValidate.html#PetscMallocValidate">PetscMallocValidate</a>(int line,const char function[],const char file[])</font></strong>
+<a name="line104">104: </a>{
+<a name="line105">105: </a>  TRSPACE      *head,*lasthead;
+<a name="line106">106: </a>  char         *a;
+<a name="line107">107: </a>  <a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a> *nend;
+
+<a name="line109">109: </a>  <font color="#4169E1">if</font> (!TRdebugLevel) <font color="#4169E1">return</font> 0;
+<a name="line111">111: </a>  head = TRhead; lasthead = NULL;
+<a name="line112">112: </a>  <font color="#4169E1">while</font> (head) {
+<a name="line113">113: </a>    <font color="#4169E1">if</font> (head-&gt;classid != CLASSID_VALUE) {
+<a name="line114">114: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"<a href="../../../docs/manualpages/Sys/PetscMallocValidate.html#PetscMallocValidate">PetscMallocValidate</a>: error detected at  %s() line %d in %s\n"</font>,function,line,file);
+<a name="line115">115: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Memory at address %p is corrupted\n"</font>,head);
+<a name="line116">116: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Probably write past beginning or end of array\n"</font>);
+<a name="line117">117: </a>      <font color="#4169E1">if</font> (lasthead) (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Last intact block allocated in %s() line %d in %s\n"</font>,lasthead-&gt;functionname,lasthead-&gt;lineno,lasthead-&gt;filename);
+<a name="line118">118: </a>      <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEMC,<font color="#666666">" "</font>);
+<a name="line119">119: </a>    }
+<a name="line120">120: </a>    a    = (char*)(((TrSPACE*)head) + 1);
+<a name="line121">121: </a>    nend = (<a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>*)(a + head-&gt;size);
+<a name="line122">122: </a>    <font color="#4169E1">if</font> (*nend != CLASSID_VALUE) {
+<a name="line123">123: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"<a href="../../../docs/manualpages/Sys/PetscMallocValidate.html#PetscMallocValidate">PetscMallocValidate</a>: error detected at %s() line %d in %s\n"</font>,function,line,file);
+<a name="line124">124: </a>      <font color="#4169E1">if</font> (*nend == ALREADY_FREED) {
+<a name="line125">125: </a>        (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Memory [id=%d(%.0f)] at address %p already freed\n"</font>,head-&gt;id,(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)head-&gt;size,a);
+<a name="line126">126: </a>        <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEMC,<font color="#666666">" "</font>);
+<a name="line127">127: </a>      } <font color="#4169E1">else</font> {
+<a name="line128">128: </a>        (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Memory [id=%d(%.0f)] at address %p is corrupted (probably write past end of array)\n"</font>,head-&gt;id,(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)head-&gt;size,a);
+<a name="line129">129: </a>        (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Memory originally allocated in %s() line %d in %s\n"</font>,head-&gt;functionname,head-&gt;lineno,head-&gt;filename);
+<a name="line130">130: </a>        <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEMC,<font color="#666666">" "</font>);
+<a name="line131">131: </a>      }
+<a name="line132">132: </a>    }
+<a name="line133">133: </a>    lasthead = head;
+<a name="line134">134: </a>    head     = head-&gt;next;
+<a name="line135">135: </a>  }
+<a name="line136">136: </a>  <font color="#4169E1">return</font>(0);
+<a name="line137">137: </a>}
+
+<a name="line139">139: </a><font color="#B22222">/*</font>
+<a name="line140">140: </a><font color="#B22222">    PetscTrMallocDefault - Malloc with tracing.</font>
+
+<a name="line142">142: </a><font color="#B22222">    Input Parameters:</font>
+<a name="line143">143: </a><font color="#B22222">+   a   - number of bytes to allocate</font>
+<a name="line144">144: </a><font color="#B22222">.   lineno - line number where used.  Use __LINE__ for this</font>
+<a name="line145">145: </a><font color="#B22222">-   filename  - file name where used.  Use __FILE__ for this</font>
+
+<a name="line147">147: </a><font color="#B22222">    Returns:</font>
+<a name="line148">148: </a><font color="#B22222">    double aligned pointer to requested storage, or null if not  available.</font>
+<a name="line149">149: </a><font color="#B22222"> */</font>
+<a name="line150">150: </a><strong><font color="#4169E1"><a name="PetscTrMallocDefault"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  PetscTrMallocDefault(size_t a,<a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> clear,int lineno,const char function[],const char filename[],void **result)</font></strong>
+<a name="line151">151: </a>{
+<a name="line152">152: </a>  TRSPACE        *head;
+<a name="line153">153: </a>  char           *inew;
+<a name="line154">154: </a>  size_t         nsize;
+
+<a name="line158">158: </a>  <font color="#B22222">/* Do not try to handle empty blocks */</font>
+<a name="line159">159: </a>  <font color="#4169E1">if</font> (!a) { *result = NULL; <font color="#4169E1">return</font>(0); }
+
+<a name="line161">161: </a>  <a href="../../../docs/manualpages/Sys/PetscMallocValidate.html#PetscMallocValidate">PetscMallocValidate</a>(lineno,function,filename); <font color="#4169E1">if</font> (ierr) <a href="../../../docs/manualpages/Sys/PetscFunctionReturn.html#PetscFunctionReturn">PetscFunctionReturn</a>(ierr);
+
+<a name="line163">163: </a>  nsize = (a + (PETSC_MEMALIGN-1)) &amp; ~(PETSC_MEMALIGN-1);
+<a name="line164">164: </a>  PetscMallocAlign(nsize+<font color="#4169E1">sizeof</font>(TrSPACE)+<font color="#4169E1">sizeof</font>(<a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>),clear,lineno,function,filename,(void**)&amp;inew);
+
+<a name="line166">166: </a>  head  = (TRSPACE*)inew;
+<a name="line167">167: </a>  inew += <font color="#4169E1">sizeof</font>(TrSPACE);
+
+<a name="line169">169: </a>  <font color="#4169E1">if</font> (TRhead) TRhead-&gt;prev = head;
+<a name="line170">170: </a>  head-&gt;next   = TRhead;
+<a name="line171">171: </a>  TRhead       = head;
+<a name="line172">172: </a>  head-&gt;prev   = NULL;
+<a name="line173">173: </a>  head-&gt;size   = nsize;
+<a name="line174">174: </a>  head-&gt;id     = TRid;
+<a name="line175">175: </a>  head-&gt;lineno = lineno;
+
+<a name="line177">177: </a>  head-&gt;filename                 = filename;
+<a name="line178">178: </a>  head-&gt;functionname             = function;
+<a name="line179">179: </a>  head-&gt;classid                  = CLASSID_VALUE;
+<a name="line180">180: </a>  *(<a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>*)(inew + nsize) = CLASSID_VALUE;
+
+<a name="line182">182: </a>  TRallocated += nsize;
+<a name="line183">183: </a>  <font color="#4169E1">if</font> (TRallocated &gt; TRMaxMem) TRMaxMem = TRallocated;
+<a name="line184">184: </a>  <font color="#4169E1">if</font> (PetscLogMemory) {
+<a name="line185">185: </a>    <a href="../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> i;
+<a name="line186">186: </a>    <font color="#4169E1">for</font> (i=0; i&lt;NumTRMaxMems; i++) {
+<a name="line187">187: </a>      <font color="#4169E1">if</font> (TRallocated &gt; TRMaxMems[i]) TRMaxMems[i] = TRallocated;
+<a name="line188">188: </a>    }
+<a name="line189">189: </a>  }
+<a name="line190">190: </a>  TRfrags++;
+
+<a name="line192">192: </a><font color="#A020F0">#if defined(PETSC_USE_DEBUG)</font>
+<a name="line193">193: </a>  <font color="#4169E1">if</font> (PetscStackActive()) {
+<a name="line194">194: </a>    PetscStackCopy(petscstack,&amp;head-&gt;stack);
+<a name="line196">196: </a>    head-&gt;stack.line[head-&gt;stack.currentsize-2] = lineno;
+<a name="line197">197: </a>  } <font color="#4169E1">else</font> {
+<a name="line198">198: </a>    head-&gt;stack.currentsize = 0;
+<a name="line199">199: </a>  }
+<a name="line200">200: </a><font color="#A020F0">#if defined(PETSC_USE_REAL_SINGLE) || defined(PETSC_USE_REAL_DOUBLE)</font>
+<a name="line201">201: </a>  <font color="#4169E1">if</font> (!clear &amp;&amp; TRdebugIintializenan) {
+<a name="line202">202: </a>    size_t     i, n = a/<font color="#4169E1">sizeof</font>(<a href="../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>);
+<a name="line203">203: </a>    <a href="../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *s = (<a href="../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>*) inew;
+<a name="line204">204: </a>    <font color="#B22222">/* from https://www.doc.ic.ac.uk/~eedwards/compsys/float/nan.html */</font>
+<a name="line205">205: </a><font color="#A020F0">#if defined(PETSC_USE_REAL_SINGLE)</font>
+<a name="line206">206: </a>    int        nas = 0x7F800002;
+<a name="line207">207: </a><font color="#A020F0">#else</font>
+<a name="line208">208: </a>    PetscInt64 nas = 0x7FF0000000000002;
+<a name="line209">209: </a><font color="#A020F0">#endif</font>
+<a name="line210">210: </a>    <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line211">211: </a>      memcpy(s+i,&amp;nas,<font color="#4169E1">sizeof</font>(<a href="../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>));
+<a name="line212">212: </a>    }
+<a name="line213">213: </a>  }
+<a name="line214">214: </a><font color="#A020F0">#endif</font>
+<a name="line215">215: </a><font color="#A020F0">#endif</font>
+
+<a name="line217">217: </a>  <font color="#B22222">/*</font>
+<a name="line218">218: </a><font color="#B22222">         Allow logging of all mallocs made.</font>
+<a name="line219">219: </a><font color="#B22222">         TODO: Currently this memory is never freed, it should be freed during <a href="../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>()</font>
+<a name="line220">220: </a><font color="#B22222">  */</font>
+<a name="line221">221: </a>  <font color="#4169E1">if</font> (PetscLogMalloc &gt; -1 &amp;&amp; PetscLogMalloc &lt; PetscLogMallocMax &amp;&amp; a &gt;= PetscLogMallocThreshold) {
+<a name="line222">222: </a>    <font color="#4169E1">if</font> (!PetscLogMalloc) {
+<a name="line223">223: </a>      PetscLogMallocLength = (size_t*)malloc(PetscLogMallocMax*<font color="#4169E1">sizeof</font>(size_t));
+<a name="line224">224: </a>      <font color="#4169E1">if</font> (!PetscLogMallocLength) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEM,<font color="#666666">" "</font>);
+
+<a name="line226">226: </a>      PetscLogMallocFile = (const char**)malloc(PetscLogMallocMax*<font color="#4169E1">sizeof</font>(char*));
+<a name="line227">227: </a>      <font color="#4169E1">if</font> (!PetscLogMallocFile) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEM,<font color="#666666">" "</font>);
+
+<a name="line229">229: </a>      PetscLogMallocFunction = (const char**)malloc(PetscLogMallocMax*<font color="#4169E1">sizeof</font>(char*));
+<a name="line230">230: </a>      <font color="#4169E1">if</font> (!PetscLogMallocFunction) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEM,<font color="#666666">" "</font>);
+<a name="line231">231: </a>    }
+<a name="line232">232: </a>    PetscLogMallocLength[PetscLogMalloc]     = nsize;
+<a name="line233">233: </a>    PetscLogMallocFile[PetscLogMalloc]       = filename;
+<a name="line234">234: </a>    PetscLogMallocFunction[PetscLogMalloc++] = function;
+<a name="line235">235: </a>  }
+<a name="line236">236: </a>  *result = (void*)inew;
+<a name="line237">237: </a>  <font color="#4169E1">return</font>(0);
+<a name="line238">238: </a>}
+
+<a name="line240">240: </a><font color="#B22222">/*</font>
+<a name="line241">241: </a><font color="#B22222">   PetscTrFreeDefault - Free with tracing.</font>
+
+<a name="line243">243: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line244">244: </a><font color="#B22222">.   a    - pointer to a block allocated with PetscTrMalloc</font>
+<a name="line245">245: </a><font color="#B22222">.   lineno - line number where used.  Use __LINE__ for this</font>
+<a name="line246">246: </a><font color="#B22222">.   file  - file name where used.  Use __FILE__ for this</font>
+<a name="line247">247: </a><font color="#B22222"> */</font>
+<a name="line248">248: </a><strong><font color="#4169E1"><a name="PetscTrFreeDefault"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  PetscTrFreeDefault(void *aa,int line,const char function[],const char file[])</font></strong>
+<a name="line249">249: </a>{
+<a name="line250">250: </a>  char           *a = (char*)aa;
+<a name="line251">251: </a>  TRSPACE        *head;
+<a name="line252">252: </a>  char           *ahead;
+<a name="line254">254: </a>  <a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>   *nend;
+
+<a name="line257">257: </a>  <font color="#B22222">/* Do not try to handle empty blocks */</font>
+<a name="line258">258: </a>  <font color="#4169E1">if</font> (!a) <font color="#4169E1">return</font>(0);
+
+<a name="line260">260: </a>  <a href="../../../docs/manualpages/Sys/PetscMallocValidate.html#PetscMallocValidate">PetscMallocValidate</a>(line,function,file);
+
+<a name="line262">262: </a>  ahead = a;
+<a name="line263">263: </a>  a     = a - <font color="#4169E1">sizeof</font>(TrSPACE);
+<a name="line264">264: </a>  head  = (TRSPACE*)a;
+
+<a name="line266">266: </a>  <font color="#4169E1">if</font> (head-&gt;classid != CLASSID_VALUE) {
+<a name="line267">267: </a>    (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"PetscTrFreeDefault() called from %s() line %d in %s\n"</font>,function,line,file);
+<a name="line268">268: </a>    (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block at address %p is corrupted; cannot free;\nmay be block not allocated with <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()\n"</font>,a);
+<a name="line269">269: </a>    <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEMC,<font color="#666666">"Bad location or corrupted memory"</font>);
+<a name="line270">270: </a>  }
+<a name="line271">271: </a>  nend = (<a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>*)(ahead + head-&gt;size);
+<a name="line272">272: </a>  <font color="#4169E1">if</font> (*nend != CLASSID_VALUE) {
+<a name="line273">273: </a>    <font color="#4169E1">if</font> (*nend == ALREADY_FREED) {
+<a name="line274">274: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"PetscTrFreeDefault() called from %s() line %d in %s\n"</font>,function,line,file);
+<a name="line275">275: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block [id=%d(%.0f)] at address %p was already freed\n"</font>,head-&gt;id,(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)head-&gt;size,a + <font color="#4169E1">sizeof</font>(TrSPACE));
+<a name="line276">276: </a>      <font color="#4169E1">if</font> (head-&gt;lineno &gt; 0 &amp;&amp; head-&gt;lineno &lt; 50000 <font color="#B22222">/* sanity check */</font>) {
+<a name="line277">277: </a>        (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block freed in %s() line %d in %s\n"</font>,head-&gt;functionname,head-&gt;lineno,head-&gt;filename);
+<a name="line278">278: </a>      } <font color="#4169E1">else</font> {
+<a name="line279">279: </a>        (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block allocated in %s() line %d in %s\n"</font>,head-&gt;functionname,-head-&gt;lineno,head-&gt;filename);
+<a name="line280">280: </a>      }
+<a name="line281">281: </a>      <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONG,<font color="#666666">"Memory already freed"</font>);
+<a name="line282">282: </a>    } <font color="#4169E1">else</font> {
+<a name="line283">283: </a>      <font color="#B22222">/* Damaged tail */</font>
+<a name="line284">284: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"PetscTrFreeDefault() called from %s() line %d in %s\n"</font>,function,line,file);
+<a name="line285">285: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block [id=%d(%.0f)] at address %p is corrupted (probably write past end of array)\n"</font>,head-&gt;id,(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)head-&gt;size,a);
+<a name="line286">286: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block allocated in %s() line %d in %s\n"</font>,head-&gt;functionname,head-&gt;lineno,head-&gt;filename);
+<a name="line287">287: </a>      <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEMC,<font color="#666666">"Corrupted memory"</font>);
+<a name="line288">288: </a>    }
+<a name="line289">289: </a>  }
+<a name="line290">290: </a>  <font color="#B22222">/* Mark the location freed */</font>
+<a name="line291">291: </a>  *nend = ALREADY_FREED;
+<a name="line292">292: </a>  <font color="#B22222">/* Save location where freed.  If we suspect the line number, mark as  allocated location */</font>
+<a name="line293">293: </a>  <font color="#4169E1">if</font> (line &gt; 0 &amp;&amp; line &lt; 50000) {
+<a name="line294">294: </a>    head-&gt;lineno       = line;
+<a name="line295">295: </a>    head-&gt;filename     = file;
+<a name="line296">296: </a>    head-&gt;functionname = function;
+<a name="line297">297: </a>  } <font color="#4169E1">else</font> {
+<a name="line298">298: </a>    head-&gt;lineno = -head-&gt;lineno;
+<a name="line299">299: </a>  }
+<a name="line300">300: </a>  <font color="#4169E1">if</font> (TRallocated &lt; head-&gt;size) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEMC,<font color="#666666">"TRallocate is smaller than memory just freed"</font>);
+<a name="line301">301: </a>  TRallocated -= head-&gt;size;
+<a name="line302">302: </a>  TRfrags--;
+<a name="line303">303: </a>  <font color="#4169E1">if</font> (head-&gt;prev) head-&gt;prev-&gt;next = head-&gt;next;
+<a name="line304">304: </a>  <font color="#4169E1">else</font> TRhead = head-&gt;next;
+
+<a name="line306">306: </a>  <font color="#4169E1">if</font> (head-&gt;next) head-&gt;next-&gt;prev = head-&gt;prev;
+<a name="line307">307: </a>  PetscFreeAlign(a,line,function,file);
+<a name="line308">308: </a>  <font color="#4169E1">return</font>(0);
+<a name="line309">309: </a>}
+
+<a name="line311">311: </a><font color="#B22222">/*</font>
+<a name="line312">312: </a><font color="#B22222">  PetscTrReallocDefault - Realloc with tracing.</font>
+
+<a name="line314">314: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line315">315: </a><font color="#B22222">+ len      - number of bytes to allocate</font>
+<a name="line316">316: </a><font color="#B22222">. lineno   - line number where used.  Use __LINE__ for this</font>
+<a name="line317">317: </a><font color="#B22222">. filename - file name where used.  Use __FILE__ for this</font>
+<a name="line318">318: </a><font color="#B22222">- result - original memory</font>
+
+<a name="line320">320: </a><font color="#B22222">  Output Parameter:</font>
+<a name="line321">321: </a><font color="#B22222">. result - double aligned pointer to requested storage, or null if not available.</font>
+
+<a name="line323">323: </a><font color="#B22222">  Level: developer</font>
+
+<a name="line325">325: </a><font color="#B22222">.seealso: PetscTrMallocDefault(), PetscTrFreeDefault()</font>
+<a name="line326">326: </a><font color="#B22222">*/</font>
+<a name="line327">327: </a><strong><font color="#4169E1"><a name="PetscTrReallocDefault"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscTrReallocDefault(size_t len, int lineno, const char function[], const char filename[], void **result)</font></strong>
+<a name="line328">328: </a>{
+<a name="line329">329: </a>  char           *a = (char *) *result;
+<a name="line330">330: </a>  TRSPACE        *head;
+<a name="line331">331: </a>  char           *ahead, *inew;
+<a name="line332">332: </a>  <a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>   *nend;
+<a name="line333">333: </a>  size_t         nsize;
+
+<a name="line337">337: </a>  <font color="#B22222">/* Realloc requests zero space so just free the current space */</font>
+<a name="line338">338: </a>  <font color="#4169E1">if</font> (!len) {
+<a name="line339">339: </a>    PetscTrFreeDefault(*result,lineno,function,filename);
+<a name="line340">340: </a>    *result = NULL;
+<a name="line341">341: </a>    <font color="#4169E1">return</font>(0);
+<a name="line342">342: </a>  }
+<a name="line343">343: </a>  <font color="#B22222">/* If the orginal space was NULL just use the regular malloc() */</font>
+<a name="line344">344: </a>  <font color="#4169E1">if</font> (!*result) {
+<a name="line345">345: </a>    PetscTrMallocDefault(len,<a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,lineno,function,filename,result);
+<a name="line346">346: </a>    <font color="#4169E1">return</font>(0);
+<a name="line347">347: </a>  }
+
+<a name="line349">349: </a>  <a href="../../../docs/manualpages/Sys/PetscMallocValidate.html#PetscMallocValidate">PetscMallocValidate</a>(lineno,function,filename); <font color="#4169E1">if</font> (ierr) <a href="../../../docs/manualpages/Sys/PetscFunctionReturn.html#PetscFunctionReturn">PetscFunctionReturn</a>(ierr);
+
+<a name="line351">351: </a>  ahead = a;
+<a name="line352">352: </a>  a     = a - <font color="#4169E1">sizeof</font>(TrSPACE);
+<a name="line353">353: </a>  head  = (TRSPACE *) a;
+<a name="line354">354: </a>  inew  = a;
+
+<a name="line356">356: </a>  <font color="#4169E1">if</font> (head-&gt;classid != CLASSID_VALUE) {
+<a name="line357">357: </a>    (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"PetscTrReallocDefault() called from %s() line %d in %s\n"</font>,function,lineno,filename);
+<a name="line358">358: </a>    (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block at address %p is corrupted; cannot free;\nmay be block not allocated with <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()\n"</font>,a);
+<a name="line359">359: </a>    <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEMC,<font color="#666666">"Bad location or corrupted memory"</font>);
+<a name="line360">360: </a>  }
+<a name="line361">361: </a>  nend = (<a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a> *)(ahead + head-&gt;size);
+<a name="line362">362: </a>  <font color="#4169E1">if</font> (*nend != CLASSID_VALUE) {
+<a name="line363">363: </a>    <font color="#4169E1">if</font> (*nend == ALREADY_FREED) {
+<a name="line364">364: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"PetscTrReallocDefault() called from %s() line %d in %s\n"</font>,function,lineno,filename);
+<a name="line365">365: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block [id=%d(%.0f)] at address %p was already freed\n"</font>,head-&gt;id,(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)head-&gt;size,a + <font color="#4169E1">sizeof</font>(TrSPACE));
+<a name="line366">366: </a>      <font color="#4169E1">if</font> (head-&gt;lineno &gt; 0 &amp;&amp; head-&gt;lineno &lt; 50000 <font color="#B22222">/* sanity check */</font>) {
+<a name="line367">367: </a>        (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block freed in %s() line %d in %s\n"</font>,head-&gt;functionname,head-&gt;lineno,head-&gt;filename);
+<a name="line368">368: </a>      } <font color="#4169E1">else</font> {
+<a name="line369">369: </a>        (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block allocated in %s() line %d in %s\n"</font>,head-&gt;functionname,-head-&gt;lineno,head-&gt;filename);
+<a name="line370">370: </a>      }
+<a name="line371">371: </a>      <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONG,<font color="#666666">"Memory already freed"</font>);
+<a name="line372">372: </a>    } <font color="#4169E1">else</font> {
+<a name="line373">373: </a>      <font color="#B22222">/* Damaged tail */</font>
+<a name="line374">374: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"PetscTrReallocDefault() called from %s() line %d in %s\n"</font>,function,lineno,filename);
+<a name="line375">375: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block [id=%d(%.0f)] at address %p is corrupted (probably write past end of array)\n"</font>,head-&gt;id,(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)head-&gt;size,a);
+<a name="line376">376: </a>      (*<a href="../../../docs/manualpages/Sys/PetscErrorPrintf.html#PetscErrorPrintf">PetscErrorPrintf</a>)(<font color="#666666">"Block allocated in %s() line %d in %s\n"</font>,head-&gt;functionname,head-&gt;lineno,head-&gt;filename);
+<a name="line377">377: </a>      <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEMC,<font color="#666666">"Corrupted memory"</font>);
+<a name="line378">378: </a>    }
+<a name="line379">379: </a>  }
+
+<a name="line381">381: </a>  <font color="#B22222">/* remove original reference to the memory allocated from the PETSc debugging heap */</font>
+<a name="line382">382: </a>  TRallocated -= head-&gt;size;
+<a name="line383">383: </a>  TRfrags--;
+<a name="line384">384: </a>  <font color="#4169E1">if</font> (head-&gt;prev) head-&gt;prev-&gt;next = head-&gt;next;
+<a name="line385">385: </a>  <font color="#4169E1">else</font> TRhead = head-&gt;next;
+<a name="line386">386: </a>  <font color="#4169E1">if</font> (head-&gt;next) head-&gt;next-&gt;prev = head-&gt;prev;
+
+<a name="line388">388: </a>  nsize = (len + (PETSC_MEMALIGN-1)) &amp; ~(PETSC_MEMALIGN-1);
+<a name="line389">389: </a>  PetscReallocAlign(nsize+<font color="#4169E1">sizeof</font>(TrSPACE)+<font color="#4169E1">sizeof</font>(<a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>),lineno,function,filename,(void**)&amp;inew);
+
+<a name="line391">391: </a>  head  = (TRSPACE*)inew;
+<a name="line392">392: </a>  inew += <font color="#4169E1">sizeof</font>(TrSPACE);
+
+<a name="line394">394: </a>  <font color="#4169E1">if</font> (TRhead) TRhead-&gt;prev = head;
+<a name="line395">395: </a>  head-&gt;next   = TRhead;
+<a name="line396">396: </a>  TRhead       = head;
+<a name="line397">397: </a>  head-&gt;prev   = NULL;
+<a name="line398">398: </a>  head-&gt;size   = nsize;
+<a name="line399">399: </a>  head-&gt;id     = TRid;
+<a name="line400">400: </a>  head-&gt;lineno = lineno;
+
+<a name="line402">402: </a>  head-&gt;filename                 = filename;
+<a name="line403">403: </a>  head-&gt;functionname             = function;
+<a name="line404">404: </a>  head-&gt;classid                  = CLASSID_VALUE;
+<a name="line405">405: </a>  *(<a href="../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>*)(inew + nsize) = CLASSID_VALUE;
+
+<a name="line407">407: </a>  TRallocated += nsize;
+<a name="line408">408: </a>  <font color="#4169E1">if</font> (TRallocated &gt; TRMaxMem) TRMaxMem = TRallocated;
+<a name="line409">409: </a>  <font color="#4169E1">if</font> (PetscLogMemory) {
+<a name="line410">410: </a>    <a href="../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> i;
+<a name="line411">411: </a>    <font color="#4169E1">for</font> (i=0; i&lt;NumTRMaxMems; i++) {
+<a name="line412">412: </a>      <font color="#4169E1">if</font> (TRallocated &gt; TRMaxMems[i]) TRMaxMems[i] = TRallocated;
+<a name="line413">413: </a>    }
+<a name="line414">414: </a>  }
+<a name="line415">415: </a>  TRfrags++;
+
+<a name="line417">417: </a><font color="#A020F0">#if defined(PETSC_USE_DEBUG)</font>
+<a name="line418">418: </a>  <font color="#4169E1">if</font> (PetscStackActive()) {
+<a name="line419">419: </a>    PetscStackCopy(petscstack,&amp;head-&gt;stack);
+<a name="line421">421: </a>    head-&gt;stack.line[head-&gt;stack.currentsize-2] = lineno;
+<a name="line422">422: </a>  } <font color="#4169E1">else</font> {
+<a name="line423">423: </a>    head-&gt;stack.currentsize = 0;
+<a name="line424">424: </a>  }
+<a name="line425">425: </a><font color="#A020F0">#endif</font>
+
+<a name="line427">427: </a>  <font color="#B22222">/*</font>
+<a name="line428">428: </a><font color="#B22222">         Allow logging of all mallocs made. This adds a new entry to the list of allocated memory</font>
+<a name="line429">429: </a><font color="#B22222">         and does not remove the previous entry to the list hence this memory is "double counted" in <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>()</font>
+<a name="line430">430: </a><font color="#B22222">  */</font>
+<a name="line431">431: </a>  <font color="#4169E1">if</font> (PetscLogMalloc &gt; -1 &amp;&amp; PetscLogMalloc &lt; PetscLogMallocMax &amp;&amp; len &gt;= PetscLogMallocThreshold) {
+<a name="line432">432: </a>    <font color="#4169E1">if</font> (!PetscLogMalloc) {
+<a name="line433">433: </a>      PetscLogMallocLength = (size_t*)malloc(PetscLogMallocMax*<font color="#4169E1">sizeof</font>(size_t));
+<a name="line434">434: </a>      <font color="#4169E1">if</font> (!PetscLogMallocLength) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEM,<font color="#666666">" "</font>);
+
+<a name="line436">436: </a>      PetscLogMallocFile = (const char**)malloc(PetscLogMallocMax*<font color="#4169E1">sizeof</font>(char*));
+<a name="line437">437: </a>      <font color="#4169E1">if</font> (!PetscLogMallocFile) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEM,<font color="#666666">" "</font>);
+
+<a name="line439">439: </a>      PetscLogMallocFunction = (const char**)malloc(PetscLogMallocMax*<font color="#4169E1">sizeof</font>(char*));
+<a name="line440">440: </a>      <font color="#4169E1">if</font> (!PetscLogMallocFunction) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEM,<font color="#666666">" "</font>);
+<a name="line441">441: </a>    }
+<a name="line442">442: </a>    PetscLogMallocLength[PetscLogMalloc]     = nsize;
+<a name="line443">443: </a>    PetscLogMallocFile[PetscLogMalloc]       = filename;
+<a name="line444">444: </a>    PetscLogMallocFunction[PetscLogMalloc++] = function;
+<a name="line445">445: </a>  }
+<a name="line446">446: </a>  *result = (void*)inew;
+<a name="line447">447: </a>  <font color="#4169E1">return</font>(0);
+<a name="line448">448: </a>}
+
+<a name="line450">450: </a><font color="#B22222">/*@C</font>
+<a name="line451">451: </a><font color="#B22222">    <a href="../../../docs/manualpages/Sys/PetscMemoryView.html#PetscMemoryView">PetscMemoryView</a> - Shows the amount of memory currently being used in a communicator.</font>
+
+<a name="line453">453: </a><font color="#B22222">    Collective on <a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a></font>
+
+<a name="line455">455: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line456">456: </a><font color="#B22222">+    viewer - the viewer that defines the communicator</font>
+<a name="line457">457: </a><font color="#B22222">-    message - string printed before values</font>
+
+<a name="line459">459: </a><font color="#B22222">    Options Database:</font>
+<a name="line460">460: </a><font color="#B22222">+    -malloc_debug - have PETSc track how much memory it has allocated</font>
+<a name="line461">461: </a><font color="#B22222">-    -memory_view - during <a href="../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>() have this routine called</font>
+
+<a name="line463">463: </a><font color="#B22222">    Level: intermediate</font>
+
+<a name="line465">465: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>(), <a href="../../../docs/manualpages/Sys/PetscMemoryGetCurrentUsage.html#PetscMemoryGetCurrentUsage">PetscMemoryGetCurrentUsage</a>(), <a href="../../../docs/manualpages/Sys/PetscMemorySetGetMaximumUsage.html#PetscMemorySetGetMaximumUsage">PetscMemorySetGetMaximumUsage</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>()</font>
+<a name="line466">466: </a><font color="#B22222"> @*/</font>
+<a name="line467">467: </a><strong><font color="#4169E1"><a name="PetscMemoryView"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../docs/manualpages/Sys/PetscMemoryView.html#PetscMemoryView">PetscMemoryView</a>(<a href="../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer,const char message[])</font></strong>
+<a name="line468">468: </a>{
+<a name="line469">469: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> allocated,allocatedmax,resident,residentmax,gallocated,gallocatedmax,gresident,gresidentmax,maxgallocated,maxgallocatedmax,maxgresident,maxgresidentmax;
+<a name="line470">470: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> mingallocated,mingallocatedmax,mingresident,mingresidentmax;
+<a name="line472">472: </a>  <a href="../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>       comm;
+
+<a name="line475">475: </a>  <font color="#4169E1">if</font> (!viewer) viewer = <a href="../../../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_WORLD.html#PETSC_VIEWER_STDOUT_WORLD">PETSC_VIEWER_STDOUT_WORLD</a>;
+<a name="line476">476: </a>  <a href="../../../docs/manualpages/Sys/PetscMallocGetCurrentUsage.html#PetscMallocGetCurrentUsage">PetscMallocGetCurrentUsage</a>(&amp;allocated);
+<a name="line477">477: </a>  <a href="../../../docs/manualpages/Sys/PetscMallocGetMaximumUsage.html#PetscMallocGetMaximumUsage">PetscMallocGetMaximumUsage</a>(&amp;allocatedmax);
+<a name="line478">478: </a>  <a href="../../../docs/manualpages/Sys/PetscMemoryGetCurrentUsage.html#PetscMemoryGetCurrentUsage">PetscMemoryGetCurrentUsage</a>(&amp;resident);
+<a name="line479">479: </a>  <a href="../../../docs/manualpages/Sys/PetscMemoryGetMaximumUsage.html#PetscMemoryGetMaximumUsage">PetscMemoryGetMaximumUsage</a>(&amp;residentmax);
+<a name="line480">480: </a>  <font color="#4169E1">if</font> (residentmax &gt; 0) residentmax = <a href="../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(resident,residentmax);
+<a name="line481">481: </a>  <a href="../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,&amp;comm);
+<a name="line482">482: </a>  <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,message);
+<a name="line483">483: </a>  <font color="#4169E1">if</font> (resident &amp;&amp; residentmax &amp;&amp; allocated) {
+<a name="line484">484: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;residentmax,&amp;gresidentmax,1,MPIU_PETSCLOGDOUBLE,MPI_SUM,0,comm);
+<a name="line485">485: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;residentmax,&amp;maxgresidentmax,1,MPIU_PETSCLOGDOUBLE,MPI_MAX,0,comm);
+<a name="line486">486: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;residentmax,&amp;mingresidentmax,1,MPIU_PETSCLOGDOUBLE,MPI_MIN,0,comm);
+<a name="line487">487: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Maximum (over computational time) process memory:        total %5.4e max %5.4e min %5.4e\n"</font>,gresidentmax,maxgresidentmax,mingresidentmax);
+<a name="line488">488: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;resident,&amp;gresident,1,MPIU_PETSCLOGDOUBLE,MPI_SUM,0,comm);
+<a name="line489">489: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;resident,&amp;maxgresident,1,MPIU_PETSCLOGDOUBLE,MPI_MAX,0,comm);
+<a name="line490">490: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;resident,&amp;mingresident,1,MPIU_PETSCLOGDOUBLE,MPI_MIN,0,comm);
+<a name="line491">491: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Current process memory:                                  total %5.4e max %5.4e min %5.4e\n"</font>,gresident,maxgresident,mingresident);
+<a name="line492">492: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocatedmax,&amp;gallocatedmax,1,MPIU_PETSCLOGDOUBLE,MPI_SUM,0,comm);
+<a name="line493">493: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocatedmax,&amp;maxgallocatedmax,1,MPIU_PETSCLOGDOUBLE,MPI_MAX,0,comm);
+<a name="line494">494: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocatedmax,&amp;mingallocatedmax,1,MPIU_PETSCLOGDOUBLE,MPI_MIN,0,comm);
+<a name="line495">495: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Maximum (over computational time) space <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()ed: total %5.4e max %5.4e min %5.4e\n"</font>,gallocatedmax,maxgallocatedmax,mingallocatedmax);
+<a name="line496">496: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocated,&amp;gallocated,1,MPIU_PETSCLOGDOUBLE,MPI_SUM,0,comm);
+<a name="line497">497: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocated,&amp;maxgallocated,1,MPIU_PETSCLOGDOUBLE,MPI_MAX,0,comm);
+<a name="line498">498: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocated,&amp;mingallocated,1,MPIU_PETSCLOGDOUBLE,MPI_MIN,0,comm);
+<a name="line499">499: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Current space <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()ed:                           total %5.4e max %5.4e min %5.4e\n"</font>,gallocated,maxgallocated,mingallocated);
+<a name="line500">500: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (resident &amp;&amp; residentmax) {
+<a name="line501">501: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;residentmax,&amp;gresidentmax,1,MPIU_PETSCLOGDOUBLE,MPI_SUM,0,comm);
+<a name="line502">502: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;residentmax,&amp;maxgresidentmax,1,MPIU_PETSCLOGDOUBLE,MPI_MAX,0,comm);
+<a name="line503">503: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;residentmax,&amp;mingresidentmax,1,MPIU_PETSCLOGDOUBLE,MPI_MIN,0,comm);
+<a name="line504">504: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Maximum (over computational time) process memory:        total %5.4e max %5.4e min %5.4e\n"</font>,gresidentmax,maxgresidentmax,mingresidentmax);
+<a name="line505">505: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;resident,&amp;gresident,1,MPIU_PETSCLOGDOUBLE,MPI_SUM,0,comm);
+<a name="line506">506: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;resident,&amp;maxgresident,1,MPIU_PETSCLOGDOUBLE,MPI_MAX,0,comm);
+<a name="line507">507: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;resident,&amp;mingresident,1,MPIU_PETSCLOGDOUBLE,MPI_MIN,0,comm);
+<a name="line508">508: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Current process memory:                                  total %5.4e max %5.4e min %5.4e\n"</font>,gresident,maxgresident,mingresident);
+<a name="line509">509: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (resident &amp;&amp; allocated) {
+<a name="line510">510: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;resident,&amp;gresident,1,MPIU_PETSCLOGDOUBLE,MPI_SUM,0,comm);
+<a name="line511">511: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;resident,&amp;maxgresident,1,MPIU_PETSCLOGDOUBLE,MPI_MAX,0,comm);
+<a name="line512">512: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;resident,&amp;mingresident,1,MPIU_PETSCLOGDOUBLE,MPI_MIN,0,comm);
+<a name="line513">513: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Current process memory:                                  total %5.4e max %5.4e min %5.4e\n"</font>,gresident,maxgresident,mingresident);
+<a name="line514">514: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocated,&amp;gallocated,1,MPIU_PETSCLOGDOUBLE,MPI_SUM,0,comm);
+<a name="line515">515: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocated,&amp;maxgallocated,1,MPIU_PETSCLOGDOUBLE,MPI_MAX,0,comm);
+<a name="line516">516: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocated,&amp;mingallocated,1,MPIU_PETSCLOGDOUBLE,MPI_MIN,0,comm);
+<a name="line517">517: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Current space <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()ed:                           total %5.4e max %5.4e min %5.4e\n"</font>,gallocated,maxgallocated,mingallocated);
+<a name="line518">518: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Run with -memory_view to get maximum memory usage\n"</font>);
+<a name="line519">519: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (allocated) {
+<a name="line520">520: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocated,&amp;gallocated,1,MPIU_PETSCLOGDOUBLE,MPI_SUM,0,comm);
+<a name="line521">521: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocated,&amp;maxgallocated,1,MPIU_PETSCLOGDOUBLE,MPI_MAX,0,comm);
+<a name="line522">522: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce.html#MPI_Reduce">MPI_Reduce</a>(&amp;allocated,&amp;mingallocated,1,MPIU_PETSCLOGDOUBLE,MPI_MIN,0,comm);
+<a name="line523">523: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Current space <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()ed:                           total %5.4e max %5.4e min %5.4e\n"</font>,gallocated,maxgallocated,mingallocated);
+<a name="line524">524: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Run with -memory_view to get maximum memory usage\n"</font>);
+<a name="line525">525: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"OS cannot compute process memory\n"</font>);
+<a name="line526">526: </a>  } <font color="#4169E1">else</font> {
+<a name="line527">527: </a>    <a href="../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Run with -malloc_debug to get statistics on <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>() calls\nOS cannot compute process memory\n"</font>);
+<a name="line528">528: </a>  }
+<a name="line529">529: </a>  <a href="../../../docs/manualpages/Viewer/PetscViewerFlush.html#PetscViewerFlush">PetscViewerFlush</a>(viewer);
+<a name="line530">530: </a>  <font color="#4169E1">return</font>(0);
+<a name="line531">531: </a>}
+
+<a name="line533">533: </a><font color="#B22222">/*@</font>
+<a name="line534">534: </a><font color="#B22222">    <a href="../../../docs/manualpages/Sys/PetscMallocGetCurrentUsage.html#PetscMallocGetCurrentUsage">PetscMallocGetCurrentUsage</a> - gets the current amount of memory used that was <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()ed</font>
+
+<a name="line536">536: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line538">538: </a><font color="#B22222">    Output Parameters:</font>
+<a name="line539">539: </a><font color="#B22222">.   space - number of bytes currently allocated</font>
+
+<a name="line541">541: </a><font color="#B22222">    Level: intermediate</font>
+
+<a name="line543">543: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>(), PetscMallocLog(), <a href="../../../docs/manualpages/Sys/PetscMallocGetMaximumUsage.html#PetscMallocGetMaximumUsage">PetscMallocGetMaximumUsage</a>(), <a href="../../../docs/manualpages/Sys/PetscMemoryGetCurrentUsage.html#PetscMemoryGetCurrentUsage">PetscMemoryGetCurrentUsage</a>(),</font>
+<a name="line544">544: </a><font color="#B22222">          <a href="../../../docs/manualpages/Sys/PetscMemoryGetMaximumUsage.html#PetscMemoryGetMaximumUsage">PetscMemoryGetMaximumUsage</a>()</font>
+<a name="line545">545: </a><font color="#B22222"> @*/</font>
+<a name="line546">546: </a><strong><font color="#4169E1"><a name="PetscMallocGetCurrentUsage"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../docs/manualpages/Sys/PetscMallocGetCurrentUsage.html#PetscMallocGetCurrentUsage">PetscMallocGetCurrentUsage</a>(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> *space)</font></strong>
+<a name="line547">547: </a>{
+<a name="line549">549: </a>  *space = (<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>) TRallocated;
+<a name="line550">550: </a>  <font color="#4169E1">return</font>(0);
+<a name="line551">551: </a>}
+
+<a name="line553">553: </a><font color="#B22222">/*@</font>
+<a name="line554">554: </a><font color="#B22222">    <a href="../../../docs/manualpages/Sys/PetscMallocGetMaximumUsage.html#PetscMallocGetMaximumUsage">PetscMallocGetMaximumUsage</a> - gets the maximum amount of memory used that was <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()ed at any time</font>
+<a name="line555">555: </a><font color="#B22222">        during this run.</font>
+
+<a name="line557">557: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line559">559: </a><font color="#B22222">    Output Parameters:</font>
+<a name="line560">560: </a><font color="#B22222">.   space - maximum number of bytes ever allocated at one time</font>
+
+<a name="line562">562: </a><font color="#B22222">    Level: intermediate</font>
+
+<a name="line564">564: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocGetMaximumUsage.html#PetscMallocGetMaximumUsage">PetscMallocGetMaximumUsage</a>(), <a href="../../../docs/manualpages/Sys/PetscMemoryGetCurrentUsage.html#PetscMemoryGetCurrentUsage">PetscMemoryGetCurrentUsage</a>(),</font>
+<a name="line565">565: </a><font color="#B22222">          <a href="../../../docs/manualpages/Sys/PetscMallocPushMaximumUsage.html#PetscMallocPushMaximumUsage">PetscMallocPushMaximumUsage</a>()</font>
+<a name="line566">566: </a><font color="#B22222"> @*/</font>
+<a name="line567">567: </a><strong><font color="#4169E1"><a name="PetscMallocGetMaximumUsage"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../docs/manualpages/Sys/PetscMallocGetMaximumUsage.html#PetscMallocGetMaximumUsage">PetscMallocGetMaximumUsage</a>(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> *space)</font></strong>
+<a name="line568">568: </a>{
+<a name="line570">570: </a>  *space = (<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>) TRMaxMem;
+<a name="line571">571: </a>  <font color="#4169E1">return</font>(0);
+<a name="line572">572: </a>}
+
+<a name="line574">574: </a><font color="#B22222">/*@</font>
+<a name="line575">575: </a><font color="#B22222">    <a href="../../../docs/manualpages/Sys/PetscMallocPushMaximumUsage.html#PetscMallocPushMaximumUsage">PetscMallocPushMaximumUsage</a> - Adds another event to collect the maximum memory usage over an event</font>
+
+<a name="line577">577: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line579">579: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line580">580: </a><font color="#B22222">.   event - an event id; this is just for error checking</font>
+
+<a name="line582">582: </a><font color="#B22222">    Level: developer</font>
+
+<a name="line584">584: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocGetMaximumUsage.html#PetscMallocGetMaximumUsage">PetscMallocGetMaximumUsage</a>(), <a href="../../../docs/manualpages/Sys/PetscMemoryGetCurrentUsage.html#PetscMemoryGetCurrentUsage">PetscMemoryGetCurrentUsage</a>(),</font>
+<a name="line585">585: </a><font color="#B22222">          <a href="../../../docs/manualpages/Sys/PetscMallocPopMaximumUsage.html#PetscMallocPopMaximumUsage">PetscMallocPopMaximumUsage</a>()</font>
+<a name="line586">586: </a><font color="#B22222"> @*/</font>
+<a name="line587">587: </a><strong><font color="#4169E1"><a name="PetscMallocPushMaximumUsage"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../docs/manualpages/Sys/PetscMallocPushMaximumUsage.html#PetscMallocPushMaximumUsage">PetscMallocPushMaximumUsage</a>(int event)</font></strong>
+<a name="line588">588: </a>{
+<a name="line590">590: </a>  <font color="#4169E1">if</font> (++NumTRMaxMems &gt; MAXTRMAXMEMS) <font color="#4169E1">return</font>(0);
+<a name="line591">591: </a>  TRMaxMems[NumTRMaxMems-1]       = TRallocated;
+<a name="line592">592: </a>  TRMaxMemsEvents[NumTRMaxMems-1] = event;
+<a name="line593">593: </a>  <font color="#4169E1">return</font>(0);
+<a name="line594">594: </a>}
+
+<a name="line596">596: </a><font color="#B22222">/*@</font>
+<a name="line597">597: </a><font color="#B22222">    <a href="../../../docs/manualpages/Sys/PetscMallocPopMaximumUsage.html#PetscMallocPopMaximumUsage">PetscMallocPopMaximumUsage</a> - collect the maximum memory usage over an event</font>
+
+<a name="line599">599: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line601">601: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line602">602: </a><font color="#B22222">.   event - an event id; this is just for error checking</font>
+
+<a name="line604">604: </a><font color="#B22222">    Output Parameter:</font>
+<a name="line605">605: </a><font color="#B22222">.   mu - maximum amount of memory malloced during this event; high water mark relative to the beginning of the event</font>
+
+<a name="line607">607: </a><font color="#B22222">    Level: developer</font>
+
+<a name="line609">609: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocGetMaximumUsage.html#PetscMallocGetMaximumUsage">PetscMallocGetMaximumUsage</a>(), <a href="../../../docs/manualpages/Sys/PetscMemoryGetCurrentUsage.html#PetscMemoryGetCurrentUsage">PetscMemoryGetCurrentUsage</a>(),</font>
+<a name="line610">610: </a><font color="#B22222">          <a href="../../../docs/manualpages/Sys/PetscMallocPushMaximumUsage.html#PetscMallocPushMaximumUsage">PetscMallocPushMaximumUsage</a>()</font>
+<a name="line611">611: </a><font color="#B22222"> @*/</font>
+<a name="line612">612: </a><strong><font color="#4169E1"><a name="PetscMallocPopMaximumUsage"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../docs/manualpages/Sys/PetscMallocPopMaximumUsage.html#PetscMallocPopMaximumUsage">PetscMallocPopMaximumUsage</a>(int event,<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> *mu)</font></strong>
+<a name="line613">613: </a>{
+<a name="line615">615: </a>  *mu = 0;
+<a name="line616">616: </a>  <font color="#4169E1">if</font> (NumTRMaxMems-- &gt; MAXTRMAXMEMS) <font color="#4169E1">return</font>(0);
+<a name="line617">617: </a>  <font color="#4169E1">if</font> (TRMaxMemsEvents[NumTRMaxMems] != event) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEMC,<font color="#666666">"PetscMallocPush/PopMaximumUsage() are not nested"</font>);
+<a name="line618">618: </a>  *mu = TRMaxMems[NumTRMaxMems];
+<a name="line619">619: </a>  <font color="#4169E1">return</font>(0);
+<a name="line620">620: </a>}
+
+<a name="line622">622: </a><font color="#A020F0">#if defined(PETSC_USE_DEBUG)</font>
+<a name="line623">623: </a><font color="#B22222">/*@C</font>
+<a name="line624">624: </a><font color="#B22222">   <a href="../../../docs/manualpages/Sys/PetscMallocGetStack.html#PetscMallocGetStack">PetscMallocGetStack</a> - returns a pointer to the stack for the location in the program a call to <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>() was used to obtain that memory</font>
+
+<a name="line626">626: </a><font color="#B22222">   Collective on <a href="../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a></font>
+
+<a name="line628">628: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line629">629: </a><font color="#B22222">.    ptr - the memory location</font>
+
+<a name="line631">631: </a><font color="#B22222">   Output Paramter:</font>
+<a name="line632">632: </a><font color="#B22222">.    stack - the stack indicating where the program allocated this memory</font>
+
+<a name="line634">634: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line636">636: </a><font color="#B22222">.seealso:  <a href="../../../docs/manualpages/Sys/PetscMallocGetCurrentUsage.html#PetscMallocGetCurrentUsage">PetscMallocGetCurrentUsage</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>()</font>
+<a name="line637">637: </a><font color="#B22222">@*/</font>
+<a name="line638">638: </a><strong><font color="#4169E1"><a name="PetscMallocGetStack"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../docs/manualpages/Sys/PetscMallocGetStack.html#PetscMallocGetStack">PetscMallocGetStack</a>(void *ptr,PetscStack **stack)</font></strong>
+<a name="line639">639: </a>{
+<a name="line640">640: </a>  TRSPACE *head;
+
+<a name="line643">643: </a>  head   = (TRSPACE*) (((char*)ptr) - HEADER_BYTES);
+<a name="line644">644: </a>  *stack = &amp;head-&gt;stack;
+<a name="line645">645: </a>  <font color="#4169E1">return</font>(0);
+<a name="line646">646: </a>}
+<a name="line647">647: </a><font color="#A020F0">#else</font>
+<a name="line648">648: </a><strong><font color="#4169E1"><a name="PetscMallocGetStack"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../docs/manualpages/Sys/PetscMallocGetStack.html#PetscMallocGetStack">PetscMallocGetStack</a>(void *ptr,void **stack)</font></strong>
+<a name="line649">649: </a>{
+<a name="line651">651: </a>  *stack = NULL;
+<a name="line652">652: </a>  <font color="#4169E1">return</font>(0);
+<a name="line653">653: </a>}
+<a name="line654">654: </a><font color="#A020F0">#endif</font>
+
+<a name="line656">656: </a><font color="#B22222">/*@C</font>
+<a name="line657">657: </a><font color="#B22222">   <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a> - Dumps the currently allocated memory blocks to a file. The information</font>
+<a name="line658">658: </a><font color="#B22222">   printed is: size of space (in bytes), address of space, id of space,</font>
+<a name="line659">659: </a><font color="#B22222">   file in which space was allocated, and line number at which it was</font>
+<a name="line660">660: </a><font color="#B22222">   allocated.</font>
+
+<a name="line662">662: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line664">664: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line665">665: </a><font color="#B22222">.  fp  - file pointer.  If fp is NULL, stdout is assumed.</font>
+
+<a name="line667">667: </a><font color="#B22222">   Options Database Key:</font>
+<a name="line668">668: </a><font color="#B22222">.  -malloc_dump &lt;optional filename&gt; - Dumps unfreed memory during call to <a href="../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>()</font>
+
+<a name="line670">670: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line672">672: </a><font color="#B22222">   Fortran Note:</font>
+<a name="line673">673: </a><font color="#B22222">   The calling sequence in Fortran is <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>(integer ierr)</font>
+<a name="line674">674: </a><font color="#B22222">   The fp defaults to stdout.</font>
+
+<a name="line676">676: </a><font color="#B22222">   Notes:</font>
+<a name="line677">677: </a><font color="#B22222">     Uses MPI_COMM_WORLD to display rank, because this may be called in <a href="../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>() after <a href="../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a> has been freed.</font>
+
+<a name="line679">679: </a><font color="#B22222">     When called in <a href="../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>() dumps only the allocations that have not been properly freed</font>
+
+<a name="line681">681: </a><font color="#B22222">     <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>() prints a list of all memory ever allocated</font>
+
+<a name="line683">683: </a><font color="#B22222">.seealso:  <a href="../../../docs/manualpages/Sys/PetscMallocGetCurrentUsage.html#PetscMallocGetCurrentUsage">PetscMallocGetCurrentUsage</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocViewSet.html#PetscMallocViewSet">PetscMallocViewSet</a>()</font>
+<a name="line684">684: </a><font color="#B22222">@*/</font>
+<a name="line685">685: </a><strong><font color="#4169E1"><a name="PetscMallocDump"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>(FILE *fp)</font></strong>
+<a name="line686">686: </a>{
+<a name="line687">687: </a>  TRSPACE        *head;
+<a name="line688">688: </a>  size_t         libAlloc = 0;
+<a name="line690">690: </a>  <a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    rank;
+
+<a name="line693">693: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(MPI_COMM_WORLD,&amp;rank);
+<a name="line694">694: </a>  <font color="#4169E1">if</font> (!fp) fp = PETSC_STDOUT;
+<a name="line695">695: </a>  head = TRhead;
+<a name="line696">696: </a>  <font color="#4169E1">while</font> (head) {
+<a name="line697">697: </a>    libAlloc += head-&gt;size;
+<a name="line698">698: </a>    head = head-&gt;next;
+<a name="line699">699: </a>  }
+<a name="line700">700: </a>  <font color="#4169E1">if</font> (TRallocated - libAlloc &gt; 0) fprintf(fp,<font color="#666666">"[%d]Total space allocated %.0f bytes\n"</font>,rank,(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)TRallocated);
+<a name="line701">701: </a>  head = TRhead;
+<a name="line702">702: </a>  <font color="#4169E1">while</font> (head) {
+<a name="line703">703: </a>    <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> isLib;
+
+<a name="line705">705: </a>    <a href="../../../docs/manualpages/Sys/PetscStrcmp.html#PetscStrcmp">PetscStrcmp</a>(head-&gt;functionname, <font color="#666666">"<a href="../../../docs/manualpages/Sys/PetscDLLibraryOpen.html#PetscDLLibraryOpen">PetscDLLibraryOpen</a>"</font>, &amp;isLib);
+<a name="line706">706: </a>    <font color="#4169E1">if</font> (!isLib) {
+<a name="line707">707: </a>      fprintf(fp,<font color="#666666">"[%2d]%.0f bytes %s() line %d in %s\n"</font>,rank,(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)head-&gt;size,head-&gt;functionname,head-&gt;lineno,head-&gt;filename);
+<a name="line708">708: </a><font color="#A020F0">#if defined(PETSC_USE_DEBUG)</font>
+<a name="line709">709: </a>      PetscStackPrint(&amp;head-&gt;stack,fp);
+<a name="line710">710: </a><font color="#A020F0">#endif</font>
+<a name="line711">711: </a>    }
+<a name="line712">712: </a>    head = head-&gt;next;
+<a name="line713">713: </a>  }
+<a name="line714">714: </a>  <font color="#4169E1">return</font>(0);
+<a name="line715">715: </a>}
+
+<a name="line717">717: </a><font color="#B22222">/*@</font>
+<a name="line718">718: </a><font color="#B22222">    <a href="../../../docs/manualpages/Sys/PetscMallocViewSet.html#PetscMallocViewSet">PetscMallocViewSet</a> - Activates logging of all calls to <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>() with a minimum size to view</font>
+
+<a name="line720">720: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line722">722: </a><font color="#B22222">    Input Arguments:</font>
+<a name="line723">723: </a><font color="#B22222">.   logmin - minimum allocation size to log, or <a href="../../../docs/manualpages/Sys/PETSC_DEFAULT.html#PETSC_DEFAULT">PETSC_DEFAULT</a></font>
+
+<a name="line725">725: </a><font color="#B22222">    Options Database Key:</font>
+<a name="line726">726: </a><font color="#B22222">+  -malloc_view &lt;optional filename&gt; - Activates <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>() in <a href="../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>()</font>
+<a name="line727">727: </a><font color="#B22222">-  -malloc_view_threshold &lt;min&gt; - Sets a minimum size if -malloc_view is used</font>
+
+<a name="line729">729: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line731">731: </a><font color="#B22222">    Notes: Must be called after <a href="../../../docs/manualpages/Sys/PetscMallocSetDebug.html#PetscMallocSetDebug">PetscMallocSetDebug</a>()</font>
+
+<a name="line733">733: </a><font color="#B22222">    Uses MPI_COMM_WORLD to determine rank because PETSc communicators may not be available</font>
+
+<a name="line735">735: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocViewSet.html#PetscMallocViewSet">PetscMallocViewSet</a>()</font>
+<a name="line736">736: </a><font color="#B22222">@*/</font>
+<a name="line737">737: </a><strong><font color="#4169E1"><a name="PetscMallocViewSet"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../docs/manualpages/Sys/PetscMallocViewSet.html#PetscMallocViewSet">PetscMallocViewSet</a>(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> logmin)</font></strong>
+<a name="line738">738: </a>{
+
+<a name="line742">742: </a>  PetscLogMalloc = 0;
+<a name="line743">743: </a>  <a href="../../../docs/manualpages/Sys/PetscMemorySetGetMaximumUsage.html#PetscMemorySetGetMaximumUsage">PetscMemorySetGetMaximumUsage</a>();
+<a name="line744">744: </a>  <font color="#4169E1">if</font> (logmin &lt; 0) logmin = 0.0; <font color="#B22222">/* <a href="../../../docs/manualpages/Sys/PETSC_DEFAULT.html#PETSC_DEFAULT">PETSC_DEFAULT</a> or <a href="../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a> */</font>
+<a name="line745">745: </a>  PetscLogMallocThreshold = (size_t)logmin;
+<a name="line746">746: </a>  <font color="#4169E1">return</font>(0);
+<a name="line747">747: </a>}
+
+<a name="line749">749: </a><font color="#B22222">/*@</font>
+<a name="line750">750: </a><font color="#B22222">    <a href="../../../docs/manualpages/Sys/PetscMallocViewGet.html#PetscMallocViewGet">PetscMallocViewGet</a> - Determine whether all calls to <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>() are being logged</font>
+
+<a name="line752">752: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line754">754: </a><font color="#B22222">    Output Arguments</font>
+<a name="line755">755: </a><font color="#B22222">.   logging - <a href="../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> if logging is active</font>
+
+<a name="line757">757: </a><font color="#B22222">    Options Database Key:</font>
+<a name="line758">758: </a><font color="#B22222">.  -malloc_view &lt;optional filename&gt; - Activates <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>()</font>
+
+<a name="line760">760: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line762">762: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>()</font>
+<a name="line763">763: </a><font color="#B22222">@*/</font>
+<a name="line764">764: </a><strong><font color="#4169E1"><a name="PetscMallocViewGet"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../docs/manualpages/Sys/PetscMallocViewGet.html#PetscMallocViewGet">PetscMallocViewGet</a>(<a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *logging)</font></strong>
+<a name="line765">765: </a>{
+
+<a name="line768">768: </a>  *logging = (<a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>)(PetscLogMalloc &gt;= 0);
+<a name="line769">769: </a>  <font color="#4169E1">return</font>(0);
+<a name="line770">770: </a>}
+
+<a name="line772">772: </a><font color="#B22222">/*@C</font>
+<a name="line773">773: </a><font color="#B22222">    <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a> - Saves the log of all calls to <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>(); also calls</font>
+<a name="line774">774: </a><font color="#B22222">       <a href="../../../docs/manualpages/Sys/PetscMemoryGetMaximumUsage.html#PetscMemoryGetMaximumUsage">PetscMemoryGetMaximumUsage</a>()</font>
+
+<a name="line776">776: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line778">778: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line779">779: </a><font color="#B22222">.   fp - file pointer; or NULL</font>
+
+<a name="line781">781: </a><font color="#B22222">    Options Database Key:</font>
+<a name="line782">782: </a><font color="#B22222">.  -malloc_view &lt;optional filename&gt; - Activates <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>() in <a href="../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>()</font>
+
+<a name="line784">784: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line786">786: </a><font color="#B22222">   Fortran Note:</font>
+<a name="line787">787: </a><font color="#B22222">   The calling sequence in Fortran is <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>(integer ierr)</font>
+<a name="line788">788: </a><font color="#B22222">   The fp defaults to stdout.</font>
+
+<a name="line790">790: </a><font color="#B22222">   Notes:</font>
+<a name="line791">791: </a><font color="#B22222">     <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>() dumps only the currently unfreed memory, this dumps all memory ever allocated</font>
+
+<a name="line793">793: </a><font color="#B22222">     <a href="../../../docs/manualpages/Sys/PetscMemoryView.html#PetscMemoryView">PetscMemoryView</a>() gives a brief summary of current memory usage</font>
+
+<a name="line795">795: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/PetscMallocGetCurrentUsage.html#PetscMallocGetCurrentUsage">PetscMallocGetCurrentUsage</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocDump.html#PetscMallocDump">PetscMallocDump</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocViewSet.html#PetscMallocViewSet">PetscMallocViewSet</a>(), <a href="../../../docs/manualpages/Sys/PetscMemoryView.html#PetscMemoryView">PetscMemoryView</a>()</font>
+<a name="line796">796: </a><font color="#B22222">@*/</font>
+<a name="line797">797: </a><strong><font color="#4169E1"><a name="PetscMallocView"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>(FILE *fp)</font></strong>
+<a name="line798">798: </a>{
+<a name="line799">799: </a>  <a href="../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,n,*perm;
+<a name="line800">800: </a>  size_t         *shortlength;
+<a name="line801">801: </a>  int            *shortcount,err;
+<a name="line802">802: </a>  <a href="../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    rank;
+<a name="line803">803: </a>  <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      match;
+<a name="line804">804: </a>  const char     **shortfunction;
+<a name="line805">805: </a>  <a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> rss;
+
+<a name="line809">809: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(MPI_COMM_WORLD,&amp;rank);
+<a name="line810">810: </a>  err = fflush(fp);
+<a name="line811">811: </a>  <font color="#4169E1">if</font> (err) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SYS,<font color="#666666">"fflush() failed on file"</font>);
+
+<a name="line813">813: </a>  <font color="#4169E1">if</font> (PetscLogMalloc &lt; 0) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"<a href="../../../docs/manualpages/Sys/PetscMallocView.html#PetscMallocView">PetscMallocView</a>() called without call to <a href="../../../docs/manualpages/Sys/PetscMallocViewSet.html#PetscMallocViewSet">PetscMallocViewSet</a>() this is often due to\n                      setting the option -malloc_view AFTER <a href="../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>() with <a href="../../../docs/manualpages/Sys/PetscOptionsInsert.html#PetscOptionsInsert">PetscOptionsInsert</a>() or <a href="../../../docs/manualpages/Sys/PetscOptionsInsertFile.html#PetscOptionsInsertFile">PetscOptionsInsertFile</a>()"</font>);
+
+<a name="line815">815: </a>  <font color="#4169E1">if</font> (!fp) fp = PETSC_STDOUT;
+<a name="line816">816: </a>  <a href="../../../docs/manualpages/Sys/PetscMemoryGetMaximumUsage.html#PetscMemoryGetMaximumUsage">PetscMemoryGetMaximumUsage</a>(&amp;rss);
+<a name="line817">817: </a>  <font color="#4169E1">if</font> (rss) {
+<a name="line818">818: </a>    (void) fprintf(fp,<font color="#666666">"[%d] Maximum memory <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()ed %.0f maximum size of entire process %.0f\n"</font>,rank,(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)TRMaxMem,rss);
+<a name="line819">819: </a>  } <font color="#4169E1">else</font> {
+<a name="line820">820: </a>    (void) fprintf(fp,<font color="#666666">"[%d] Maximum memory <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()ed %.0f OS cannot compute size of entire process\n"</font>,rank,(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)TRMaxMem);
+<a name="line821">821: </a>  }
+<a name="line822">822: </a>  shortcount    = (int*)malloc(PetscLogMalloc*<font color="#4169E1">sizeof</font>(int));<font color="#4169E1">if</font> (!shortcount) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEM,<font color="#666666">"Out of memory"</font>);
+<a name="line823">823: </a>  shortlength   = (size_t*)malloc(PetscLogMalloc*<font color="#4169E1">sizeof</font>(size_t));<font color="#4169E1">if</font> (!shortlength) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEM,<font color="#666666">"Out of memory"</font>);
+<a name="line824">824: </a>  shortfunction = (const char**)malloc(PetscLogMalloc*<font color="#4169E1">sizeof</font>(char*));<font color="#4169E1">if</font> (!shortfunction) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEM,<font color="#666666">"Out of memory"</font>);
+<a name="line825">825: </a>  <font color="#4169E1">for</font> (i=0,n=0; i&lt;PetscLogMalloc; i++) {
+<a name="line826">826: </a>    <font color="#4169E1">for</font> (j=0; j&lt;n; j++) {
+<a name="line827">827: </a>      <a href="../../../docs/manualpages/Sys/PetscStrcmp.html#PetscStrcmp">PetscStrcmp</a>(shortfunction[j],PetscLogMallocFunction[i],&amp;match);
+<a name="line828">828: </a>      <font color="#4169E1">if</font> (match) {
+<a name="line829">829: </a>        shortlength[j] += PetscLogMallocLength[i];
+<a name="line830">830: </a>        shortcount[j]++;
+<a name="line831">831: </a>        <font color="#4169E1">goto</font> foundit;
+<a name="line832">832: </a>      }
+<a name="line833">833: </a>    }
+<a name="line834">834: </a>    shortfunction[n] = PetscLogMallocFunction[i];
+<a name="line835">835: </a>    shortlength[n]   = PetscLogMallocLength[i];
+<a name="line836">836: </a>    shortcount[n]    = 1;
+<a name="line837">837: </a>    n++;
+<a name="line838">838: </a><strong><font color="#FF0000">foundit:</font></strong>;
+<a name="line839">839: </a>  }
+
+<a name="line841">841: </a>  perm = (<a href="../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*)malloc(n*<font color="#4169E1">sizeof</font>(<a href="../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>));<font color="#4169E1">if</font> (!perm) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_MEM,<font color="#666666">"Out of memory"</font>);
+<a name="line842">842: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) perm[i] = i;
+<a name="line843">843: </a>  <a href="../../../docs/manualpages/Sys/PetscSortStrWithPermutation.html#PetscSortStrWithPermutation">PetscSortStrWithPermutation</a>(n,(const char**)shortfunction,perm);
+
+<a name="line845">845: </a>  (void) fprintf(fp,<font color="#666666">"[%d] Memory usage sorted by function\n"</font>,rank);
+<a name="line846">846: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line847">847: </a>    (void) fprintf(fp,<font color="#666666">"[%d] %d %.0f %s()\n"</font>,rank,shortcount[perm[i]],(<a href="../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a>)shortlength[perm[i]],shortfunction[perm[i]]);
+<a name="line848">848: </a>  }
+<a name="line849">849: </a>  free(perm);
+<a name="line850">850: </a>  free(shortlength);
+<a name="line851">851: </a>  free(shortcount);
+<a name="line852">852: </a>  free((char**)shortfunction);
+<a name="line853">853: </a>  err = fflush(fp);
+<a name="line854">854: </a>  <font color="#4169E1">if</font> (err) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SYS,<font color="#666666">"fflush() failed on file"</font>);
+<a name="line855">855: </a>  <font color="#4169E1">return</font>(0);
+<a name="line856">856: </a>}
+
+<a name="line858">858: </a><font color="#B22222">/* ---------------------------------------------------------------------------- */</font>
+
+<a name="line860">860: </a><font color="#B22222">/*@</font>
+<a name="line861">861: </a><font color="#B22222">    <a href="../../../docs/manualpages/Sys/PetscMallocSetDebug.html#PetscMallocSetDebug">PetscMallocSetDebug</a> - Set's PETSc memory debugging</font>
+
+<a name="line863">863: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line865">865: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line866">866: </a><font color="#B22222">+   eachcall - checks the entire heap of allocated memory for issues on each call to <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>() and <a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>()</font>
+<a name="line867">867: </a><font color="#B22222">-   intializenan - initializes all memory with NaN to catch use of unintialized floating point arrays</font>
+
+<a name="line869">869: </a><font color="#B22222">    Options Database:</font>
+<a name="line870">870: </a><font color="#B22222">+   -malloc_debug &lt;true or false&gt; - turns on or off debugging</font>
+<a name="line871">871: </a><font color="#B22222">.   -malloc_test - turns on all debugging if PETSc was configured with debugging including -malloc_dump, otherwise ignored</font>
+<a name="line872">872: </a><font color="#B22222">.   -malloc_view_threshold t - log only allocations larger than t</font>
+<a name="line873">873: </a><font color="#B22222">.   -malloc_dump &lt;filename&gt; - print a list of all memory that has not been freed</font>
+<a name="line874">874: </a><font color="#B22222">.   -malloc no - (deprecated) same as -malloc_debug no</font>
+<a name="line875">875: </a><font color="#B22222">-   -malloc_log - (deprecated) same as -malloc_view</font>
+
+<a name="line877">877: </a><font color="#B22222">   Level: developer</font>
+
+<a name="line879">879: </a><font color="#B22222">    Notes: This is called in <a href="../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>() and should not be called elsewhere</font>
+
+<a name="line881">881: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/CHKMEMQ.html#CHKMEMQ">CHKMEMQ</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocValidate.html#PetscMallocValidate">PetscMallocValidate</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocGetDebug.html#PetscMallocGetDebug">PetscMallocGetDebug</a>()</font>
+<a name="line882">882: </a><font color="#B22222">@*/</font>
+<a name="line883">883: </a><strong><font color="#4169E1"><a name="PetscMallocSetDebug"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../docs/manualpages/Sys/PetscMallocSetDebug.html#PetscMallocSetDebug">PetscMallocSetDebug</a>(<a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> eachcall, <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> initializenan)</font></strong>
+<a name="line884">884: </a>{
+
+<a name="line888">888: </a>  <font color="#4169E1">if</font> (PetscTrMalloc == PetscTrMallocDefault) <a href="../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Cannot call this routine more than once, it can only be called in <a href="../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>()"</font>);
+<a name="line889">889: </a>  <a href="../../../docs/manualpages/Sys/PetscMallocSet.html#PetscMallocSet">PetscMallocSet</a>(PetscTrMallocDefault,PetscTrFreeDefault,PetscTrReallocDefault);
+
+<a name="line891">891: </a>  TRallocated         = 0;
+<a name="line892">892: </a>  TRfrags             = 0;
+<a name="line893">893: </a>  TRhead              = NULL;
+<a name="line894">894: </a>  TRid                = 0;
+<a name="line895">895: </a>  TRdebugLevel        = eachcall;
+<a name="line896">896: </a>  TRMaxMem            = 0;
+<a name="line897">897: </a>  PetscLogMallocMax   = 10000;
+<a name="line898">898: </a>  PetscLogMalloc      = -1;
+<a name="line899">899: </a>  TRdebugIintializenan = initializenan;
+<a name="line900">900: </a>  <font color="#4169E1">return</font>(0);
+<a name="line901">901: </a>}
+
+<a name="line903">903: </a><font color="#B22222">/*@</font>
+<a name="line904">904: </a><font color="#B22222">    <a href="../../../docs/manualpages/Sys/PetscMallocGetDebug.html#PetscMallocGetDebug">PetscMallocGetDebug</a> - Indicates what PETSc memory debugging it is doing.</font>
+
+<a name="line906">906: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line908">908: </a><font color="#B22222">    Output Parameters:</font>
+<a name="line909">909: </a><font color="#B22222">+    basic - doing basic debugging</font>
+<a name="line910">910: </a><font color="#B22222">.    eachcall - checks the entire memory heap at each <a href="../../../docs/manualpages/Sys/PetscMalloc.html#PetscMalloc">PetscMalloc</a>()/<a href="../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>()</font>
+<a name="line911">911: </a><font color="#B22222">-    initializenan - initializes memory with NaN</font>
+
+<a name="line913">913: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line915">915: </a><font color="#B22222">   Notes:</font>
+<a name="line916">916: </a><font color="#B22222">     By default, the debug version always does some debugging unless you run with -malloc_debug no</font>
+
+<a name="line918">918: </a><font color="#B22222">.seealso: <a href="../../../docs/manualpages/Sys/CHKMEMQ.html#CHKMEMQ">CHKMEMQ</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocValidate.html#PetscMallocValidate">PetscMallocValidate</a>(), <a href="../../../docs/manualpages/Sys/PetscMallocSetDebug.html#PetscMallocSetDebug">PetscMallocSetDebug</a>()</font>
+<a name="line919">919: </a><font color="#B22222">@*/</font>
+<a name="line920">920: </a><strong><font color="#4169E1"><a name="PetscMallocGetDebug"></a><a href="../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../docs/manualpages/Sys/PetscMallocGetDebug.html#PetscMallocGetDebug">PetscMallocGetDebug</a>(<a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *basic, <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *eachcall, <a href="../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *initializenan)</font></strong>
+<a name="line921">921: </a>{
+<a name="line923">923: </a>  <font color="#4169E1">if</font> (basic) *basic = (PetscTrMalloc == PetscTrMallocDefault) ? <a href="../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line924">924: </a>  <font color="#4169E1">if</font> (eachcall) *eachcall           = TRdebugLevel;
+<a name="line925">925: </a>  <font color="#4169E1">if</font> (initializenan) *initializenan = TRdebugIintializenan;
+<a name="line926">926: </a>  <font color="#4169E1">return</font>(0);
+<a name="line927">927: </a>}
+</pre>
+</body>
+
+</html>

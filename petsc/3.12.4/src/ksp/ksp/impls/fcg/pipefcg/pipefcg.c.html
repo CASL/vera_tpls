@@ -1,0 +1,658 @@
+<center><a href="pipefcg.c">Actual source code: pipefcg.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/ksp/impls/fcg/pipefcg/pipefcg.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:17:45+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/ksp/impls/fcg/pipefcg/pipefcg.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><font color="#B22222">/*</font>
+<a name="line2">  2: </a><font color="#B22222">    Contributed by Patrick Sanan and Sascha M. Schnepp</font>
+<a name="line3">  3: </a><font color="#B22222">*/</font>
+
+<a name="line5">  5: </a> #include <A href="../../../../../../include/../src/ksp/ksp/impls/fcg/pipefcg/pipefcgimpl.h.html">&lt;../src/ksp/ksp/impls/fcg/pipefcg/pipefcgimpl.h&gt;</A>
+
+<a name="line7">  7: </a>static <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>  cited = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line8">  8: </a>static const char citation[] =
+<a name="line9">  9: </a>  <font color="#666666">"@article{SSM2016,\n"</font>
+<a name="line10"> 10: </a>  <font color="#666666">"  author = {P. Sanan and S.M. Schnepp and D.A. May},\n"</font>
+<a name="line11"> 11: </a>  <font color="#666666">"  title = {Pipelined, Flexible Krylov Subspace Methods},\n"</font>
+<a name="line12"> 12: </a>  <font color="#666666">"  journal = {SIAM Journal on Scientific Computing},\n"</font>
+<a name="line13"> 13: </a>  <font color="#666666">"  volume = {38},\n"</font>
+<a name="line14"> 14: </a>  <font color="#666666">"  number = {5},\n"</font>
+<a name="line15"> 15: </a>  <font color="#666666">"  pages = {C441-C470},\n"</font>
+<a name="line16"> 16: </a>  <font color="#666666">"  year = {2016},\n"</font>
+<a name="line17"> 17: </a>  <font color="#666666">"  doi = {10.1137/15M1049130},\n"</font>
+<a name="line18"> 18: </a>  <font color="#666666">"  URL = {http://dx.doi.org/10.1137/15M1049130},\n"</font>
+<a name="line19"> 19: </a>  <font color="#666666">"  eprint = {http://dx.doi.org/10.1137/15M1049130}\n"</font>
+<a name="line20"> 20: </a>  <font color="#666666">"}\n"</font>;
+
+<a name="line22"> 22: </a><strong><font color="#228B22">#define KSPPIPEFCG_DEFAULT_MMAX 15</font></strong>
+<a name="line23"> 23: </a><strong><font color="#228B22">#define KSPPIPEFCG_DEFAULT_NPREALLOC 5</font></strong>
+<a name="line24"> 24: </a><strong><font color="#228B22">#define KSPPIPEFCG_DEFAULT_VECB 5</font></strong>
+<a name="line25"> 25: </a><strong><font color="#228B22">#define KSPPIPEFCG_DEFAULT_TRUNCSTRAT <a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSP_FCD_TRUNC_TYPE_NOTAY</a></font></strong>
+
+<a name="line27"> 27: </a><strong><font color="#4169E1"><a name="KSPAllocateVectors_PIPEFCG"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPAllocateVectors_PIPEFCG(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nvecsneeded, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> chunksize)</font></strong>
+<a name="line28"> 28: </a>{
+<a name="line29"> 29: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line30"> 30: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        i;
+<a name="line31"> 31: </a>  KSP_PIPEFCG     *pipefcg;
+<a name="line32"> 32: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        nnewvecs, nvecsprev;
+
+<a name="line35"> 35: </a>  pipefcg = (KSP_PIPEFCG*)ksp-&gt;data;
+
+<a name="line37"> 37: </a>  <font color="#B22222">/* Allocate enough new vectors to add chunksize new vectors, reach nvecsneedtotal, or to reach mmax+1, whichever is smallest */</font>
+<a name="line38"> 38: </a>  <font color="#4169E1">if</font>(pipefcg-&gt;nvecs &lt; <a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(pipefcg-&gt;mmax+1,nvecsneeded)){
+<a name="line39"> 39: </a>    nvecsprev = pipefcg-&gt;nvecs;
+<a name="line40"> 40: </a>    nnewvecs = <a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(<a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(nvecsneeded-pipefcg-&gt;nvecs,chunksize),pipefcg-&gt;mmax+1-pipefcg-&gt;nvecs);
+<a name="line41"> 41: </a>    <a href="../../../../../../docs/manualpages/KSP/KSPCreateVecs.html#KSPCreateVecs">KSPCreateVecs</a>(ksp,nnewvecs,&amp;pipefcg-&gt;pQvecs[pipefcg-&gt;nchunks],0,NULL);
+<a name="line42"> 42: </a>    PetscLogObjectParents((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp,nnewvecs,pipefcg-&gt;pQvecs[pipefcg-&gt;nchunks]);
+<a name="line43"> 43: </a>    <a href="../../../../../../docs/manualpages/KSP/KSPCreateVecs.html#KSPCreateVecs">KSPCreateVecs</a>(ksp,nnewvecs,&amp;pipefcg-&gt;pZETAvecs[pipefcg-&gt;nchunks],0,NULL);
+<a name="line44"> 44: </a>    PetscLogObjectParents((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp,nnewvecs,pipefcg-&gt;pZETAvecs[pipefcg-&gt;nchunks]);
+<a name="line45"> 45: </a>    <a href="../../../../../../docs/manualpages/KSP/KSPCreateVecs.html#KSPCreateVecs">KSPCreateVecs</a>(ksp,nnewvecs,&amp;pipefcg-&gt;pPvecs[pipefcg-&gt;nchunks],0,NULL);
+<a name="line46"> 46: </a>    PetscLogObjectParents((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp,nnewvecs,pipefcg-&gt;pPvecs[pipefcg-&gt;nchunks]);
+<a name="line47"> 47: </a>    <a href="../../../../../../docs/manualpages/KSP/KSPCreateVecs.html#KSPCreateVecs">KSPCreateVecs</a>(ksp,nnewvecs,&amp;pipefcg-&gt;pSvecs[pipefcg-&gt;nchunks],0,NULL);
+<a name="line48"> 48: </a>    PetscLogObjectParents((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp,nnewvecs,pipefcg-&gt;pSvecs[pipefcg-&gt;nchunks]);
+<a name="line49"> 49: </a>    pipefcg-&gt;nvecs += nnewvecs;
+<a name="line50"> 50: </a>    <font color="#4169E1">for</font>(i=0;i&lt;nnewvecs;++i){
+<a name="line51"> 51: </a>      pipefcg-&gt;Qvecs[nvecsprev + i]    = pipefcg-&gt;pQvecs[pipefcg-&gt;nchunks][i];
+<a name="line52"> 52: </a>      pipefcg-&gt;ZETAvecs[nvecsprev + i] = pipefcg-&gt;pZETAvecs[pipefcg-&gt;nchunks][i];
+<a name="line53"> 53: </a>      pipefcg-&gt;Pvecs[nvecsprev + i]    = pipefcg-&gt;pPvecs[pipefcg-&gt;nchunks][i];
+<a name="line54"> 54: </a>      pipefcg-&gt;Svecs[nvecsprev + i]    = pipefcg-&gt;pSvecs[pipefcg-&gt;nchunks][i];
+<a name="line55"> 55: </a>    }
+<a name="line56"> 56: </a>    pipefcg-&gt;chunksizes[pipefcg-&gt;nchunks] = nnewvecs;
+<a name="line57"> 57: </a>    ++pipefcg-&gt;nchunks;
+<a name="line58"> 58: </a>  }
+<a name="line59"> 59: </a>  <font color="#4169E1">return</font>(0);
+<a name="line60"> 60: </a>}
+
+<a name="line62"> 62: </a><strong><font color="#4169E1"><a name="KSPSetUp_PIPEFCG"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    KSPSetUp_PIPEFCG(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp)</font></strong>
+<a name="line63"> 63: </a>{
+<a name="line65"> 65: </a>  KSP_PIPEFCG    *pipefcg;
+<a name="line66"> 66: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nworkstd = 5;
+
+<a name="line69"> 69: </a>  pipefcg = (KSP_PIPEFCG*)ksp-&gt;data;
+
+<a name="line71"> 71: </a>  <font color="#B22222">/* Allocate "standard" work vectors (not including the basis and transformed basis vectors) */</font>
+<a name="line72"> 72: </a>  <a href="../../../../../../docs/manualpages/KSP/KSPSetWorkVecs.html#KSPSetWorkVecs">KSPSetWorkVecs</a>(ksp,nworkstd);
+
+<a name="line74"> 74: </a>  <font color="#B22222">/* Allocated space for pointers to additional work vectors</font>
+<a name="line75"> 75: </a><font color="#B22222">   note that mmax is the number of previous directions, so we add 1 for the current direction,</font>
+<a name="line76"> 76: </a><font color="#B22222">   and an extra 1 for the prealloc (which might be empty) */</font>
+<a name="line77"> 77: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;Pvecs),pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;pPvecs),pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;Svecs),pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;pSvecs));
+<a name="line78"> 78: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;Qvecs),pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;pQvecs),pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;ZETAvecs),pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;pZETAvecs));
+<a name="line79"> 79: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;Pold),pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;Sold),pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;Qold),pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;ZETAold));
+<a name="line80"> 80: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;chunksizes));
+<a name="line81"> 81: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc3.html#PetscMalloc3">PetscMalloc3</a>(pipefcg-&gt;mmax+2,&amp;(pipefcg-&gt;dots),pipefcg-&gt;mmax+1,&amp;(pipefcg-&gt;etas),pipefcg-&gt;mmax+2,&amp;(pipefcg-&gt;redux));
+
+<a name="line83"> 83: </a>  <font color="#B22222">/* If the requested number of preallocated vectors is greater than mmax reduce nprealloc */</font>
+<a name="line84"> 84: </a>  <font color="#4169E1">if</font>(pipefcg-&gt;nprealloc &gt; pipefcg-&gt;mmax+1){
+<a name="line85"> 85: </a>    PetscInfo2(NULL,<font color="#666666">"Requested nprealloc=%d is greater than m_max+1=%d. Resetting nprealloc = m_max+1.\n"</font>,pipefcg-&gt;nprealloc, pipefcg-&gt;mmax+1);
+<a name="line86"> 86: </a>  }
+
+<a name="line88"> 88: </a>  <font color="#B22222">/* Preallocate additional work vectors */</font>
+<a name="line89"> 89: </a>  KSPAllocateVectors_PIPEFCG(ksp,pipefcg-&gt;nprealloc,pipefcg-&gt;nprealloc);
+
+<a name="line91"> 91: </a>  <a href="../../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp,(pipefcg-&gt;mmax+1)*4*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>*)+(pipefcg-&gt;mmax+1)*4*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>**)+(pipefcg-&gt;mmax+1)*4*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>*)+
+<a name="line92"> 92: </a>    (pipefcg-&gt;mmax+1)*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)+(pipefcg-&gt;mmax+2)*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>*)+(pipefcg-&gt;mmax+2)*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)+(pipefcg-&gt;mmax+1)*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>));
+<a name="line93"> 93: </a>  <font color="#4169E1">return</font>(0);
+<a name="line94"> 94: </a>}
+
+<a name="line96"> 96: </a><strong><font color="#4169E1"><a name="KSPSolve_PIPEFCG_cycle"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPSolve_PIPEFCG_cycle(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp)</font></strong>
+<a name="line97"> 97: </a>{
+<a name="line99"> 99: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,k,idx,kdx,mi;
+<a name="line100">100: </a>  KSP_PIPEFCG    *pipefcg;
+<a name="line101">101: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    alpha=0.0,gamma,*betas,*dots;
+<a name="line102">102: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      dp=0.0, delta,*eta,*etas;
+<a name="line103">103: </a>  <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            B,R,Z,X,Qcurr,W,ZETAcurr,M,N,Pcurr,Scurr,*redux;
+<a name="line104">104: </a>  <a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            Amat,Pmat;
+
+
+<a name="line108">108: </a>  <font color="#B22222">/* We have not checked these routines for use with complex numbers. The inner products</font>
+<a name="line109">109: </a><font color="#B22222">     are likely not defined correctly for that case */</font>
+<a name="line110">110: </a><font color="#A020F0">#if (defined(PETSC_USE_COMPLEX) &amp;&amp; !defined(PETSC_SKIP_COMPLEX))</font>
+<a name="line111">111: </a>  <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,PETSC_ERR_SUP,<font color="#666666">"PIPEFGMRES has not been implemented for use with complex scalars"</font>);
+<a name="line112">112: </a><font color="#A020F0">#endif</font>
+
+<a name="line114">114: </a><strong><font color="#228B22">#define VecXDot(x,y,a)         (((pipefcg-&gt;type) == (<a href="../../../../../../docs/manualpages/KSP/KSPCGType.html#KSPCGType">KSP_CG_HERMITIAN</a>)) ? <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>       (x,y,a)   : <a href="../../../../../../docs/manualpages/Vec/VecTDot.html#VecTDot">VecTDot</a>       (x,y,a))</font></strong>
+<a name="line115">115: </a><strong><font color="#228B22">#define VecXDotBegin(x,y,a)    (((pipefcg-&gt;type) == (<a href="../../../../../../docs/manualpages/KSP/KSPCGType.html#KSPCGType">KSP_CG_HERMITIAN</a>)) ? <a href="../../../../../../docs/manualpages/Vec/VecDotBegin.html#VecDotBegin">VecDotBegin</a>  (x,y,a)   : <a href="../../../../../../docs/manualpages/Vec/VecTDotBegin.html#VecTDotBegin">VecTDotBegin</a>  (x,y,a))</font></strong>
+<a name="line116">116: </a><strong><font color="#228B22">#define VecXDotEnd(x,y,a)      (((pipefcg-&gt;type) == (<a href="../../../../../../docs/manualpages/KSP/KSPCGType.html#KSPCGType">KSP_CG_HERMITIAN</a>)) ? <a href="../../../../../../docs/manualpages/Vec/VecDotEnd.html#VecDotEnd">VecDotEnd</a>    (x,y,a)   : <a href="../../../../../../docs/manualpages/Vec/VecTDotEnd.html#VecTDotEnd">VecTDotEnd</a>    (x,y,a))</font></strong>
+<a name="line117">117: </a><strong><font color="#228B22">#define VecMXDot(x,n,y,a)      (((pipefcg-&gt;type) == (<a href="../../../../../../docs/manualpages/KSP/KSPCGType.html#KSPCGType">KSP_CG_HERMITIAN</a>)) ? <a href="../../../../../../docs/manualpages/Vec/VecMDot.html#VecMDot">VecMDot</a>      (x,n,y,a) : <a href="../../../../../../docs/manualpages/Vec/VecMTDot.html#VecMTDot">VecMTDot</a>      (x,n,y,a))</font></strong>
+<a name="line118">118: </a><strong><font color="#228B22">#define VecMXDotBegin(x,n,y,a) (((pipefcg-&gt;type) == (<a href="../../../../../../docs/manualpages/KSP/KSPCGType.html#KSPCGType">KSP_CG_HERMITIAN</a>)) ? <a href="../../../../../../docs/manualpages/Vec/VecMDotBegin.html#VecMDotBegin">VecMDotBegin</a> (x,n,y,a) : <a href="../../../../../../docs/manualpages/Vec/VecMTDotBegin.html#VecMTDotBegin">VecMTDotBegin</a> (x,n,y,a))</font></strong>
+<a name="line119">119: </a><strong><font color="#228B22">#define VecMXDotEnd(x,n,y,a)   (((pipefcg-&gt;type) == (<a href="../../../../../../docs/manualpages/KSP/KSPCGType.html#KSPCGType">KSP_CG_HERMITIAN</a>)) ? <a href="../../../../../../docs/manualpages/Vec/VecMDotEnd.html#VecMDotEnd">VecMDotEnd</a>   (x,n,y,a) : <a href="../../../../../../docs/manualpages/Vec/VecMTDotEnd.html#VecMTDotEnd">VecMTDotEnd</a>   (x,n,y,a))</font></strong>
+
+<a name="line121">121: </a>  pipefcg       = (KSP_PIPEFCG*)ksp-&gt;data;
+<a name="line122">122: </a>  X             = ksp-&gt;vec_sol;
+<a name="line123">123: </a>  B             = ksp-&gt;vec_rhs;
+<a name="line124">124: </a>  R             = ksp-&gt;work[0];
+<a name="line125">125: </a>  Z             = ksp-&gt;work[1];
+<a name="line126">126: </a>  W             = ksp-&gt;work[2];
+<a name="line127">127: </a>  M             = ksp-&gt;work[3];
+<a name="line128">128: </a>  N             = ksp-&gt;work[4];
+
+<a name="line130">130: </a>  redux = pipefcg-&gt;redux;
+<a name="line131">131: </a>  dots  = pipefcg-&gt;dots;
+<a name="line132">132: </a>  etas  = pipefcg-&gt;etas;
+<a name="line133">133: </a>  betas = dots;        <font color="#B22222">/* dots takes the result of all dot products of which the betas are a subset */</font>
+
+<a name="line135">135: </a>  <a href="../../../../../../docs/manualpages/PC/PCGetOperators.html#PCGetOperators">PCGetOperators</a>(ksp-&gt;pc,&amp;Amat,&amp;Pmat);
+
+<a name="line137">137: </a>  <font color="#B22222">/* Compute cycle initial residual */</font>
+<a name="line138">138: </a>  KSP_MatMult(ksp,Amat,X,R);
+<a name="line139">139: </a>  <a href="../../../../../../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(R,-1.0,B);                   <font color="#B22222">/* r &lt;- b - Ax */</font>
+<a name="line140">140: </a>  KSP_PCApply(ksp,R,Z);                <font color="#B22222">/* z &lt;- Br     */</font>
+
+<a name="line142">142: </a>  Pcurr = pipefcg-&gt;Pvecs[0];
+<a name="line143">143: </a>  Scurr = pipefcg-&gt;Svecs[0];
+<a name="line144">144: </a>  Qcurr = pipefcg-&gt;Qvecs[0];
+<a name="line145">145: </a>  ZETAcurr = pipefcg-&gt;ZETAvecs[0];
+<a name="line146">146: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(Z,Pcurr);
+<a name="line147">147: </a>  KSP_MatMult(ksp,Amat,Pcurr,Scurr);  <font color="#B22222">/* S = Ap     */</font>
+<a name="line148">148: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(Scurr,W);                   <font color="#B22222">/* w = s = Az */</font>
+
+<a name="line150">150: </a>  <font color="#B22222">/* Initial state of pipelining intermediates */</font>
+<a name="line151">151: </a>  redux[0] = R;
+<a name="line152">152: </a>  redux[1] = W;
+<a name="line153">153: </a>  VecMXDotBegin(Z,2,redux,dots);
+<a name="line154">154: </a>  <a href="../../../../../../docs/manualpages/Vec/PetscCommSplitReductionBegin.html#PetscCommSplitReductionBegin">PetscCommSplitReductionBegin</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)Z)); <font color="#B22222">/* perform asynchronous reduction */</font>
+<a name="line155">155: </a>  KSP_PCApply(ksp,W,M);            <font color="#B22222">/* m = B(w) */</font>
+<a name="line156">156: </a>  KSP_MatMult(ksp,Amat,M,N);       <font color="#B22222">/* n = Am   */</font>
+<a name="line157">157: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(M,Qcurr);                <font color="#B22222">/* q = m    */</font>
+<a name="line158">158: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(N,ZETAcurr);             <font color="#B22222">/* zeta = n */</font>
+<a name="line159">159: </a>  VecMXDotEnd(Z,2,redux,dots);
+<a name="line160">160: </a>  gamma    = dots[0];
+<a name="line161">161: </a>  delta    = <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(dots[1]);
+<a name="line162">162: </a>  etas[0]  = delta;
+<a name="line163">163: </a>  alpha    = gamma/delta;
+
+<a name="line165">165: </a>  i = 0;
+<a name="line166">166: </a>  <font color="#4169E1">do</font> {
+<a name="line167">167: </a>    ksp-&gt;its++;
+
+<a name="line169">169: </a>    <font color="#B22222">/* Update X, R, Z, W */</font>
+<a name="line170">170: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(X,+alpha,Pcurr);           <font color="#B22222">/* x &lt;- x + alpha * pi    */</font>
+<a name="line171">171: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(R,-alpha,Scurr);           <font color="#B22222">/* r &lt;- r - alpha * si    */</font>
+<a name="line172">172: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(Z,-alpha,Qcurr);           <font color="#B22222">/* z &lt;- z - alpha * qi    */</font>
+<a name="line173">173: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(W,-alpha,ZETAcurr);        <font color="#B22222">/* w &lt;- w - alpha * zetai */</font>
+
+<a name="line175">175: </a>    <font color="#B22222">/* Compute norm for convergence check */</font>
+<a name="line176">176: </a>    <font color="#4169E1">switch</font> (ksp-&gt;normtype) {
+<a name="line177">177: </a>      <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/KSP/KSP_NORM_PRECONDITIONED.html#KSP_NORM_PRECONDITIONED">KSP_NORM_PRECONDITIONED</a>:
+<a name="line178">178: </a>        <a href="../../../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(Z,<a href="../../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,&amp;dp);         <font color="#B22222">/* dp &lt;- sqrt(z'*z) = sqrt(e'*A'*B'*B*A*e) */</font>
+<a name="line179">179: </a>        <font color="#4169E1">break</font>;
+<a name="line180">180: </a>      <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/KSP/KSP_NORM_UNPRECONDITIONED.html#KSP_NORM_UNPRECONDITIONED">KSP_NORM_UNPRECONDITIONED</a>:
+<a name="line181">181: </a>        <a href="../../../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(R,<a href="../../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,&amp;dp);         <font color="#B22222">/* dp &lt;- sqrt(r'*r) = sqrt(e'*A'*A*e)      */</font>
+<a name="line182">182: </a>        <font color="#4169E1">break</font>;
+<a name="line183">183: </a>      <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/KSP/KSP_NORM_NATURAL.html#KSP_NORM_NATURAL">KSP_NORM_NATURAL</a>:
+<a name="line184">184: </a>        dp = PetscSqrtReal(PetscAbsScalar(gamma));          <font color="#B22222">/* dp &lt;- sqrt(r'*z) = sqrt(e'*A'*B*A*e)    */</font>
+<a name="line185">185: </a>        <font color="#4169E1">break</font>;
+<a name="line186">186: </a>      <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/KSP/KSP_NORM_NONE.html#KSP_NORM_NONE">KSP_NORM_NONE</a>:
+<a name="line187">187: </a>        dp = 0.0;
+<a name="line188">188: </a>        <font color="#4169E1">break</font>;
+<a name="line189">189: </a><strong><font color="#FF0000">      default:</font></strong> <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp),PETSC_ERR_SUP,<font color="#666666">"%s"</font>,KSPNormTypes[ksp-&gt;normtype]);
+<a name="line190">190: </a>    }
+
+<a name="line192">192: </a>    <font color="#B22222">/* Check for convergence */</font>
+<a name="line193">193: </a>    ksp-&gt;rnorm = dp;
+<a name="line194">194: </a>    KSPLogResidualHistory(ksp,dp);
+<a name="line195">195: </a>    <a href="../../../../../../docs/manualpages/KSP/KSPMonitor.html#KSPMonitor">KSPMonitor</a>(ksp,ksp-&gt;its,dp);
+<a name="line196">196: </a>    (*ksp-&gt;converged)(ksp,ksp-&gt;its+1,dp,&amp;ksp-&gt;reason,ksp-&gt;cnvP);
+<a name="line197">197: </a>    <font color="#4169E1">if</font> (ksp-&gt;reason) <font color="#4169E1">break</font>;
+
+<a name="line199">199: </a>    <font color="#B22222">/* Computations of current iteration done */</font>
+<a name="line200">200: </a>    ++i;
+
+<a name="line202">202: </a>    <font color="#B22222">/* If needbe, allocate a new chunk of vectors in P and C */</font>
+<a name="line203">203: </a>    KSPAllocateVectors_PIPEFCG(ksp,i+1,pipefcg-&gt;vecb);
+
+<a name="line205">205: </a>    <font color="#B22222">/* Note that we wrap around and start clobbering old vectors */</font>
+<a name="line206">206: </a>    idx = i % (pipefcg-&gt;mmax+1);
+<a name="line207">207: </a>    Pcurr    = pipefcg-&gt;Pvecs[idx];
+<a name="line208">208: </a>    Scurr    = pipefcg-&gt;Svecs[idx];
+<a name="line209">209: </a>    Qcurr    = pipefcg-&gt;Qvecs[idx];
+<a name="line210">210: </a>    ZETAcurr = pipefcg-&gt;ZETAvecs[idx];
+<a name="line211">211: </a>    eta      = pipefcg-&gt;etas+idx;
+
+<a name="line213">213: </a>    <font color="#B22222">/* number of old directions to orthogonalize against */</font>
+<a name="line214">214: </a>    <font color="#4169E1">switch</font>(pipefcg-&gt;truncstrat){
+<a name="line215">215: </a>      <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSP_FCD_TRUNC_TYPE_STANDARD</a>:
+<a name="line216">216: </a>        mi = pipefcg-&gt;mmax;
+<a name="line217">217: </a>        <font color="#4169E1">break</font>;
+<a name="line218">218: </a>      <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSP_FCD_TRUNC_TYPE_NOTAY</a>:
+<a name="line219">219: </a>        mi = ((i-1) % pipefcg-&gt;mmax)+1;
+<a name="line220">220: </a>        <font color="#4169E1">break</font>;
+<a name="line221">221: </a><strong><font color="#FF0000">      default:</font></strong>
+<a name="line222">222: </a>        <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONG,<font color="#666666">"Unrecognized Truncation Strategy"</font>);
+<a name="line223">223: </a>    }
+
+<a name="line225">225: </a>    <font color="#B22222">/* Pick old p,s,q,zeta in a way suitable for <a href="../../../../../../docs/manualpages/Vec/VecMDot.html#VecMDot">VecMDot</a> */</font>
+<a name="line226">226: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(Z,Pcurr);
+<a name="line227">227: </a>    <font color="#4169E1">for</font>(k=<a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(0,i-mi),j=0;k&lt;i;++j,++k){
+<a name="line228">228: </a>      kdx = k % (pipefcg-&gt;mmax+1);
+<a name="line229">229: </a>      pipefcg-&gt;Pold[j]    = pipefcg-&gt;Pvecs[kdx];
+<a name="line230">230: </a>      pipefcg-&gt;Sold[j]    = pipefcg-&gt;Svecs[kdx];
+<a name="line231">231: </a>      pipefcg-&gt;Qold[j]    = pipefcg-&gt;Qvecs[kdx];
+<a name="line232">232: </a>      pipefcg-&gt;ZETAold[j] = pipefcg-&gt;ZETAvecs[kdx];
+<a name="line233">233: </a>      redux[j]            = pipefcg-&gt;Svecs[kdx];
+<a name="line234">234: </a>    }
+<a name="line235">235: </a>    redux[j]   = R;   <font color="#B22222">/* If the above loop is not executed redux contains only R =&gt; all beta_k = 0, only gamma, delta != 0 */</font>
+<a name="line236">236: </a>    redux[j+1] = W;
+
+<a name="line238">238: </a>    VecMXDotBegin(Z,j+2,redux,betas);  <font color="#B22222">/* Start split reductions for beta_k = (z,s_k), gamma = (z,r), delta = (z,w) */</font>
+<a name="line239">239: </a>    <a href="../../../../../../docs/manualpages/Vec/PetscCommSplitReductionBegin.html#PetscCommSplitReductionBegin">PetscCommSplitReductionBegin</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)Z)); <font color="#B22222">/* perform asynchronous reduction */</font>
+<a name="line240">240: </a>    <a href="../../../../../../docs/manualpages/Vec/VecWAXPY.html#VecWAXPY">VecWAXPY</a>(N,-1.0,R,W);              <font color="#B22222">/* m = u + B(w-r): (a) ntmp = w-r              */</font>
+<a name="line241">241: </a>    KSP_PCApply(ksp,N,M);              <font color="#B22222">/* m = u + B(w-r): (b) mtmp = B(ntmp) = B(w-r) */</font>
+<a name="line242">242: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(M,1.0,Z);                  <font color="#B22222">/* m = u + B(w-r): (c) m = z + mtmp            */</font>
+<a name="line243">243: </a>    KSP_MatMult(ksp,Amat,M,N);         <font color="#B22222">/* n = Am                                      */</font>
+<a name="line244">244: </a>    VecMXDotEnd(Z,j+2,redux,betas);    <font color="#B22222">/* Finish split reductions */</font>
+<a name="line245">245: </a>    gamma = betas[j];
+<a name="line246">246: </a>    delta = <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(betas[j+1]);
+
+<a name="line248">248: </a>    *eta = 0.;
+<a name="line249">249: </a>    <font color="#4169E1">for</font>(k=<a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(0,i-mi),j=0;k&lt;i;++j,++k){
+<a name="line250">250: </a>      kdx = k % (pipefcg-&gt;mmax+1);
+<a name="line251">251: </a>      betas[j] /= -etas[kdx];                               <font color="#B22222">/* betak  /= etak */</font>
+<a name="line252">252: </a>      *eta -= ((<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>)(PetscAbsScalar(betas[j])*PetscAbsScalar(betas[j]))) * etas[kdx];
+<a name="line253">253: </a>                                                            <font color="#B22222">/* etaitmp = -betaik^2 * etak */</font>
+<a name="line254">254: </a>    }
+<a name="line255">255: </a>    *eta += delta;                                          <font color="#B22222">/* etai    = delta -betaik^2 * etak */</font>
+<a name="line256">256: </a>    <font color="#4169E1">if</font>(*eta &lt; 0.) {
+<a name="line257">257: </a>      pipefcg-&gt;norm_breakdown = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line258">258: </a>      PetscInfo1(ksp,<font color="#666666">"Restart due to square root breakdown at it = \n"</font>,ksp-&gt;its);
+<a name="line259">259: </a>      <font color="#4169E1">break</font>;
+<a name="line260">260: </a>    } <font color="#4169E1">else</font> {
+<a name="line261">261: </a>      alpha= gamma/(*eta);                                  <font color="#B22222">/* alpha = gamma/etai */</font>
+<a name="line262">262: </a>    }
+
+<a name="line264">264: </a>    <font color="#B22222">/* project out stored search directions using classical G-S */</font>
+<a name="line265">265: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(Z,Pcurr);
+<a name="line266">266: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(W,Scurr);
+<a name="line267">267: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(M,Qcurr);
+<a name="line268">268: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(N,ZETAcurr);
+<a name="line269">269: </a>    <a href="../../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(Pcurr   ,j,betas,pipefcg-&gt;Pold);    <font color="#B22222">/* pi    &lt;- ui - sum_k beta_k p_k    */</font>
+<a name="line270">270: </a>    <a href="../../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(Scurr   ,j,betas,pipefcg-&gt;Sold);    <font color="#B22222">/* si    &lt;- wi - sum_k beta_k s_k    */</font>
+<a name="line271">271: </a>    <a href="../../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(Qcurr   ,j,betas,pipefcg-&gt;Qold);    <font color="#B22222">/* qi    &lt;- m  - sum_k beta_k q_k    */</font>
+<a name="line272">272: </a>    <a href="../../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(ZETAcurr,j,betas,pipefcg-&gt;ZETAold); <font color="#B22222">/* zetai &lt;- n  - sum_k beta_k zeta_k */</font>
+
+<a name="line274">274: </a>  } <font color="#4169E1">while</font> (ksp-&gt;its &lt; ksp-&gt;max_it);
+<a name="line275">275: </a>  <font color="#4169E1">return</font>(0);
+<a name="line276">276: </a>}
+
+<a name="line278">278: </a><strong><font color="#4169E1"><a name="KSPSolve_PIPEFCG"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPSolve_PIPEFCG(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp)</font></strong>
+<a name="line279">279: </a>{
+<a name="line281">281: </a>  KSP_PIPEFCG    *pipefcg;
+<a name="line282">282: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    gamma;
+<a name="line283">283: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      dp=0.0;
+<a name="line284">284: </a>  <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            B,R,Z,X;
+<a name="line285">285: </a>  <a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            Amat,Pmat;
+
+<a name="line287">287: </a><strong><font color="#228B22">#define VecXDot(x,y,a)         (((pipefcg-&gt;type) == (<a href="../../../../../../docs/manualpages/KSP/KSPCGType.html#KSPCGType">KSP_CG_HERMITIAN</a>)) ? <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>       (x,y,a)   : <a href="../../../../../../docs/manualpages/Vec/VecTDot.html#VecTDot">VecTDot</a>       (x,y,a))</font></strong>
+
+<a name="line290">290: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscCitationsRegister.html#PetscCitationsRegister">PetscCitationsRegister</a>(citation,&amp;cited);
+
+<a name="line292">292: </a>  pipefcg       = (KSP_PIPEFCG*)ksp-&gt;data;
+<a name="line293">293: </a>  X             = ksp-&gt;vec_sol;
+<a name="line294">294: </a>  B             = ksp-&gt;vec_rhs;
+<a name="line295">295: </a>  R             = ksp-&gt;work[0];
+<a name="line296">296: </a>  Z             = ksp-&gt;work[1];
+
+<a name="line298">298: </a>  <a href="../../../../../../docs/manualpages/PC/PCGetOperators.html#PCGetOperators">PCGetOperators</a>(ksp-&gt;pc,&amp;Amat,&amp;Pmat);
+
+<a name="line300">300: </a>  <font color="#B22222">/* Compute initial residual needed for convergence check*/</font>
+<a name="line301">301: </a>  ksp-&gt;its = 0;
+<a name="line302">302: </a>  <font color="#4169E1">if</font> (!ksp-&gt;guess_zero) {
+<a name="line303">303: </a>    KSP_MatMult(ksp,Amat,X,R);
+<a name="line304">304: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(R,-1.0,B);                 <font color="#B22222">/* r &lt;- b - Ax                             */</font>
+<a name="line305">305: </a>  } <font color="#4169E1">else</font> {
+<a name="line306">306: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(B,R);                      <font color="#B22222">/* r &lt;- b (x is 0)                         */</font>
+<a name="line307">307: </a>  }
+<a name="line308">308: </a>  <font color="#4169E1">switch</font> (ksp-&gt;normtype) {
+<a name="line309">309: </a>    <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/KSP/KSP_NORM_PRECONDITIONED.html#KSP_NORM_PRECONDITIONED">KSP_NORM_PRECONDITIONED</a>:
+<a name="line310">310: </a>      KSP_PCApply(ksp,R,Z);            <font color="#B22222">/* z &lt;- Br                                 */</font>
+<a name="line311">311: </a>      <a href="../../../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(Z,<a href="../../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,&amp;dp);           <font color="#B22222">/* dp &lt;- dqrt(z'*z) = sqrt(e'*A'*B'*B*A*e) */</font>
+<a name="line312">312: </a>      <font color="#4169E1">break</font>;
+<a name="line313">313: </a>    <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/KSP/KSP_NORM_UNPRECONDITIONED.html#KSP_NORM_UNPRECONDITIONED">KSP_NORM_UNPRECONDITIONED</a>:
+<a name="line314">314: </a>      <a href="../../../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(R,<a href="../../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,&amp;dp);           <font color="#B22222">/* dp &lt;- sqrt(r'*r) = sqrt(e'*A'*A*e)      */</font>
+<a name="line315">315: </a>      <font color="#4169E1">break</font>;
+<a name="line316">316: </a>    <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/KSP/KSP_NORM_NATURAL.html#KSP_NORM_NATURAL">KSP_NORM_NATURAL</a>:
+<a name="line317">317: </a>      KSP_PCApply(ksp,R,Z);            <font color="#B22222">/* z &lt;- Br                                 */</font>
+<a name="line318">318: </a>      VecXDot(Z,R,&amp;gamma);
+<a name="line319">319: </a>      dp = PetscSqrtReal(PetscAbsScalar(gamma));            <font color="#B22222">/* dp &lt;- sqrt(r'*z) = sqrt(e'*A'*B*A*e)    */</font>
+<a name="line320">320: </a>      <font color="#4169E1">break</font>;
+<a name="line321">321: </a>    <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/KSP/KSP_NORM_NONE.html#KSP_NORM_NONE">KSP_NORM_NONE</a>:
+<a name="line322">322: </a>      dp = 0.0;
+<a name="line323">323: </a>      <font color="#4169E1">break</font>;
+<a name="line324">324: </a><strong><font color="#FF0000">    default:</font></strong> <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp),PETSC_ERR_SUP,<font color="#666666">"%s"</font>,KSPNormTypes[ksp-&gt;normtype]);
+<a name="line325">325: </a>  }
+
+<a name="line327">327: </a>  <font color="#B22222">/* Initial Convergence Check */</font>
+<a name="line328">328: </a>  KSPLogResidualHistory(ksp,dp);
+<a name="line329">329: </a>  <a href="../../../../../../docs/manualpages/KSP/KSPMonitor.html#KSPMonitor">KSPMonitor</a>(ksp,0,dp);
+<a name="line330">330: </a>  ksp-&gt;rnorm = dp;
+<a name="line331">331: </a>  <font color="#4169E1">if</font> (ksp-&gt;normtype == <a href="../../../../../../docs/manualpages/KSP/KSP_NORM_NONE.html#KSP_NORM_NONE">KSP_NORM_NONE</a>) {
+<a name="line332">332: </a>    <a href="../../../../../../docs/manualpages/KSP/KSPConvergedSkip.html#KSPConvergedSkip">KSPConvergedSkip</a> (ksp,0,dp,&amp;ksp-&gt;reason,ksp-&gt;cnvP);
+<a name="line333">333: </a>  } <font color="#4169E1">else</font> {
+<a name="line334">334: </a>    (*ksp-&gt;converged)(ksp,0,dp,&amp;ksp-&gt;reason,ksp-&gt;cnvP);
+<a name="line335">335: </a>  }
+<a name="line336">336: </a>  <font color="#4169E1">if</font> (ksp-&gt;reason) <font color="#4169E1">return</font>(0);
+
+<a name="line338">338: </a>  <font color="#4169E1">do</font> {
+<a name="line339">339: </a>    <font color="#B22222">/* A cycle is broken only if a norm breakdown occurs. If not the entire solve happens in a single cycle.</font>
+<a name="line340">340: </a><font color="#B22222">       This is coded this way to allow both truncation and truncation-restart strategy</font>
+<a name="line341">341: </a><font color="#B22222">       (see KSPFCDGetNumOldDirections()) */</font>
+<a name="line342">342: </a>    KSPSolve_PIPEFCG_cycle(ksp);
+<a name="line343">343: </a>    <font color="#4169E1">if</font> (ksp-&gt;reason) <font color="#4169E1">break</font>;
+<a name="line344">344: </a>    <font color="#4169E1">if</font> (pipefcg-&gt;norm_breakdown) {
+<a name="line345">345: </a>      pipefcg-&gt;n_restarts++;
+<a name="line346">346: </a>      pipefcg-&gt;norm_breakdown = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line347">347: </a>    }
+<a name="line348">348: </a>  } <font color="#4169E1">while</font> (ksp-&gt;its &lt; ksp-&gt;max_it);
+
+<a name="line350">350: </a>  <font color="#4169E1">if</font> (ksp-&gt;its &gt;= ksp-&gt;max_it) ksp-&gt;reason = <a href="../../../../../../docs/manualpages/KSP/KSP_DIVERGED_ITS.html#KSP_DIVERGED_ITS">KSP_DIVERGED_ITS</a>;
+<a name="line351">351: </a>  <font color="#4169E1">return</font>(0);
+<a name="line352">352: </a>}
+
+<a name="line354">354: </a><strong><font color="#4169E1"><a name="KSPDestroy_PIPEFCG"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPDestroy_PIPEFCG(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp)</font></strong>
+<a name="line355">355: </a>{
+<a name="line357">357: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i;
+<a name="line358">358: </a>  KSP_PIPEFCG    *pipefcg;
+
+<a name="line361">361: </a>  pipefcg = (KSP_PIPEFCG*)ksp-&gt;data;
+
+<a name="line363">363: </a>  <font color="#B22222">/* Destroy "standard" work vecs */</font>
+<a name="line364">364: </a>  <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(ksp-&gt;nwork,&amp;ksp-&gt;work);
+
+<a name="line366">366: </a>  <font color="#B22222">/* Destroy vectors of old directions and the arrays that manage pointers to them */</font>
+<a name="line367">367: </a>  <font color="#4169E1">if</font>(pipefcg-&gt;nvecs){
+<a name="line368">368: </a>    <font color="#4169E1">for</font>(i=0;i&lt;pipefcg-&gt;nchunks;++i){
+<a name="line369">369: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(pipefcg-&gt;chunksizes[i],&amp;pipefcg-&gt;pPvecs[i]);
+<a name="line370">370: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(pipefcg-&gt;chunksizes[i],&amp;pipefcg-&gt;pSvecs[i]);
+<a name="line371">371: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(pipefcg-&gt;chunksizes[i],&amp;pipefcg-&gt;pQvecs[i]);
+<a name="line372">372: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(pipefcg-&gt;chunksizes[i],&amp;pipefcg-&gt;pZETAvecs[i]);
+<a name="line373">373: </a>    }
+<a name="line374">374: </a>  }
+<a name="line375">375: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(pipefcg-&gt;Pvecs,pipefcg-&gt;Svecs,pipefcg-&gt;pPvecs,pipefcg-&gt;pSvecs);
+<a name="line376">376: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(pipefcg-&gt;Qvecs,pipefcg-&gt;ZETAvecs,pipefcg-&gt;pQvecs,pipefcg-&gt;pZETAvecs);
+<a name="line377">377: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(pipefcg-&gt;Pold,pipefcg-&gt;Sold,pipefcg-&gt;Qold,pipefcg-&gt;ZETAold);
+<a name="line378">378: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pipefcg-&gt;chunksizes);
+<a name="line379">379: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(pipefcg-&gt;dots,pipefcg-&gt;etas,pipefcg-&gt;redux);
+<a name="line380">380: </a>  KSPDestroyDefault(ksp);
+<a name="line381">381: </a>  <font color="#4169E1">return</font>(0);
+<a name="line382">382: </a>}
+
+<a name="line384">384: </a><strong><font color="#4169E1"><a name="KSPView_PIPEFCG"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPView_PIPEFCG(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp,<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line385">385: </a>{
+<a name="line386">386: </a>  KSP_PIPEFCG    *pipefcg = (KSP_PIPEFCG*)ksp-&gt;data;
+<a name="line388">388: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      iascii,isstring;
+<a name="line389">389: </a>  const char     *truncstr;
+
+<a name="line392">392: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../../../docs/manualpages/Viewer/PETSCVIEWERASCII.html#PETSCVIEWERASCII">PETSCVIEWERASCII</a>,&amp;iascii);
+<a name="line393">393: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../../../docs/manualpages/Viewer/PETSCVIEWERSTRING.html#PETSCVIEWERSTRING">PETSCVIEWERSTRING</a>,&amp;isstring);
+
+<a name="line395">395: </a>  <font color="#4169E1">if</font>(pipefcg-&gt;truncstrat == <a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSP_FCD_TRUNC_TYPE_STANDARD</a>){
+<a name="line396">396: </a>    truncstr = <font color="#666666">"Using standard truncation strategy"</font>;
+<a name="line397">397: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font>(pipefcg-&gt;truncstrat == <a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSP_FCD_TRUNC_TYPE_NOTAY</a>){
+<a name="line398">398: </a>    truncstr = <font color="#666666">"Using Notay's truncation strategy"</font>;
+<a name="line399">399: </a>  } <font color="#4169E1">else</font> {
+<a name="line400">400: </a>    <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Undefined FCD truncation strategy"</font>);
+<a name="line401">401: </a>  }
+
+<a name="line403">403: </a>  <font color="#4169E1">if</font> (iascii) {
+<a name="line404">404: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  max previous directions = %D\n"</font>,pipefcg-&gt;mmax);
+<a name="line405">405: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  preallocated %D directions\n"</font>,<a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(pipefcg-&gt;nprealloc,pipefcg-&gt;mmax+1));
+<a name="line406">406: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  %s\n"</font>,truncstr);
+<a name="line407">407: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  restarts performed = %D \n"</font>, pipefcg-&gt;n_restarts);
+<a name="line408">408: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isstring) {
+<a name="line409">409: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerStringSPrintf.html#PetscViewerStringSPrintf">PetscViewerStringSPrintf</a>(viewer,
+<a name="line410">410: </a>      <font color="#666666">"max previous directions = %D, preallocated %D directions, %s truncation strategy"</font>,
+<a name="line411">411: </a>      pipefcg-&gt;mmax,pipefcg-&gt;nprealloc,truncstr);
+<a name="line412">412: </a>  }
+<a name="line413">413: </a>  <font color="#4169E1">return</font>(0);
+<a name="line414">414: </a>}
+
+<a name="line416">416: </a><font color="#B22222">/*@</font>
+<a name="line417">417: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetMmax.html#KSPPIPEFCGSetMmax">KSPPIPEFCGSetMmax</a> - set the maximum number of previous directions PIPEFCG will store for orthogonalization</font>
+
+<a name="line419">419: </a><font color="#B22222">  Note: mmax + 1 directions are stored (mmax previous ones along with the current one)</font>
+<a name="line420">420: </a><font color="#B22222">  and whether all are used in each iteration also depends on the truncation strategy</font>
+<a name="line421">421: </a><font color="#B22222">  (see <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetTruncationType.html#KSPPIPEFCGSetTruncationType">KSPPIPEFCGSetTruncationType</a>)</font>
+
+<a name="line423">423: </a><font color="#B22222">  Logically Collective on ksp</font>
+
+<a name="line425">425: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line426">426: </a><font color="#B22222">+  ksp - the Krylov space context</font>
+<a name="line427">427: </a><font color="#B22222">-  mmax - the maximum number of previous directions to orthogonalize against</font>
+
+<a name="line429">429: </a><font color="#B22222">  Level: intermediate</font>
+
+<a name="line431">431: </a><font color="#B22222">  Options Database:</font>
+<a name="line432">432: </a><font color="#B22222">. -ksp_pipefcg_mmax &lt;N&gt;</font>
+
+<a name="line434">434: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCG.html#KSPPIPEFCG">KSPPIPEFCG</a>, <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetTruncationType.html#KSPPIPEFCGSetTruncationType">KSPPIPEFCGSetTruncationType</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetNprealloc.html#KSPPIPEFCGSetNprealloc">KSPPIPEFCGSetNprealloc</a>()</font>
+<a name="line435">435: </a><font color="#B22222">@*/</font>
+<a name="line436">436: </a><strong><font color="#4169E1"><a name="KSPPIPEFCGSetMmax"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetMmax.html#KSPPIPEFCGSetMmax">KSPPIPEFCGSetMmax</a>(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> mmax)</font></strong>
+<a name="line437">437: </a>{
+<a name="line438">438: </a>  KSP_PIPEFCG *pipefcg=(KSP_PIPEFCG*)ksp-&gt;data;
+
+<a name="line443">443: </a>  pipefcg-&gt;mmax=mmax;
+<a name="line444">444: </a>  <font color="#4169E1">return</font>(0);
+<a name="line445">445: </a>}
+
+<a name="line447">447: </a><font color="#B22222">/*@</font>
+<a name="line448">448: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetMmax.html#KSPPIPEFCGGetMmax">KSPPIPEFCGGetMmax</a> - get the maximum number of previous directions PIPEFCG will store</font>
+
+<a name="line450">450: </a><font color="#B22222">  Note: PIPEFCG stores mmax+1 directions at most (mmax previous ones, and the current one)</font>
+
+<a name="line452">452: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line454">454: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line455">455: </a><font color="#B22222">.  ksp - the Krylov space context</font>
+
+<a name="line457">457: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line458">458: </a><font color="#B22222">.  mmax - the maximum number of previous directons allowed for orthogonalization</font>
+
+<a name="line460">460: </a><font color="#B22222">  Options Database:</font>
+<a name="line461">461: </a><font color="#B22222">. -ksp_pipefcg_mmax &lt;N&gt;</font>
+
+<a name="line463">463: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line465">465: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCG.html#KSPPIPEFCG">KSPPIPEFCG</a>, <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetTruncationType.html#KSPPIPEFCGGetTruncationType">KSPPIPEFCGGetTruncationType</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetNprealloc.html#KSPPIPEFCGGetNprealloc">KSPPIPEFCGGetNprealloc</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetMmax.html#KSPPIPEFCGSetMmax">KSPPIPEFCGSetMmax</a>()</font>
+<a name="line466">466: </a><font color="#B22222">@*/</font>
+<a name="line467">467: </a><strong><font color="#4169E1"><a name="KSPPIPEFCGGetMmax"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetMmax.html#KSPPIPEFCGGetMmax">KSPPIPEFCGGetMmax</a>(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *mmax)</font></strong>
+<a name="line468">468: </a>{
+<a name="line469">469: </a>  KSP_PIPEFCG *pipefcg=(KSP_PIPEFCG*)ksp-&gt;data;
+
+<a name="line473">473: </a>  *mmax=pipefcg-&gt;mmax;
+<a name="line474">474: </a>  <font color="#4169E1">return</font>(0);
+<a name="line475">475: </a>}
+
+<a name="line477">477: </a><font color="#B22222">/*@</font>
+<a name="line478">478: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetNprealloc.html#KSPPIPEFCGSetNprealloc">KSPPIPEFCGSetNprealloc</a> - set the number of directions to preallocate with PIPEFCG</font>
+
+<a name="line480">480: </a><font color="#B22222">  Logically Collective on ksp</font>
+
+<a name="line482">482: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line483">483: </a><font color="#B22222">+  ksp - the Krylov space context</font>
+<a name="line484">484: </a><font color="#B22222">-  nprealloc - the number of vectors to preallocate</font>
+
+<a name="line486">486: </a><font color="#B22222">  Level: advanced</font>
+
+<a name="line488">488: </a><font color="#B22222">  Options Database:</font>
+<a name="line489">489: </a><font color="#B22222">. -ksp_pipefcg_nprealloc &lt;N&gt;</font>
+
+<a name="line491">491: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCG.html#KSPPIPEFCG">KSPPIPEFCG</a>, <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetTruncationType.html#KSPPIPEFCGSetTruncationType">KSPPIPEFCGSetTruncationType</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetNprealloc.html#KSPPIPEFCGGetNprealloc">KSPPIPEFCGGetNprealloc</a>()</font>
+<a name="line492">492: </a><font color="#B22222">@*/</font>
+<a name="line493">493: </a><strong><font color="#4169E1"><a name="KSPPIPEFCGSetNprealloc"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetNprealloc.html#KSPPIPEFCGSetNprealloc">KSPPIPEFCGSetNprealloc</a>(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nprealloc)</font></strong>
+<a name="line494">494: </a>{
+<a name="line495">495: </a>  KSP_PIPEFCG *pipefcg=(KSP_PIPEFCG*)ksp-&gt;data;
+
+<a name="line500">500: </a>  pipefcg-&gt;nprealloc = nprealloc;
+<a name="line501">501: </a>  <font color="#4169E1">return</font>(0);
+<a name="line502">502: </a>}
+
+<a name="line504">504: </a><font color="#B22222">/*@</font>
+<a name="line505">505: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetNprealloc.html#KSPPIPEFCGGetNprealloc">KSPPIPEFCGGetNprealloc</a> - get the number of directions to preallocate by PIPEFCG</font>
+
+<a name="line507">507: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line509">509: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line510">510: </a><font color="#B22222">.  ksp - the Krylov space context</font>
+
+<a name="line512">512: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line513">513: </a><font color="#B22222">.  nprealloc - the number of directions preallocated</font>
+
+<a name="line515">515: </a><font color="#B22222">  Options Database:</font>
+<a name="line516">516: </a><font color="#B22222">. -ksp_pipefcg_nprealloc &lt;N&gt;</font>
+
+<a name="line518">518: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line520">520: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCG.html#KSPPIPEFCG">KSPPIPEFCG</a>, <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetTruncationType.html#KSPPIPEFCGGetTruncationType">KSPPIPEFCGGetTruncationType</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetNprealloc.html#KSPPIPEFCGSetNprealloc">KSPPIPEFCGSetNprealloc</a>()</font>
+<a name="line521">521: </a><font color="#B22222">@*/</font>
+<a name="line522">522: </a><strong><font color="#4169E1"><a name="KSPPIPEFCGGetNprealloc"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetNprealloc.html#KSPPIPEFCGGetNprealloc">KSPPIPEFCGGetNprealloc</a>(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *nprealloc)</font></strong>
+<a name="line523">523: </a>{
+<a name="line524">524: </a>  KSP_PIPEFCG *pipefcg=(KSP_PIPEFCG*)ksp-&gt;data;
+
+<a name="line528">528: </a>  *nprealloc = pipefcg-&gt;nprealloc;
+<a name="line529">529: </a>  <font color="#4169E1">return</font>(0);
+<a name="line530">530: </a>}
+
+<a name="line532">532: </a><font color="#B22222">/*@</font>
+<a name="line533">533: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetTruncationType.html#KSPPIPEFCGSetTruncationType">KSPPIPEFCGSetTruncationType</a> - specify how many of its stored previous directions PIPEFCG uses during orthoganalization</font>
+
+<a name="line535">535: </a><font color="#B22222">  Logically Collective on ksp</font>
+
+<a name="line537">537: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSP_FCD_TRUNC_TYPE_STANDARD</a> uses all (up to mmax) stored directions</font>
+<a name="line538">538: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSP_FCD_TRUNC_TYPE_NOTAY</a> uses max(1,mod(i,mmax)) stored directions at iteration i=0,1,..</font>
+
+<a name="line540">540: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line541">541: </a><font color="#B22222">+  ksp - the Krylov space context</font>
+<a name="line542">542: </a><font color="#B22222">-  truncstrat - the choice of strategy</font>
+
+<a name="line544">544: </a><font color="#B22222">  Level: intermediate</font>
+
+<a name="line546">546: </a><font color="#B22222">  Options Database:</font>
+<a name="line547">547: </a><font color="#B22222">.  -ksp_pipefcg_truncation_type &lt;standard,notay&gt; - which stored search directions to orthogonalize against</font>
+
+<a name="line549">549: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCG.html#KSPPIPEFCG">KSPPIPEFCG</a>, <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetTruncationType.html#KSPPIPEFCGGetTruncationType">KSPPIPEFCGGetTruncationType</a>, <a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSPFCDTruncationType</a></font>
+<a name="line550">550: </a><font color="#B22222">@*/</font>
+<a name="line551">551: </a><strong><font color="#4169E1"><a name="KSPPIPEFCGSetTruncationType"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetTruncationType.html#KSPPIPEFCGSetTruncationType">KSPPIPEFCGSetTruncationType</a>(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp,<a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSPFCDTruncationType</a> truncstrat)</font></strong>
+<a name="line552">552: </a>{
+<a name="line553">553: </a>  KSP_PIPEFCG *pipefcg=(KSP_PIPEFCG*)ksp-&gt;data;
+
+<a name="line558">558: </a>  pipefcg-&gt;truncstrat=truncstrat;
+<a name="line559">559: </a>  <font color="#4169E1">return</font>(0);
+<a name="line560">560: </a>}
+
+<a name="line562">562: </a><font color="#B22222">/*@</font>
+<a name="line563">563: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetTruncationType.html#KSPPIPEFCGGetTruncationType">KSPPIPEFCGGetTruncationType</a> - get the truncation strategy employed by PIPEFCG</font>
+
+<a name="line565">565: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line567">567: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line568">568: </a><font color="#B22222">.  ksp - the Krylov space context</font>
+
+<a name="line570">570: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line571">571: </a><font color="#B22222">.  truncstrat - the strategy type</font>
+
+<a name="line573">573: </a><font color="#B22222">  Options Database:</font>
+<a name="line574">574: </a><font color="#B22222">. -ksp_pipefcg_truncation_type &lt;standard,notay&gt; - which stored basis vectors to orthogonalize against</font>
+
+<a name="line576">576: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line578">578: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCG.html#KSPPIPEFCG">KSPPIPEFCG</a>, <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetTruncationType.html#KSPPIPEFCGSetTruncationType">KSPPIPEFCGSetTruncationType</a>, <a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSPFCDTruncationType</a></font>
+<a name="line579">579: </a><font color="#B22222">@*/</font>
+<a name="line580">580: </a><strong><font color="#4169E1"><a name="KSPPIPEFCGGetTruncationType"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetTruncationType.html#KSPPIPEFCGGetTruncationType">KSPPIPEFCGGetTruncationType</a>(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp,<a href="../../../../../../docs/manualpages/KSP/KSPFCDTruncationType.html#KSPFCDTruncationType">KSPFCDTruncationType</a> *truncstrat)</font></strong>
+<a name="line581">581: </a>{
+<a name="line582">582: </a>  KSP_PIPEFCG *pipefcg=(KSP_PIPEFCG*)ksp-&gt;data;
+
+<a name="line586">586: </a>  *truncstrat=pipefcg-&gt;truncstrat;
+<a name="line587">587: </a>  <font color="#4169E1">return</font>(0);
+<a name="line588">588: </a>}
+
+<a name="line590">590: </a><strong><font color="#4169E1"><a name="KSPSetFromOptions_PIPEFCG"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPSetFromOptions_PIPEFCG(PetscOptionItems *PetscOptionsObject,<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp)</font></strong>
+<a name="line591">591: </a>{
+<a name="line593">593: </a>  KSP_PIPEFCG    *pipefcg=(KSP_PIPEFCG*)ksp-&gt;data;
+<a name="line594">594: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       mmax,nprealloc;
+<a name="line595">595: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flg;
+
+<a name="line598">598: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsHead.html#PetscOptionsHead">PetscOptionsHead</a>(PetscOptionsObject,<font color="#666666">"<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> PIPEFCG options"</font>);
+<a name="line599">599: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-ksp_pipefcg_mmax"</font>,<font color="#666666">"Number of search directions to storue"</font>,<font color="#666666">"<a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetMmax.html#KSPPIPEFCGSetMmax">KSPPIPEFCGSetMmax</a>"</font>,pipefcg-&gt;mmax,&amp;mmax,&amp;flg);
+<a name="line600">600: </a>  <font color="#4169E1">if</font> (flg) <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetMmax.html#KSPPIPEFCGSetMmax">KSPPIPEFCGSetMmax</a>(ksp,mmax);
+<a name="line601">601: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-ksp_pipefcg_nprealloc"</font>,<font color="#666666">"Number of directions to preallocate"</font>,<font color="#666666">"<a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetNprealloc.html#KSPPIPEFCGSetNprealloc">KSPPIPEFCGSetNprealloc</a>"</font>,pipefcg-&gt;nprealloc,&amp;nprealloc,&amp;flg);
+<a name="line602">602: </a>  <font color="#4169E1">if</font> (flg) { <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetNprealloc.html#KSPPIPEFCGSetNprealloc">KSPPIPEFCGSetNprealloc</a>(ksp,nprealloc); }
+<a name="line603">603: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsEnum.html#PetscOptionsEnum">PetscOptionsEnum</a>(<font color="#666666">"-ksp_pipefcg_truncation_type"</font>,<font color="#666666">"Truncation approach for directions"</font>,<font color="#666666">"<a href="../../../../../../docs/manualpages/KSP/KSPFCGSetTruncationType.html#KSPFCGSetTruncationType">KSPFCGSetTruncationType</a>"</font>,KSPFCDTruncationTypes,(<a href="../../../../../../docs/manualpages/Sys/PetscEnum.html#PetscEnum">PetscEnum</a>)pipefcg-&gt;truncstrat,(<a href="../../../../../../docs/manualpages/Sys/PetscEnum.html#PetscEnum">PetscEnum</a>*)&amp;pipefcg-&gt;truncstrat,NULL);
+<a name="line604">604: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsTail.html#PetscOptionsTail">PetscOptionsTail</a>();
+<a name="line605">605: </a>  <font color="#4169E1">return</font>(0);
+<a name="line606">606: </a>}
+
+<a name="line608">608: </a><font color="#B22222">/*MC</font>
+
+<a name="line610">610: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCG.html#KSPPIPEFCG">KSPPIPEFCG</a> - Implements a Pipelined, Flexible Conjugate Gradient method.</font>
+
+<a name="line612">612: </a><font color="#B22222">  Options Database Keys:</font>
+<a name="line613">613: </a><font color="#B22222">+   -ksp_pipefcg_mmax &lt;N&gt; - The number of previous search directions to store</font>
+<a name="line614">614: </a><font color="#B22222">.   -ksp_pipefcg_nprealloc &lt;N&gt; - The number of previous search directions to preallocate</font>
+<a name="line615">615: </a><font color="#B22222">-   -ksp_pipefcg_truncation_type &lt;standard,notay&gt; - which stored search directions to orthogonalize against</font>
+
+<a name="line617">617: </a><font color="#B22222">  Notes:</font>
+<a name="line618">618: </a><font color="#B22222">   Supports left preconditioning only.</font>
+
+<a name="line620">620: </a><font color="#B22222">   The natural "norm" for this method is (u,Au), where u is the preconditioned residual. As with standard CG, this norm is available at no additional computational cost. Choosing preconditioned or unpreconditioned norms involve an extra blocking global reduction, thus removing any benefit from pipelining.</font>
+
+<a name="line622">622: </a><font color="#B22222">   MPI configuration may be necessary for reductions to make asynchronous progress, which is important for performance of pipelined methods.</font>
+<a name="line623">623: </a><font color="#B22222">   See the FAQ on the PETSc website for details.</font>
+
+<a name="line625">625: </a><font color="#B22222">  Reference:</font>
+<a name="line626">626: </a><font color="#B22222">    P. Sanan, S.M. Schnepp, and D.A. May,</font>
+<a name="line627">627: </a><font color="#B22222">    "Pipelined, Flexible Krylov Subspace Methods,"</font>
+<a name="line628">628: </a><font color="#B22222">    SIAM Journal on Scientific Computing 2016 38:5, C441-C470,</font>
+<a name="line629">629: </a><font color="#B22222">    DOI: 10.1137/15M1049130</font>
+
+<a name="line631">631: </a><font color="#B22222">  Level: intermediate</font>
+
+<a name="line633">633: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/KSP/KSPFCG.html#KSPFCG">KSPFCG</a>, <a href="../../../../../../docs/manualpages/KSP/KSPPIPECG.html#KSPPIPECG">KSPPIPECG</a>, <a href="../../../../../../docs/manualpages/KSP/KSPPIPECR.html#KSPPIPECR">KSPPIPECR</a>, <a href="../../../../../../docs/manualpages/KSP/KSPGCR.html#KSPGCR">KSPGCR</a>, <a href="../../../../../../docs/manualpages/KSP/KSPPIPEGCR.html#KSPPIPEGCR">KSPPIPEGCR</a>, <a href="../../../../../../docs/manualpages/KSP/KSPFGMRES.html#KSPFGMRES">KSPFGMRES</a>, <a href="../../../../../../docs/manualpages/KSP/KSPCG.html#KSPCG">KSPCG</a>, <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetMmax.html#KSPPIPEFCGSetMmax">KSPPIPEFCGSetMmax</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetMmax.html#KSPPIPEFCGGetMmax">KSPPIPEFCGGetMmax</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetNprealloc.html#KSPPIPEFCGSetNprealloc">KSPPIPEFCGSetNprealloc</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetNprealloc.html#KSPPIPEFCGGetNprealloc">KSPPIPEFCGGetNprealloc</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGSetTruncationType.html#KSPPIPEFCGSetTruncationType">KSPPIPEFCGSetTruncationType</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPPIPEFCGGetTruncationType.html#KSPPIPEFCGGetTruncationType">KSPPIPEFCGGetTruncationType</a>()</font>
+
+<a name="line635">635: </a><font color="#B22222">M*/</font>
+<a name="line636">636: </a><strong><font color="#4169E1"><a name="KSPCreate_PIPEFCG"></a>PETSC_EXTERN <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPCreate_PIPEFCG(<a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp)</font></strong>
+<a name="line637">637: </a>{
+<a name="line639">639: </a>  KSP_PIPEFCG    *pipefcg;
+
+<a name="line642">642: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(ksp,&amp;pipefcg);
+<a name="line643">643: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line644">644: </a>  pipefcg-&gt;type       = <a href="../../../../../../docs/manualpages/KSP/KSPCGType.html#KSPCGType">KSP_CG_SYMMETRIC</a>;
+<a name="line645">645: </a><font color="#A020F0">#else</font>
+<a name="line646">646: </a>  pipefcg-&gt;type       = <a href="../../../../../../docs/manualpages/KSP/KSPCGType.html#KSPCGType">KSP_CG_HERMITIAN</a>;
+<a name="line647">647: </a><font color="#A020F0">#endif</font>
+<a name="line648">648: </a>  pipefcg-&gt;mmax       = KSPPIPEFCG_DEFAULT_MMAX;
+<a name="line649">649: </a>  pipefcg-&gt;nprealloc  = KSPPIPEFCG_DEFAULT_NPREALLOC;
+<a name="line650">650: </a>  pipefcg-&gt;nvecs      = 0;
+<a name="line651">651: </a>  pipefcg-&gt;vecb       = KSPPIPEFCG_DEFAULT_VECB;
+<a name="line652">652: </a>  pipefcg-&gt;nchunks    = 0;
+<a name="line653">653: </a>  pipefcg-&gt;truncstrat = KSPPIPEFCG_DEFAULT_TRUNCSTRAT;
+<a name="line654">654: </a>  pipefcg-&gt;n_restarts = 0;
+
+<a name="line656">656: </a>  ksp-&gt;data = (void*)pipefcg;
+
+<a name="line658">658: </a>  <a href="../../../../../../docs/manualpages/KSP/KSPSetSupportedNorm.html#KSPSetSupportedNorm">KSPSetSupportedNorm</a>(ksp,<a href="../../../../../../docs/manualpages/KSP/KSP_NORM_PRECONDITIONED.html#KSP_NORM_PRECONDITIONED">KSP_NORM_PRECONDITIONED</a>,<a href="../../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>,2);
+<a name="line659">659: </a>  <a href="../../../../../../docs/manualpages/KSP/KSPSetSupportedNorm.html#KSPSetSupportedNorm">KSPSetSupportedNorm</a>(ksp,<a href="../../../../../../docs/manualpages/KSP/KSP_NORM_NATURAL.html#KSP_NORM_NATURAL">KSP_NORM_NATURAL</a>,<a href="../../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>,1);
+<a name="line660">660: </a>  <a href="../../../../../../docs/manualpages/KSP/KSPSetSupportedNorm.html#KSPSetSupportedNorm">KSPSetSupportedNorm</a>(ksp,<a href="../../../../../../docs/manualpages/KSP/KSP_NORM_UNPRECONDITIONED.html#KSP_NORM_UNPRECONDITIONED">KSP_NORM_UNPRECONDITIONED</a>,<a href="../../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>,1);
+<a name="line661">661: </a>  <a href="../../../../../../docs/manualpages/KSP/KSPSetSupportedNorm.html#KSPSetSupportedNorm">KSPSetSupportedNorm</a>(ksp,<a href="../../../../../../docs/manualpages/KSP/KSP_NORM_NONE.html#KSP_NORM_NONE">KSP_NORM_NONE</a>,<a href="../../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>,1);
+
+<a name="line663">663: </a>  ksp-&gt;ops-&gt;setup          = KSPSetUp_PIPEFCG;
+<a name="line664">664: </a>  ksp-&gt;ops-&gt;solve          = KSPSolve_PIPEFCG;
+<a name="line665">665: </a>  ksp-&gt;ops-&gt;destroy        = KSPDestroy_PIPEFCG;
+<a name="line666">666: </a>  ksp-&gt;ops-&gt;view           = KSPView_PIPEFCG;
+<a name="line667">667: </a>  ksp-&gt;ops-&gt;setfromoptions = KSPSetFromOptions_PIPEFCG;
+<a name="line668">668: </a>  ksp-&gt;ops-&gt;buildsolution  = KSPBuildSolutionDefault;
+<a name="line669">669: </a>  ksp-&gt;ops-&gt;buildresidual  = KSPBuildResidualDefault;
+<a name="line670">670: </a>  <font color="#4169E1">return</font>(0);
+<a name="line671">671: </a>}
+</pre>
+</body>
+
+</html>

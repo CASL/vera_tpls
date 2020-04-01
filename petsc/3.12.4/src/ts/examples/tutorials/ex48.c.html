@@ -1,0 +1,729 @@
+<center><a href="ex48.c">Actual source code: ex48.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ts/examples/tutorials/ex48.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:30:47+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ts/examples/tutorials/ex48.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a>static char help[] = <font color="#666666">"Evolution of magnetic islands.\n\</font>
+<a name="line2">  2: </a><font color="#666666">The aim of this model is to self-consistently study the interaction between the tearing mode and small scale drift-wave turbulence.\n\n\n"</font>;
+
+</pre><script type="text/x-mathjax-config">
+                   MathJax.Hub.Config({
+                       tex2jax: {inlineMath: [['$','$'], ['\\(','\\)']]}
+                   });
+                 </script>
+                 <script type="text/javascript"
+                      src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+                 </script>This is a three field model for the density $\tilde n$, vorticity $\tilde\Omega$, and magnetic flux $\tilde\psi$, using auxiliary variables potential $\tilde\phi$ and current $j_z$.<BR>
+
+\begin{equation}<BR>
+
+  \begin{aligned}<BR>
+
+    \partial_t \tilde n       &amp;= \left\{ \tilde n, \tilde\phi \right\} + \beta \left\{ j_z, \tilde\psi \right\} + \left\{ \ln n_0, \tilde\phi \right\} + \mu \nabla^2_\perp \tilde n \\<BR>
+
+  \partial_t \tilde\Omega   &amp;= \left\{ \tilde\Omega, \tilde\phi \right\} + \beta \left\{ j_z, \tilde\psi \right\} + \mu \nabla^2_\perp \tilde\Omega \\<BR>
+
+  \partial_t \tilde\psi     &amp;= \left\{ \psi_0 + \tilde\psi, \tilde\phi - \tilde n \right\} - \left\{ \ln n_0, \tilde\psi \right\} + \frac{\eta}{\beta} \nabla^2_\perp \tilde\psi \\<BR>
+
+  \nabla^2_\perp\tilde\phi        &amp;= \tilde\Omega \\<BR>
+
+  j_z  &amp;= -\nabla^2_\perp  \left(\tilde\psi + \psi_0  \right)\\<BR>
+
+  \end{aligned}<BR>
+
+\end{equation}<BR>
+
+<pre width="80">
+<a name="line17"> 17: </a> #include <A href="../../../../include/petscdmplex.h.html">&lt;petscdmplex.h&gt;</A>
+<a name="line18"> 18: </a> #include <A href="../../../../include/petscts.h.html">&lt;petscts.h&gt;</A>
+<a name="line19"> 19: </a> #include <A href="../../../../include/petscds.h.html">&lt;petscds.h&gt;</A>
+<a name="line20"> 20: </a><font color="#A020F0">#include &lt;assert.h&gt;</font>
+
+<a name="line22"> 22: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line23"> 23: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       debug;             <font color="#B22222">/* The debugging level */</font>
+<a name="line24"> 24: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      plotRef;           <font color="#B22222">/* Plot the reference fields */</font>
+<a name="line25"> 25: </a>  <font color="#B22222">/* Domain and mesh definition */</font>
+<a name="line26"> 26: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       dim;               <font color="#B22222">/* The topological mesh dimension */</font>
+<a name="line27"> 27: </a>  char           filename[2048];    <font color="#B22222">/* The optional ExodusII file */</font>
+<a name="line28"> 28: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      cell_simplex;           <font color="#B22222">/* Simplicial mesh */</font>
+<a name="line29"> 29: </a>  <a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DMBoundaryType</a> boundary_types[3];
+<a name="line30"> 30: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       cells[3];
+<a name="line31"> 31: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       refine;
+<a name="line32"> 32: </a>  <font color="#B22222">/* geometry  */</font>
+<a name="line33"> 33: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      domain_lo[3], domain_hi[3];
+<a name="line34"> 34: </a>  <a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DMBoundaryType</a> periodicity[3];              <font color="#B22222">/* The domain periodicity */</font>
+<a name="line35"> 35: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      b0[3]; <font color="#B22222">/* not used */</font>
+<a name="line36"> 36: </a>  <font color="#B22222">/* Problem definition */</font>
+<a name="line37"> 37: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> (**initialFuncs)(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> time, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *u, void *ctx);
+<a name="line38"> 38: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      mu, eta, beta;
+<a name="line39"> 39: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      a,b,Jo,Jop,m,ke,kx,ky,DeltaPrime,eps;
+<a name="line40"> 40: </a>  <font color="#B22222">/* solver */</font>
+<a name="line41"> 41: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      implicit;
+<a name="line42"> 42: </a>} AppCtx;
+
+<a name="line44"> 44: </a>static AppCtx *s_ctx;
+
+<a name="line46"> 46: </a><strong><font color="#4169E1"><a name="poissonBracket"></a>static <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> poissonBracket(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> df[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> dg[])</font></strong>
+<a name="line47"> 47: </a>{
+<a name="line48"> 48: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> ret = df[0]*dg[1] - df[1]*dg[0];
+<a name="line49"> 49: </a>  <font color="#4169E1">return</font> ret;
+<a name="line50"> 50: </a>}
+
+<a name="line52"> 52: </a><font color="#4169E1">enum</font> field_idx {DENSITY,OMEGA,PSI,PHI,JZ};
+
+<a name="line54"> 54: </a><strong><font color="#4169E1"><a name="f0_n"></a>static void f0_n(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line55"> 55: </a><strong><font color="#4169E1">                 const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line56"> 56: </a><strong><font color="#4169E1">                 const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line57"> 57: </a><strong><font color="#4169E1">                 <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> f0[])</font></strong>
+<a name="line58"> 58: </a>{
+<a name="line59"> 59: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *pnDer   = &amp;u_x[uOff_x[DENSITY]];
+<a name="line60"> 60: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *ppsiDer = &amp;u_x[uOff_x[PSI]];
+<a name="line61"> 61: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *pphiDer = &amp;u_x[uOff_x[PHI]];
+<a name="line62"> 62: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *jzDer   = &amp;u_x[uOff_x[JZ]];
+<a name="line63"> 63: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *logRefDenDer = &amp;a_x[aOff_x[DENSITY]];
+<a name="line64"> 64: </a>  f0[0] += - poissonBracket(dim,pnDer, pphiDer) - s_ctx-&gt;beta*poissonBracket(dim,jzDer, ppsiDer) - poissonBracket(dim,logRefDenDer, pphiDer);
+<a name="line65"> 65: </a>  <font color="#4169E1">if</font> (u_t) f0[0] += u_t[DENSITY];
+<a name="line66"> 66: </a>}
+
+<a name="line68"> 68: </a><strong><font color="#4169E1"><a name="f1_n"></a>static void f1_n(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line69"> 69: </a><strong><font color="#4169E1">                 const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line70"> 70: </a><strong><font color="#4169E1">                 const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line71"> 71: </a><strong><font color="#4169E1">                 <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> f1[])</font></strong>
+<a name="line72"> 72: </a>{
+<a name="line73"> 73: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *pnDer = &amp;u_x[uOff_x[DENSITY]];
+<a name="line74"> 74: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           d;
+
+<a name="line76"> 76: </a>  <font color="#4169E1">for</font> (d = 0; d &lt; dim-1; ++d) f1[d] = -s_ctx-&gt;mu*pnDer[d];
+<a name="line77"> 77: </a>}
+
+<a name="line79"> 79: </a><strong><font color="#4169E1"><a name="f0_Omega"></a>static void f0_Omega(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line80"> 80: </a><strong><font color="#4169E1">                     const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line81"> 81: </a><strong><font color="#4169E1">                     const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line82"> 82: </a><strong><font color="#4169E1">                     <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> f0[])</font></strong>
+<a name="line83"> 83: </a>{
+<a name="line84"> 84: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *pOmegaDer = &amp;u_x[uOff_x[OMEGA]];
+<a name="line85"> 85: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *ppsiDer   = &amp;u_x[uOff_x[PSI]];
+<a name="line86"> 86: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *pphiDer   = &amp;u_x[uOff_x[PHI]];
+<a name="line87"> 87: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *jzDer     = &amp;u_x[uOff_x[JZ]];
+
+<a name="line89"> 89: </a>  f0[0] += - poissonBracket(dim,pOmegaDer, pphiDer) - s_ctx-&gt;beta*poissonBracket(dim,jzDer, ppsiDer);
+<a name="line90"> 90: </a>  <font color="#4169E1">if</font> (u_t) f0[0] += u_t[OMEGA];
+<a name="line91"> 91: </a>}
+
+<a name="line93"> 93: </a><strong><font color="#4169E1"><a name="f1_Omega"></a>static void f1_Omega(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line94"> 94: </a><strong><font color="#4169E1">                     const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line95"> 95: </a><strong><font color="#4169E1">                     const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line96"> 96: </a><strong><font color="#4169E1">                     <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> f1[])</font></strong>
+<a name="line97"> 97: </a>{
+<a name="line98"> 98: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *pOmegaDer = &amp;u_x[uOff_x[OMEGA]];
+<a name="line99"> 99: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           d;
+
+<a name="line101">101: </a>  <font color="#4169E1">for</font> (d = 0; d &lt; dim-1; ++d) f1[d] = -s_ctx-&gt;mu*pOmegaDer[d];
+<a name="line102">102: </a>}
+
+<a name="line104">104: </a><strong><font color="#4169E1"><a name="f0_psi"></a>static void f0_psi(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line105">105: </a><strong><font color="#4169E1">                   const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line106">106: </a><strong><font color="#4169E1">                   const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line107">107: </a><strong><font color="#4169E1">                   <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> f0[])</font></strong>
+<a name="line108">108: </a>{
+<a name="line109">109: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *pnDer     = &amp;u_x[uOff_x[DENSITY]];
+<a name="line110">110: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *ppsiDer   = &amp;u_x[uOff_x[PSI]];
+<a name="line111">111: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *pphiDer   = &amp;u_x[uOff_x[PHI]];
+<a name="line112">112: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *refPsiDer = &amp;a_x[aOff_x[PSI]];
+<a name="line113">113: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *logRefDenDer= &amp;a_x[aOff_x[DENSITY]];
+<a name="line114">114: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       psiDer[3];
+<a name="line115">115: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       phi_n_Der[3];
+<a name="line116">116: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          d;
+<a name="line117">117: </a>  <font color="#4169E1">if</font> (dim &lt; 2) {<a href="http://www.mpich.org/static/docs/latest/www3/MPI_Abort.html#MPI_Abort">MPI_Abort</a>(MPI_COMM_WORLD,1); <font color="#4169E1">return</font>;} <font color="#B22222">/* this is needed so that the clang static analyzer does not generate a warning about variables used by not set */</font>
+<a name="line118">118: </a>  <font color="#4169E1">for</font> (d = 0; d &lt; dim; ++d) {
+<a name="line119">119: </a>    psiDer[d]    = refPsiDer[d] + ppsiDer[d];
+<a name="line120">120: </a>    phi_n_Der[d] = pphiDer[d]   - pnDer[d];
+<a name="line121">121: </a>  }
+<a name="line122">122: </a>  f0[0] = - poissonBracket(dim,psiDer, phi_n_Der) + poissonBracket(dim,logRefDenDer, ppsiDer);
+<a name="line123">123: </a>  <font color="#4169E1">if</font> (u_t) f0[0] += u_t[PSI];
+<a name="line124">124: </a>}
+
+<a name="line126">126: </a><strong><font color="#4169E1"><a name="f1_psi"></a>static void f1_psi(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line127">127: </a><strong><font color="#4169E1">                   const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line128">128: </a><strong><font color="#4169E1">                   const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line129">129: </a><strong><font color="#4169E1">                   <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> f1[])</font></strong>
+<a name="line130">130: </a>{
+<a name="line131">131: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *ppsi = &amp;u_x[uOff_x[PSI]];
+<a name="line132">132: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           d;
+
+<a name="line134">134: </a>  <font color="#4169E1">for</font> (d = 0; d &lt; dim-1; ++d) f1[d] = -(s_ctx-&gt;eta/s_ctx-&gt;beta)*ppsi[d];
+<a name="line135">135: </a>}
+
+<a name="line137">137: </a><strong><font color="#4169E1"><a name="f0_phi"></a>static void f0_phi(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line138">138: </a><strong><font color="#4169E1">                   const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line139">139: </a><strong><font color="#4169E1">                   const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line140">140: </a><strong><font color="#4169E1">                   <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> f0[])</font></strong>
+<a name="line141">141: </a>{
+<a name="line142">142: </a>  f0[0] = -u[uOff[OMEGA]];
+<a name="line143">143: </a>}
+
+<a name="line145">145: </a><strong><font color="#4169E1"><a name="f1_phi"></a>static void f1_phi(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line146">146: </a><strong><font color="#4169E1">                   const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line147">147: </a><strong><font color="#4169E1">                   const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line148">148: </a><strong><font color="#4169E1">                   <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> f1[])</font></strong>
+<a name="line149">149: </a>{
+<a name="line150">150: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *pphi = &amp;u_x[uOff_x[PHI]];
+<a name="line151">151: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           d;
+
+<a name="line153">153: </a>  <font color="#4169E1">for</font> (d = 0; d &lt; dim-1; ++d) f1[d] = pphi[d];
+<a name="line154">154: </a>}
+
+<a name="line156">156: </a><strong><font color="#4169E1"><a name="f0_jz"></a>static void f0_jz(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line157">157: </a><strong><font color="#4169E1">                  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line158">158: </a><strong><font color="#4169E1">                  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line159">159: </a><strong><font color="#4169E1">                  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> f0[])</font></strong>
+<a name="line160">160: </a>{
+<a name="line161">161: </a>  f0[0] = u[uOff[JZ]];
+<a name="line162">162: </a>}
+
+<a name="line164">164: </a><strong><font color="#4169E1"><a name="f1_jz"></a>static void f1_jz(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line165">165: </a><strong><font color="#4169E1">                  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line166">166: </a><strong><font color="#4169E1">                  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line167">167: </a><strong><font color="#4169E1">                  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> f1[])</font></strong>
+<a name="line168">168: </a>{
+<a name="line169">169: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *ppsi = &amp;u_x[uOff_x[PSI]];
+<a name="line170">170: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *refPsiDer = &amp;a_x[aOff_x[PSI]]; <font color="#B22222">/* aOff_x[PSI] == 2*PSI */</font>
+<a name="line171">171: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           d;
+
+<a name="line173">173: </a>  <font color="#4169E1">for</font> (d = 0; d &lt; dim-1; ++d) f1[d] = ppsi[d] + refPsiDer[d];
+<a name="line174">174: </a>}
+
+<a name="line176">176: </a><strong><font color="#4169E1"><a name="ProcessOptions"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> ProcessOptions(<a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm, AppCtx *options)</font></strong>
+<a name="line177">177: </a>{
+<a name="line178">178: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flg;
+<a name="line180">180: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       ii, bd;
+<a name="line182">182: </a>  options-&gt;debug               = 1;
+<a name="line183">183: </a>  options-&gt;plotRef             = <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line184">184: </a>  options-&gt;dim                 = 2;
+<a name="line185">185: </a>  options-&gt;filename[0]         = '\0';
+<a name="line186">186: </a>  options-&gt;cell_simplex        = <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line187">187: </a>  options-&gt;implicit            = <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line188">188: </a>  options-&gt;refine              = 2;
+<a name="line189">189: </a>  options-&gt;domain_lo[0]  = 0.0;
+<a name="line190">190: </a>  options-&gt;domain_lo[1]  = 0.0;
+<a name="line191">191: </a>  options-&gt;domain_lo[2]  = 0.0;
+<a name="line192">192: </a>  options-&gt;domain_hi[0]  = 2.0;
+<a name="line193">193: </a>  options-&gt;domain_hi[1]  = 2.0*PETSC_PI;
+<a name="line194">194: </a>  options-&gt;domain_hi[2]  = 2.0;
+<a name="line195">195: </a>  options-&gt;periodicity[0]    = <a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_NONE</a>;
+<a name="line196">196: </a>  options-&gt;periodicity[1]    = <a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_NONE</a>;
+<a name="line197">197: </a>  options-&gt;periodicity[2]    = <a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_NONE</a>;
+<a name="line198">198: </a>  options-&gt;mu   = 0;
+<a name="line199">199: </a>  options-&gt;eta  = 0;
+<a name="line200">200: </a>  options-&gt;beta = 1;
+<a name="line201">201: </a>  options-&gt;a = 1;
+<a name="line202">202: </a>  options-&gt;b = PETSC_PI;
+<a name="line203">203: </a>  options-&gt;Jop = 0;
+<a name="line204">204: </a>  options-&gt;m = 1;
+<a name="line205">205: </a>  options-&gt;eps = 1.e-6;
+
+<a name="line207">207: </a>  <font color="#4169E1">for</font> (ii = 0; ii &lt; options-&gt;dim; ++ii) options-&gt;cells[ii] = 4;
+<a name="line208">208: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsBegin.html#PetscOptionsBegin">PetscOptionsBegin</a>(comm, <font color="#666666">""</font>, <font color="#666666">"Poisson Problem Options"</font>, <font color="#666666">"<a href="../../../../docs/manualpages/DMPLEX/DMPLEX.html#DMPLEX">DMPLEX</a>"</font>);
+<a name="line209">209: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-debug"</font>, <font color="#666666">"The debugging level"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;debug, &amp;options-&gt;debug, NULL);
+<a name="line210">210: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-plot_ref"</font>, <font color="#666666">"Plot the reference fields"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;plotRef, &amp;options-&gt;plotRef, NULL);
+<a name="line211">211: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-dim"</font>, <font color="#666666">"The topological mesh dimension"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;dim, &amp;options-&gt;dim, NULL);
+<a name="line212">212: </a>  <font color="#4169E1">if</font> (options-&gt;dim &lt; 2 || options-&gt;dim &gt; 3) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Dim %D must be 2 or 3"</font>,options-&gt;dim);
+<a name="line213">213: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-dm_refine"</font>, <font color="#666666">"Hack to get refinement level for cylinder"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;refine, &amp;options-&gt;refine, NULL);
+<a name="line214">214: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-mu"</font>, <font color="#666666">"mu"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;mu, &amp;options-&gt;mu, NULL);
+<a name="line215">215: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-eta"</font>, <font color="#666666">"eta"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;eta, &amp;options-&gt;eta, NULL);
+<a name="line216">216: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-beta"</font>, <font color="#666666">"beta"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;beta, &amp;options-&gt;beta, NULL);
+<a name="line217">217: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-Jop"</font>, <font color="#666666">"Jop"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;Jop, &amp;options-&gt;Jop, NULL);
+<a name="line218">218: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-m"</font>, <font color="#666666">"m"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;m, &amp;options-&gt;m, NULL);
+<a name="line219">219: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-eps"</font>, <font color="#666666">"eps"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;eps, &amp;options-&gt;eps, NULL);
+<a name="line220">220: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsString.html#PetscOptionsString">PetscOptionsString</a>(<font color="#666666">"-f"</font>, <font color="#666666">"Exodus.II filename to read"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;filename, options-&gt;filename, <font color="#4169E1">sizeof</font>(options-&gt;filename), &amp;flg);
+<a name="line221">221: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-cell_simplex"</font>, <font color="#666666">"Simplicial (true) or tensor (false) mesh"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;cell_simplex, &amp;options-&gt;cell_simplex, NULL);
+<a name="line222">222: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-implicit"</font>, <font color="#666666">"Use implicit time integrator"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;implicit, &amp;options-&gt;implicit, NULL);
+<a name="line223">223: </a>  ii = options-&gt;dim;
+<a name="line224">224: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsRealArray.html#PetscOptionsRealArray">PetscOptionsRealArray</a>(<font color="#666666">"-domain_hi"</font>, <font color="#666666">"Domain size"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;domain_hi, &amp;ii, NULL);
+<a name="line225">225: </a>  ii = options-&gt;dim;
+<a name="line226">226: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsRealArray.html#PetscOptionsRealArray">PetscOptionsRealArray</a>(<font color="#666666">"-domain_lo"</font>, <font color="#666666">"Domain size"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;domain_lo, &amp;ii, NULL);
+<a name="line227">227: </a>  ii = options-&gt;dim;
+<a name="line228">228: </a>  bd = options-&gt;periodicity[0];
+<a name="line229">229: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsEList.html#PetscOptionsEList">PetscOptionsEList</a>(<font color="#666666">"-x_periodicity"</font>, <font color="#666666">"The x-boundary periodicity"</font>, <font color="#666666">"ex48.c"</font>, DMBoundaryTypes, 5, DMBoundaryTypes[options-&gt;periodicity[0]], &amp;bd, NULL);
+<a name="line230">230: </a>  options-&gt;periodicity[0] = (<a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DMBoundaryType</a>) bd;
+<a name="line231">231: </a>  bd = options-&gt;periodicity[1];
+<a name="line232">232: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsEList.html#PetscOptionsEList">PetscOptionsEList</a>(<font color="#666666">"-y_periodicity"</font>, <font color="#666666">"The y-boundary periodicity"</font>, <font color="#666666">"ex48.c"</font>, DMBoundaryTypes, 5, DMBoundaryTypes[options-&gt;periodicity[1]], &amp;bd, NULL);
+<a name="line233">233: </a>  options-&gt;periodicity[1] = (<a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DMBoundaryType</a>) bd;
+<a name="line234">234: </a>  bd = options-&gt;periodicity[2];
+<a name="line235">235: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsEList.html#PetscOptionsEList">PetscOptionsEList</a>(<font color="#666666">"-z_periodicity"</font>, <font color="#666666">"The z-boundary periodicity"</font>, <font color="#666666">"ex48.c"</font>, DMBoundaryTypes, 5, DMBoundaryTypes[options-&gt;periodicity[2]], &amp;bd, NULL);
+<a name="line236">236: </a>  options-&gt;periodicity[2] = (<a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DMBoundaryType</a>) bd;
+<a name="line237">237: </a>  ii = options-&gt;dim;
+<a name="line238">238: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsIntArray.html#PetscOptionsIntArray">PetscOptionsIntArray</a>(<font color="#666666">"-cells"</font>, <font color="#666666">"Number of cells in each dimension"</font>, <font color="#666666">"ex48.c"</font>, options-&gt;cells, &amp;ii, NULL);
+<a name="line239">239: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsEnd.html#PetscOptionsEnd">PetscOptionsEnd</a>();
+<a name="line240">240: </a>  options-&gt;a = (options-&gt;domain_hi[0]-options-&gt;domain_lo[0])/2.0;
+<a name="line241">241: </a>  options-&gt;b = (options-&gt;domain_hi[1]-options-&gt;domain_lo[1])/2.0;
+<a name="line242">242: </a>  <font color="#4169E1">for</font> (ii = 0; ii &lt; options-&gt;dim; ++ii) {
+<a name="line243">243: </a>    <font color="#4169E1">if</font> (options-&gt;domain_hi[ii] &lt;= options-&gt;domain_lo[ii]) <a href="../../../../docs/manualpages/Sys/SETERRQ3.html#SETERRQ3">SETERRQ3</a>(comm,PETSC_ERR_ARG_WRONG,<font color="#666666">"Domain %D lo=%g hi=%g"</font>,ii,options-&gt;domain_lo[ii],options-&gt;domain_hi[ii]);
+<a name="line244">244: </a>  }
+<a name="line245">245: </a>  options-&gt;ke = PetscSqrtScalar(options-&gt;Jop);
+<a name="line246">246: </a>  <font color="#4169E1">if</font> (options-&gt;Jop==0.0) {
+<a name="line247">247: </a>    options-&gt;Jo = 1.0/PetscPowScalar(options-&gt;a,2);
+<a name="line248">248: </a>  } <font color="#4169E1">else</font> {
+<a name="line249">249: </a>    options-&gt;Jo = options-&gt;Jop*PetscCosReal(options-&gt;ke*options-&gt;a)/(1.0-PetscCosReal(options-&gt;ke*options-&gt;a));
+<a name="line250">250: </a>  }
+<a name="line251">251: </a>  options-&gt;ky = PETSC_PI*options-&gt;m/options-&gt;b;
+<a name="line252">252: </a>  <font color="#4169E1">if</font> (PetscPowReal(options-&gt;ky, 2) &lt; options-&gt;Jop) {
+<a name="line253">253: </a>    options-&gt;kx = PetscSqrtScalar(options-&gt;Jop-PetscPowScalar(options-&gt;ky,2));
+<a name="line254">254: </a>    options-&gt;DeltaPrime = -2.0*options-&gt;kx*options-&gt;a*PetscCosReal(options-&gt;kx*options-&gt;a)/PetscSinReal(options-&gt;kx*options-&gt;a);
+<a name="line255">255: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (PetscPowReal(options-&gt;ky, 2) &gt; options-&gt;Jop) {
+<a name="line256">256: </a>    options-&gt;kx = PetscSqrtScalar(PetscPowScalar(options-&gt;ky,2)-options-&gt;Jop);
+<a name="line257">257: </a>    options-&gt;DeltaPrime = -2.0*options-&gt;kx*options-&gt;a*PetscCoshReal(options-&gt;kx*options-&gt;a)/PetscSinhReal(options-&gt;kx*options-&gt;a);
+<a name="line258">258: </a>  } <font color="#4169E1">else</font> { <font color="#B22222">/*they're equal (or there's a NaN), lim(x*cot(x))_x-&gt;0=1*/</font>
+<a name="line259">259: </a>    options-&gt;kx = 0;
+<a name="line260">260: </a>    options-&gt;DeltaPrime = -2.0;
+<a name="line261">261: </a>  }
+<a name="line262">262: </a>  <a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(comm, <font color="#666666">"DeltaPrime=%g\n"</font>,options-&gt;DeltaPrime);
+
+<a name="line264">264: </a>  <font color="#4169E1">return</font>(0);
+<a name="line265">265: </a>}
+
+<a name="line267">267: </a><strong><font color="#4169E1"><a name="f_n"></a>static void f_n(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux,</font></strong>
+<a name="line268">268: </a><strong><font color="#4169E1">                const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> uOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> u_x[],</font></strong>
+<a name="line269">269: </a><strong><font color="#4169E1">                const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> aOff_x[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_t[], const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> a_x[],</font></strong>
+<a name="line270">270: </a><strong><font color="#4169E1">                <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> numConstants, const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> constants[], <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *f0)</font></strong>
+<a name="line271">271: </a>{
+<a name="line272">272: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *pn = &amp;u[uOff[DENSITY]];
+<a name="line273">273: </a>  *f0 = *pn;
+<a name="line274">274: </a>}
+
+<a name="line276">276: </a><strong><font color="#4169E1"><a name="PostStep"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PostStep(<a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts)</font></strong>
+<a name="line277">277: </a>{
+<a name="line278">278: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line279">279: </a>  <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>                dm;
+<a name="line280">280: </a>  AppCtx            *ctx;
+<a name="line281">281: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          stepi,num;
+<a name="line282">282: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>               X;
+<a name="line284">284: </a>  <a href="../../../../docs/manualpages/TS/TSGetApplicationContext.html#TSGetApplicationContext">TSGetApplicationContext</a>(ts, &amp;ctx); assert(ctx);
+<a name="line285">285: </a>  <font color="#4169E1">if</font> (ctx-&gt;debug&lt;1) <font color="#4169E1">return</font>(0);
+<a name="line286">286: </a>  <a href="../../../../docs/manualpages/TS/TSGetSolution.html#TSGetSolution">TSGetSolution</a>(ts, &amp;X);
+<a name="line287">287: </a>  <a href="../../../../docs/manualpages/DM/VecGetDM.html#VecGetDM">VecGetDM</a>(X, &amp;dm);
+<a name="line288">288: </a>  <a href="../../../../docs/manualpages/TS/TSGetStepNumber.html#TSGetStepNumber">TSGetStepNumber</a>(ts, &amp;stepi);
+<a name="line289">289: </a>  <a href="../../../../docs/manualpages/DM/DMGetOutputSequenceNumber.html#DMGetOutputSequenceNumber">DMGetOutputSequenceNumber</a>(dm, &amp;num, NULL);
+<a name="line290">290: </a>  <font color="#4169E1">if</font> (num &lt; 0) {<a href="../../../../docs/manualpages/DM/DMSetOutputSequenceNumber.html#DMSetOutputSequenceNumber">DMSetOutputSequenceNumber</a>(dm, 0, 0.0);}
+<a name="line291">291: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) X, <font color="#666666">"u"</font>);
+<a name="line292">292: </a>  VecViewFromOptions(X, NULL, <font color="#666666">"-vec_view"</font>);
+<a name="line293">293: </a>  <font color="#B22222">/* print integrals */</font>
+<a name="line294">294: </a>  {
+<a name="line295">295: </a>    <a href="../../../../docs/manualpages/DM/PetscDS.html#PetscDS">PetscDS</a>          prob;
+<a name="line296">296: </a>    <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>               plex;
+<a name="line297">297: </a>    <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> den, tt[5];
+<a name="line298">298: </a>    <a href="../../../../docs/manualpages/DM/DMConvert.html#DMConvert">DMConvert</a>(dm, <a href="../../../../docs/manualpages/DMPLEX/DMPLEX.html#DMPLEX">DMPLEX</a>, &amp;plex);
+<a name="line299">299: </a>    <a href="../../../../docs/manualpages/DM/DMGetDS.html#DMGetDS">DMGetDS</a>(plex, &amp;prob);
+<a name="line300">300: </a>    PetscDSSetObjective(prob, 0, &amp;f_n);
+<a name="line301">301: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexComputeIntegralFEM.html#DMPlexComputeIntegralFEM">DMPlexComputeIntegralFEM</a>(plex,X,tt,ctx);
+<a name="line302">302: </a>    den = tt[0];
+<a name="line303">303: </a>    <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(&amp;plex);
+<a name="line304">304: </a>    <a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)dm), <font color="#666666">"%D) total perturbed mass = %g\n"</font>, stepi, (double) <a href="../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(den));
+<a name="line305">305: </a>  }
+<a name="line306">306: </a>  <font color="#4169E1">return</font>(0);
+<a name="line307">307: </a>}
+
+<a name="line309">309: </a><strong><font color="#4169E1"><a name="CreateBCLabel"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> CreateBCLabel(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm, const char name[])</font></strong>
+<a name="line310">310: </a>{
+<a name="line311">311: </a>  <a href="../../../../docs/manualpages/DM/DMLabel.html#DMLabel">DMLabel</a>        label;
+<a name="line314">314: </a>  <a href="../../../../docs/manualpages/DM/DMCreateLabel.html#DMCreateLabel">DMCreateLabel</a>(dm, name);
+<a name="line315">315: </a>  <a href="../../../../docs/manualpages/DM/DMGetLabel.html#DMGetLabel">DMGetLabel</a>(dm, name, &amp;label);
+<a name="line316">316: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexMarkBoundaryFaces.html#DMPlexMarkBoundaryFaces">DMPlexMarkBoundaryFaces</a>(dm, 1, label);
+<a name="line317">317: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexLabelComplete.html#DMPlexLabelComplete">DMPlexLabelComplete</a>(dm, label);
+<a name="line318">318: </a>  <font color="#4169E1">return</font>(0);
+<a name="line319">319: </a>}
+
+<a name="line321">321: </a><strong><font color="#4169E1"><a name="CreateMesh"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> CreateMesh(<a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm, AppCtx *ctx, <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> *dm)</font></strong>
+<a name="line322">322: </a>{
+<a name="line323">323: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       dim      = ctx-&gt;dim;
+<a name="line324">324: </a>  const char    *filename = ctx-&gt;filename;
+<a name="line325">325: </a>  size_t         len;
+<a name="line326">326: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    numProcs;
+
+<a name="line330">330: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm, &amp;numProcs);
+<a name="line331">331: </a>  <a href="../../../../docs/manualpages/Sys/PetscStrlen.html#PetscStrlen">PetscStrlen</a>(filename, &amp;len);
+<a name="line332">332: </a>  <font color="#4169E1">if</font> (len) {
+<a name="line333">333: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateFromFile.html#DMPlexCreateFromFile">DMPlexCreateFromFile</a>(comm, filename, <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>, dm);
+<a name="line334">334: </a>  } <font color="#4169E1">else</font> {
+<a name="line335">335: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        d;
+
+<a name="line337">337: </a>    <font color="#B22222">/* create <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> */</font>
+<a name="line338">338: </a>    <font color="#4169E1">if</font> (ctx-&gt;cell_simplex &amp;&amp; dim == 3) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"Cannot mesh a cylinder with simplices"</font>);
+<a name="line339">339: </a>    <font color="#4169E1">if</font> (dim==2) {
+<a name="line340">340: </a>      <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> refineRatio, totCells = 1;
+<a name="line341">341: </a>      <font color="#4169E1">if</font> (ctx-&gt;cell_simplex) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"Cannot mesh 2D with simplices"</font>);
+<a name="line342">342: </a>      refineRatio = <a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>((<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>) (PetscPowReal(numProcs, 1.0/dim) + 0.1) - 1, 1);
+<a name="line343">343: </a>      <font color="#4169E1">for</font> (d = 0; d &lt; dim; ++d) {
+<a name="line344">344: </a>        <font color="#4169E1">if</font> (ctx-&gt;cells[d] &lt; refineRatio) ctx-&gt;cells[d] = refineRatio;
+<a name="line345">345: </a>        <font color="#4169E1">if</font> (ctx-&gt;periodicity[d]==<a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_PERIODIC</a> &amp;&amp; ctx-&gt;cells[d]*refineRatio &lt;= 2) refineRatio = 2;
+<a name="line346">346: </a>      }
+<a name="line347">347: </a>      <font color="#4169E1">for</font> (d = 0; d &lt; dim; ++d) {
+<a name="line348">348: </a>        ctx-&gt;cells[d] *= refineRatio;
+<a name="line349">349: </a>        totCells *= ctx-&gt;cells[d];
+<a name="line350">350: </a>      }
+<a name="line351">351: </a>      <font color="#4169E1">if</font> (totCells % numProcs) <a href="../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(comm,PETSC_ERR_ARG_WRONG,<font color="#666666">"Total cells %D not divisible by processes %D"</font>, totCells, numProcs);
+<a name="line352">352: </a>      <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateBoxMesh.html#DMPlexCreateBoxMesh">DMPlexCreateBoxMesh</a>(comm, dim, <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>, ctx-&gt;cells, ctx-&gt;domain_lo, ctx-&gt;domain_hi, ctx-&gt;periodicity, <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>, dm);
+<a name="line353">353: </a>    } <font color="#4169E1">else</font> {
+<a name="line354">354: </a>      <font color="#4169E1">if</font> (ctx-&gt;periodicity[0]==<a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_PERIODIC</a> || ctx-&gt;periodicity[1]==<a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_PERIODIC</a>) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"Cannot do periodic in x or y in a cylinder"</font>);
+<a name="line355">355: </a>      <font color="#B22222">/* we stole dm_refine so clear it */</font>
+<a name="line356">356: </a>      <a href="../../../../docs/manualpages/Sys/PetscOptionsClearValue.html#PetscOptionsClearValue">PetscOptionsClearValue</a>(NULL,<font color="#666666">"-dm_refine"</font>);
+<a name="line357">357: </a>      <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateHexCylinderMesh.html#DMPlexCreateHexCylinderMesh">DMPlexCreateHexCylinderMesh</a>(comm, ctx-&gt;refine, ctx-&gt;periodicity[2], dm);
+<a name="line358">358: </a>    }
+<a name="line359">359: </a>  }
+<a name="line360">360: </a>  {
+<a name="line361">361: </a>    <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> distributedMesh = NULL;
+<a name="line362">362: </a>    <font color="#B22222">/* Distribute mesh over processes */</font>
+<a name="line363">363: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexDistribute.html#DMPlexDistribute">DMPlexDistribute</a>(*dm, 0, NULL, &amp;distributedMesh);
+<a name="line364">364: </a>    <font color="#4169E1">if</font> (distributedMesh) {
+<a name="line365">365: </a>      <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(dm);
+<a name="line366">366: </a>      *dm  = distributedMesh;
+<a name="line367">367: </a>    }
+<a name="line368">368: </a>  }
+<a name="line369">369: </a>  {
+<a name="line370">370: </a>    <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> hasLabel;
+<a name="line371">371: </a>    <a href="../../../../docs/manualpages/DM/DMHasLabel.html#DMHasLabel">DMHasLabel</a>(*dm, <font color="#666666">"marker"</font>, &amp;hasLabel);
+<a name="line372">372: </a>    <font color="#4169E1">if</font> (!hasLabel) {CreateBCLabel(*dm, <font color="#666666">"marker"</font>);}
+<a name="line373">373: </a>  }
+<a name="line374">374: </a>  {
+<a name="line375">375: </a>    char      convType[256];
+<a name="line376">376: </a>    <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> flg;
+<a name="line377">377: </a>    <a href="../../../../docs/manualpages/Sys/PetscOptionsBegin.html#PetscOptionsBegin">PetscOptionsBegin</a>(comm, <font color="#666666">""</font>, <font color="#666666">"Mesh conversion options"</font>, <font color="#666666">"<a href="../../../../docs/manualpages/DMPLEX/DMPLEX.html#DMPLEX">DMPLEX</a>"</font>);
+<a name="line378">378: </a>    <a href="../../../../docs/manualpages/Sys/PetscOptionsFList.html#PetscOptionsFList">PetscOptionsFList</a>(<font color="#666666">"-dm_plex_convert_type"</font>,<font color="#666666">"Convert DMPlex to another format"</font>,<font color="#666666">"ex48"</font>,DMList,<a href="../../../../docs/manualpages/DMPLEX/DMPLEX.html#DMPLEX">DMPLEX</a>,convType,256,&amp;flg);
+<a name="line379">379: </a>    <a href="../../../../docs/manualpages/Sys/PetscOptionsEnd.html#PetscOptionsEnd">PetscOptionsEnd</a>();
+<a name="line380">380: </a>    <font color="#4169E1">if</font> (flg) {
+<a name="line381">381: </a>      <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dmConv;
+<a name="line382">382: </a>      <a href="../../../../docs/manualpages/DM/DMConvert.html#DMConvert">DMConvert</a>(*dm,convType,&amp;dmConv);
+<a name="line383">383: </a>      <font color="#4169E1">if</font> (dmConv) {
+<a name="line384">384: </a>        <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(dm);
+<a name="line385">385: </a>        *dm  = dmConv;
+<a name="line386">386: </a>      }
+<a name="line387">387: </a>    }
+<a name="line388">388: </a>  }
+<a name="line389">389: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) *dm, <font color="#666666">"Mesh"</font>);
+<a name="line390">390: </a>  <a href="../../../../docs/manualpages/DM/DMSetFromOptions.html#DMSetFromOptions">DMSetFromOptions</a>(*dm);
+<a name="line391">391: </a>  <a href="../../../../docs/manualpages/DM/DMLocalizeCoordinates.html#DMLocalizeCoordinates">DMLocalizeCoordinates</a>(*dm); <font color="#B22222">/* needed for periodic */</font>
+<a name="line392">392: </a>  <font color="#4169E1">return</font>(0);
+<a name="line393">393: </a>}
+
+<a name="line395">395: </a><strong><font color="#4169E1"><a name="log_n_0"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> log_n_0(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> time, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *u, void *ctx)</font></strong>
+<a name="line396">396: </a>{
+<a name="line397">397: </a>  AppCtx *lctx = (AppCtx*)ctx;
+<a name="line398">398: </a>  assert(ctx);
+<a name="line399">399: </a>  u[0] = (lctx-&gt;domain_hi-lctx-&gt;domain_lo)+x[0];
+<a name="line400">400: </a>  <font color="#4169E1">return</font> 0;
+<a name="line401">401: </a>}
+
+<a name="line403">403: </a><strong><font color="#4169E1"><a name="Omega_0"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> Omega_0(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> time, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *u, void *ctx)</font></strong>
+<a name="line404">404: </a>{
+<a name="line405">405: </a>  u[0] = 0.0;
+<a name="line406">406: </a>  <font color="#4169E1">return</font> 0;
+<a name="line407">407: </a>}
+
+<a name="line409">409: </a><strong><font color="#4169E1"><a name="psi_0"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> psi_0(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> time, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *u, void *ctx)</font></strong>
+<a name="line410">410: </a>{
+<a name="line411">411: </a>  AppCtx *lctx = (AppCtx*)ctx;
+<a name="line412">412: </a>  assert(ctx);
+<a name="line413">413: </a>  <font color="#B22222">/* This sets up a symmetrix By flux aroound the mid point in x, which represents a current density flux along z.  The stability</font>
+<a name="line414">414: </a><font color="#B22222">     is analytically known and reported in ProcessOptions. */</font>
+<a name="line415">415: </a>  <font color="#4169E1">if</font> (lctx-&gt;ke!=0.0) {
+<a name="line416">416: </a>    u[0] = (PetscCosReal(lctx-&gt;ke*(x[0]-lctx-&gt;a))-PetscCosReal(lctx-&gt;ke*lctx-&gt;a))/(1.0-PetscCosReal(lctx-&gt;ke*lctx-&gt;a));
+<a name="line417">417: </a>  } <font color="#4169E1">else</font> {
+<a name="line418">418: </a>    u[0] = 1.0-PetscPowScalar((x[0]-lctx-&gt;a)/lctx-&gt;a,2);
+<a name="line419">419: </a>  }
+<a name="line420">420: </a>  <font color="#4169E1">return</font> 0;
+<a name="line421">421: </a>}
+
+<a name="line423">423: </a><strong><font color="#4169E1"><a name="initialSolution_n"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> initialSolution_n(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> time, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *u, void *ctx)</font></strong>
+<a name="line424">424: </a>{
+<a name="line425">425: </a>  u[0] = 0.0;
+<a name="line426">426: </a>  <font color="#4169E1">return</font> 0;
+<a name="line427">427: </a>}
+
+<a name="line429">429: </a><strong><font color="#4169E1"><a name="initialSolution_Omega"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> initialSolution_Omega(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> time, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *u, void *ctx)</font></strong>
+<a name="line430">430: </a>{
+<a name="line431">431: </a>  u[0] = 0.0;
+<a name="line432">432: </a>  <font color="#4169E1">return</font> 0;
+<a name="line433">433: </a>}
+
+<a name="line435">435: </a><strong><font color="#4169E1"><a name="initialSolution_psi"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> initialSolution_psi(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> time, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *u, void *a_ctx)</font></strong>
+<a name="line436">436: </a>{
+<a name="line437">437: </a>  AppCtx *ctx = (AppCtx*)a_ctx;
+<a name="line438">438: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> r = ctx-&gt;eps*(<a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) (rand()) / (<a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) (RAND_MAX);
+<a name="line439">439: </a>  assert(ctx);
+<a name="line440">440: </a>  <font color="#4169E1">if</font> (x[0] == ctx-&gt;domain_lo[0] || x[0] == ctx-&gt;domain_hi[0]) r = 0;
+<a name="line441">441: </a>  u[0] = r;
+<a name="line442">442: </a>  <font color="#B22222">/* <a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, "rand psi %lf\n",u[0]); */</font>
+<a name="line443">443: </a>  <font color="#4169E1">return</font> 0;
+<a name="line444">444: </a>}
+
+<a name="line446">446: </a><strong><font color="#4169E1"><a name="initialSolution_phi"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> initialSolution_phi(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> time, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *u, void *ctx)</font></strong>
+<a name="line447">447: </a>{
+<a name="line448">448: </a>  u[0] = 0.0;
+<a name="line449">449: </a>  <font color="#4169E1">return</font> 0;
+<a name="line450">450: </a>}
+
+<a name="line452">452: </a><strong><font color="#4169E1"><a name="initialSolution_jz"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> initialSolution_jz(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> dim, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> time, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x[], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nf, <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *u, void *ctx)</font></strong>
+<a name="line453">453: </a>{
+<a name="line454">454: </a>  u[0] = 0.0;
+<a name="line455">455: </a>  <font color="#4169E1">return</font> 0;
+<a name="line456">456: </a>}
+
+<a name="line458">458: </a><strong><font color="#4169E1"><a name="SetupProblem"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> SetupProblem(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm, AppCtx *ctx)</font></strong>
+<a name="line459">459: </a>{
+<a name="line460">460: </a>  <a href="../../../../docs/manualpages/DM/PetscDS.html#PetscDS">PetscDS</a>        prob;
+<a name="line461">461: </a>  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> id = 1;
+<a name="line462">462: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> ierr, f;
+
+<a name="line465">465: </a>  <a href="../../../../docs/manualpages/DM/DMGetDS.html#DMGetDS">DMGetDS</a>(dm, &amp;prob);
+<a name="line466">466: </a>  <a href="../../../../docs/manualpages/DT/PetscDSSetResidual.html#PetscDSSetResidual">PetscDSSetResidual</a>(prob, 0, f0_n,     f1_n);
+<a name="line467">467: </a>  <a href="../../../../docs/manualpages/DT/PetscDSSetResidual.html#PetscDSSetResidual">PetscDSSetResidual</a>(prob, 1, f0_Omega, f1_Omega);
+<a name="line468">468: </a>  <a href="../../../../docs/manualpages/DT/PetscDSSetResidual.html#PetscDSSetResidual">PetscDSSetResidual</a>(prob, 2, f0_psi,   f1_psi);
+<a name="line469">469: </a>  <a href="../../../../docs/manualpages/DT/PetscDSSetResidual.html#PetscDSSetResidual">PetscDSSetResidual</a>(prob, 3, f0_phi,   f1_phi);
+<a name="line470">470: </a>  <a href="../../../../docs/manualpages/DT/PetscDSSetResidual.html#PetscDSSetResidual">PetscDSSetResidual</a>(prob, 4, f0_jz,    f1_jz);
+<a name="line471">471: </a>  ctx-&gt;initialFuncs[0] = initialSolution_n;
+<a name="line472">472: </a>  ctx-&gt;initialFuncs[1] = initialSolution_Omega;
+<a name="line473">473: </a>  ctx-&gt;initialFuncs[2] = initialSolution_psi;
+<a name="line474">474: </a>  ctx-&gt;initialFuncs[3] = initialSolution_phi;
+<a name="line475">475: </a>  ctx-&gt;initialFuncs[4] = initialSolution_jz;
+<a name="line476">476: </a>  <font color="#4169E1">for</font> (f = 0; f &lt; 5; ++f) {
+<a name="line477">477: </a>    <a href="../../../../docs/manualpages/DT/PetscDSSetImplicit.html#PetscDSSetImplicit">PetscDSSetImplicit</a>( prob, f, ctx-&gt;implicit);
+<a name="line478">478: </a>    <a href="../../../../docs/manualpages/DT/PetscDSAddBoundary.html#PetscDSAddBoundary">PetscDSAddBoundary</a>( prob, <a href="../../../../docs/manualpages/DM/DMBoundaryConditionType.html#DMBoundaryConditionType">DM_BC_ESSENTIAL</a>, <font color="#666666">"wall"</font>, <font color="#666666">"marker"</font>, f, 0, NULL, (void (*)(void)) ctx-&gt;initialFuncs[f], 1, &amp;id, ctx);
+<a name="line479">479: </a>  }
+<a name="line480">480: </a>  PetscDSSetContext(prob, 0, ctx);
+<a name="line481">481: </a>  <font color="#4169E1">return</font>(0);
+<a name="line482">482: </a>}
+
+<a name="line484">484: </a><strong><font color="#4169E1"><a name="SetupEquilibriumFields"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> SetupEquilibriumFields(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm, <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dmAux, AppCtx *ctx)</font></strong>
+<a name="line485">485: </a>{
+<a name="line486">486: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> (*eqFuncs[3])(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>, <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>, const <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> [], <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>, <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> [], void *) = {log_n_0, Omega_0, psi_0};
+<a name="line487">487: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            eq;
+<a name="line489">489: </a>  AppCtx *ctxarr[3];
+
+<a name="line491">491: </a>  ctxarr[0] = ctxarr[1] = ctxarr[2] = ctx; <font color="#B22222">/* each variable could have a different context */</font>
+<a name="line493">493: </a>  <a href="../../../../docs/manualpages/DM/DMCreateLocalVector.html#DMCreateLocalVector">DMCreateLocalVector</a>(dmAux, &amp;eq);
+<a name="line494">494: </a>  DMProjectFunctionLocal(dmAux, 0.0, eqFuncs, (void **)ctxarr, <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">INSERT_ALL_VALUES</a>, eq);
+<a name="line495">495: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectCompose.html#PetscObjectCompose">PetscObjectCompose</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) dm, <font color="#666666">"A"</font>, (<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) eq);
+<a name="line496">496: </a>  <font color="#4169E1">if</font> (ctx-&gt;plotRef) {  <font color="#B22222">/* plot reference functions */</font>
+<a name="line497">497: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>       viewer = NULL;
+<a name="line498">498: </a>    <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         isHDF5,isVTK;
+<a name="line499">499: </a>    char              buf[256];
+<a name="line500">500: </a>    <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>               global;
+<a name="line501">501: </a>    <a href="../../../../docs/manualpages/DM/DMCreateGlobalVector.html#DMCreateGlobalVector">DMCreateGlobalVector</a>(dmAux,&amp;global);
+<a name="line502">502: </a>    <a href="../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(global,.0); <font color="#B22222">/* BCs! */</font>
+<a name="line503">503: </a>    <a href="../../../../docs/manualpages/DM/DMLocalToGlobalBegin.html#DMLocalToGlobalBegin">DMLocalToGlobalBegin</a>(dmAux,eq,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,global);
+<a name="line504">504: </a>    <a href="../../../../docs/manualpages/DM/DMLocalToGlobalEnd.html#DMLocalToGlobalEnd">DMLocalToGlobalEnd</a>(dmAux,eq,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,global);
+<a name="line505">505: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)dmAux),&amp;viewer);
+<a name="line506">506: </a><font color="#A020F0">#ifdef PETSC_HAVE_HDF5</font>
+<a name="line507">507: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>(viewer,<a href="../../../../docs/manualpages/Viewer/PETSCVIEWERHDF5.html#PETSCVIEWERHDF5">PETSCVIEWERHDF5</a>);
+<a name="line508">508: </a><font color="#A020F0">#else</font>
+<a name="line509">509: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerSetType.html#PetscViewerSetType">PetscViewerSetType</a>(viewer,<a href="../../../../docs/manualpages/Viewer/PETSCVIEWERVTK.html#PETSCVIEWERVTK">PETSCVIEWERVTK</a>);
+<a name="line510">510: </a><font color="#A020F0">#endif</font>
+<a name="line511">511: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerSetFromOptions.html#PetscViewerSetFromOptions">PetscViewerSetFromOptions</a>(viewer);
+<a name="line512">512: </a>    <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../docs/manualpages/Viewer/PETSCVIEWERHDF5.html#PETSCVIEWERHDF5">PETSCVIEWERHDF5</a>,&amp;isHDF5);
+<a name="line513">513: </a>    <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../docs/manualpages/Viewer/PETSCVIEWERVTK.html#PETSCVIEWERVTK">PETSCVIEWERVTK</a>,&amp;isVTK);
+<a name="line514">514: </a>    <font color="#4169E1">if</font> (isHDF5) {
+<a name="line515">515: </a>      <a href="../../../../docs/manualpages/Sys/PetscSNPrintf.html#PetscSNPrintf">PetscSNPrintf</a>(buf, 256, <font color="#666666">"uEquilibrium-%dD.h5"</font>, ctx-&gt;dim);
+<a name="line516">516: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isVTK) {
+<a name="line517">517: </a>      <a href="../../../../docs/manualpages/Sys/PetscSNPrintf.html#PetscSNPrintf">PetscSNPrintf</a>(buf, 256, <font color="#666666">"uEquilibrium-%dD.vtu"</font>, ctx-&gt;dim);
+<a name="line518">518: </a>      <a href="../../../../docs/manualpages/Viewer/PetscViewerPushFormat.html#PetscViewerPushFormat">PetscViewerPushFormat</a>(viewer,<a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_VTK_VTU</a>);
+<a name="line519">519: </a>    }
+<a name="line520">520: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerFileSetMode.html#PetscViewerFileSetMode">PetscViewerFileSetMode</a>(viewer,<a href="../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">FILE_MODE_WRITE</a>);
+<a name="line521">521: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerFileSetName.html#PetscViewerFileSetName">PetscViewerFileSetName</a>(viewer,buf);
+<a name="line522">522: </a>    <font color="#4169E1">if</font> (isHDF5) {<a href="../../../../docs/manualpages/DM/DMView.html#DMView">DMView</a>(dmAux,viewer);}
+<a name="line523">523: </a>    <font color="#B22222">/* view equilibrium fields, this will overwrite fine grids with coarse grids! */</font>
+<a name="line524">524: </a>    <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) global, <font color="#666666">"u0"</font>);
+<a name="line525">525: </a>    <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(global,viewer);
+<a name="line526">526: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(&amp;viewer);
+<a name="line527">527: </a>    <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;global);
+<a name="line528">528: </a>  }
+<a name="line529">529: </a>  <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;eq);
+<a name="line530">530: </a>  <font color="#4169E1">return</font>(0);
+<a name="line531">531: </a>}
+
+<a name="line533">533: </a><strong><font color="#4169E1"><a name="SetupAuxDM"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> SetupAuxDM(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> NfAux, <a href="../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> feAux[], AppCtx *user)</font></strong>
+<a name="line534">534: </a>{
+<a name="line535">535: </a>  <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>             dmAux, coordDM;
+<a name="line536">536: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       f;
+
+<a name="line540">540: </a>  <font color="#B22222">/* MUST call <a href="../../../../docs/manualpages/DM/DMGetCoordinateDM.html#DMGetCoordinateDM">DMGetCoordinateDM</a>() in order to get p4est setup if present */</font>
+<a name="line541">541: </a>  <a href="../../../../docs/manualpages/DM/DMGetCoordinateDM.html#DMGetCoordinateDM">DMGetCoordinateDM</a>(dm, &amp;coordDM);
+<a name="line542">542: </a>  <font color="#4169E1">if</font> (!feAux) <font color="#4169E1">return</font>(0);
+<a name="line543">543: </a>  <a href="../../../../docs/manualpages/DM/DMClone.html#DMClone">DMClone</a>(dm, &amp;dmAux);
+<a name="line544">544: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectCompose.html#PetscObjectCompose">PetscObjectCompose</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) dm, <font color="#666666">"dmAux"</font>, (<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) dmAux);
+<a name="line545">545: </a>  <a href="../../../../docs/manualpages/DM/DMSetCoordinateDM.html#DMSetCoordinateDM">DMSetCoordinateDM</a>(dmAux, coordDM);
+<a name="line546">546: </a>  <font color="#4169E1">for</font> (f = 0; f &lt; NfAux; ++f) {<a href="../../../../docs/manualpages/DM/DMSetField.html#DMSetField">DMSetField</a>(dmAux, f, NULL, (<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) feAux[f]);}
+<a name="line547">547: </a>  <a href="../../../../docs/manualpages/DM/DMCreateDS.html#DMCreateDS">DMCreateDS</a>(dmAux);
+<a name="line548">548: </a>  SetupEquilibriumFields(dm, dmAux, user);
+<a name="line549">549: </a>  <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(&amp;dmAux);
+<a name="line550">550: </a>  <font color="#4169E1">return</font>(0);
+<a name="line551">551: </a>}
+
+<a name="line553">553: </a><strong><font color="#4169E1"><a name="SetupDiscretization"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> SetupDiscretization(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm, AppCtx *ctx)</font></strong>
+<a name="line554">554: </a>{
+<a name="line555">555: </a>  <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>              cdm = dm;
+<a name="line556">556: </a>  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  dim = ctx-&gt;dim;
+<a name="line557">557: </a>  <a href="../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a>         fe[5], feAux[3];
+<a name="line558">558: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        Nf = 5, NfAux = 3, f;
+<a name="line559">559: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       cell_simplex = ctx-&gt;cell_simplex;
+<a name="line560">560: </a>  <a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>        comm;
+<a name="line561">561: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line564">564: </a>  <font color="#B22222">/* Create finite element */</font>
+<a name="line565">565: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) dm, &amp;comm);
+<a name="line566">566: </a>  <a href="../../../../docs/manualpages/FE/PetscFECreateDefault.html#PetscFECreateDefault">PetscFECreateDefault</a>(comm, dim, 1, cell_simplex, NULL, -1, &amp;fe[0]);
+<a name="line567">567: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) fe[0], <font color="#666666">"density"</font>);
+<a name="line568">568: </a>  <a href="../../../../docs/manualpages/FE/PetscFECreateDefault.html#PetscFECreateDefault">PetscFECreateDefault</a>(comm, dim, 1, cell_simplex, NULL, -1, &amp;fe[1]);
+<a name="line569">569: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) fe[1], <font color="#666666">"vorticity"</font>);
+<a name="line570">570: </a>  <a href="../../../../docs/manualpages/FE/PetscFECopyQuadrature.html#PetscFECopyQuadrature">PetscFECopyQuadrature</a>(fe[0], fe[1]);
+<a name="line571">571: </a>  <a href="../../../../docs/manualpages/FE/PetscFECreateDefault.html#PetscFECreateDefault">PetscFECreateDefault</a>(comm, dim, 1, cell_simplex, NULL, -1, &amp;fe[2]);
+<a name="line572">572: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) fe[2], <font color="#666666">"flux"</font>);
+<a name="line573">573: </a>  <a href="../../../../docs/manualpages/FE/PetscFECopyQuadrature.html#PetscFECopyQuadrature">PetscFECopyQuadrature</a>(fe[0], fe[2]);
+<a name="line574">574: </a>  <a href="../../../../docs/manualpages/FE/PetscFECreateDefault.html#PetscFECreateDefault">PetscFECreateDefault</a>(comm, dim, 1, cell_simplex, NULL, -1, &amp;fe[3]);
+<a name="line575">575: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) fe[3], <font color="#666666">"potential"</font>);
+<a name="line576">576: </a>  <a href="../../../../docs/manualpages/FE/PetscFECopyQuadrature.html#PetscFECopyQuadrature">PetscFECopyQuadrature</a>(fe[0], fe[3]);
+<a name="line577">577: </a>  <a href="../../../../docs/manualpages/FE/PetscFECreateDefault.html#PetscFECreateDefault">PetscFECreateDefault</a>(comm, dim, 1, cell_simplex, NULL, -1, &amp;fe[4]);
+<a name="line578">578: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) fe[4], <font color="#666666">"current"</font>);
+<a name="line579">579: </a>  <a href="../../../../docs/manualpages/FE/PetscFECopyQuadrature.html#PetscFECopyQuadrature">PetscFECopyQuadrature</a>(fe[0], fe[4]);
+
+<a name="line581">581: </a>  <a href="../../../../docs/manualpages/FE/PetscFECreateDefault.html#PetscFECreateDefault">PetscFECreateDefault</a>(comm, dim, 1, cell_simplex, NULL, -1, &amp;feAux[0]);
+<a name="line582">582: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) feAux[0], <font color="#666666">"n_0"</font>);
+<a name="line583">583: </a>  <a href="../../../../docs/manualpages/FE/PetscFECopyQuadrature.html#PetscFECopyQuadrature">PetscFECopyQuadrature</a>(fe[0], feAux[0]);
+<a name="line584">584: </a>  <a href="../../../../docs/manualpages/FE/PetscFECreateDefault.html#PetscFECreateDefault">PetscFECreateDefault</a>(comm, dim, 1, cell_simplex, NULL, -1, &amp;feAux[1]);
+<a name="line585">585: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) feAux[1], <font color="#666666">"vorticity_0"</font>);
+<a name="line586">586: </a>  <a href="../../../../docs/manualpages/FE/PetscFECopyQuadrature.html#PetscFECopyQuadrature">PetscFECopyQuadrature</a>(fe[0], feAux[1]);
+<a name="line587">587: </a>  <a href="../../../../docs/manualpages/FE/PetscFECreateDefault.html#PetscFECreateDefault">PetscFECreateDefault</a>(comm, dim, 1, cell_simplex, NULL, -1, &amp;feAux[2]);
+<a name="line588">588: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) feAux[2], <font color="#666666">"flux_0"</font>);
+<a name="line589">589: </a>  <a href="../../../../docs/manualpages/FE/PetscFECopyQuadrature.html#PetscFECopyQuadrature">PetscFECopyQuadrature</a>(fe[0], feAux[2]);
+<a name="line590">590: </a>  <font color="#B22222">/* Set discretization and boundary conditions for each mesh */</font>
+<a name="line591">591: </a>  <font color="#4169E1">for</font> (f = 0; f &lt; Nf; ++f) {<a href="../../../../docs/manualpages/DM/DMSetField.html#DMSetField">DMSetField</a>(dm, f, NULL, (<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) fe[f]);}
+<a name="line592">592: </a>  <a href="../../../../docs/manualpages/DM/DMCreateDS.html#DMCreateDS">DMCreateDS</a>(dm);
+<a name="line593">593: </a>  SetupProblem(dm, ctx);
+<a name="line594">594: </a>  <font color="#4169E1">while</font> (cdm) {
+<a name="line595">595: </a>    <a href="../../../../docs/manualpages/DM/DMCopyDisc.html#DMCopyDisc">DMCopyDisc</a>(dm, cdm);
+<a name="line596">596: </a>    SetupAuxDM(dm, NfAux, feAux, ctx);
+<a name="line597">597: </a>    {
+<a name="line598">598: </a>      <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> hasLabel;
+
+<a name="line600">600: </a>      <a href="../../../../docs/manualpages/DM/DMHasLabel.html#DMHasLabel">DMHasLabel</a>(cdm, <font color="#666666">"marker"</font>, &amp;hasLabel);
+<a name="line601">601: </a>      <font color="#4169E1">if</font> (!hasLabel) {CreateBCLabel(cdm, <font color="#666666">"marker"</font>);}
+<a name="line602">602: </a>    }
+<a name="line603">603: </a>    <a href="../../../../docs/manualpages/DM/DMGetCoarseDM.html#DMGetCoarseDM">DMGetCoarseDM</a>(cdm, &amp;cdm);
+<a name="line604">604: </a>  }
+<a name="line605">605: </a>  <font color="#4169E1">for</font> (f = 0; f &lt; Nf; ++f) {<a href="../../../../docs/manualpages/FE/PetscFEDestroy.html#PetscFEDestroy">PetscFEDestroy</a>(&amp;fe[f]);}
+<a name="line606">606: </a>  <font color="#4169E1">for</font> (f = 0; f &lt; NfAux; ++f) {<a href="../../../../docs/manualpages/FE/PetscFEDestroy.html#PetscFEDestroy">PetscFEDestroy</a>(&amp;feAux[f]);}
+<a name="line607">607: </a>  <font color="#4169E1">return</font>(0);
+<a name="line608">608: </a>}
+
+<a name="line610">610: </a><strong><font color="#4169E1"><a name="main"></a>int main(int argc, char **argv)</font></strong>
+<a name="line611">611: </a>{
+<a name="line612">612: </a>  <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>             dm;
+<a name="line613">613: </a>  <a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a>             ts;
+<a name="line614">614: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            u, r;
+<a name="line615">615: </a>  AppCtx         ctx;
+<a name="line616">616: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      t       = 0.0;
+<a name="line617">617: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      L2error = 0.0;
+<a name="line619">619: </a>  AppCtx        *ctxarr[5];
+
+<a name="line621">621: </a>  ctxarr[0] = ctxarr[1] = ctxarr[2] = ctxarr[3] = ctxarr[4] = &amp;ctx; <font color="#B22222">/* each variable could have a different context */</font>
+<a name="line622">622: </a>  s_ctx = &amp;ctx;
+<a name="line623">623: </a>  <a href="../../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(&amp;argc, &amp;argv, NULL,help);<font color="#4169E1">if</font> (ierr) <font color="#4169E1">return</font> ierr;
+<a name="line624">624: </a>  ProcessOptions(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, &amp;ctx);
+<a name="line625">625: </a>  <font color="#B22222">/* create mesh and problem */</font>
+<a name="line626">626: </a>  CreateMesh(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, &amp;ctx, &amp;dm);
+<a name="line627">627: </a>  <a href="../../../../docs/manualpages/DM/DMSetApplicationContext.html#DMSetApplicationContext">DMSetApplicationContext</a>(dm, &amp;ctx);
+<a name="line628">628: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(5, &amp;ctx.initialFuncs);
+<a name="line629">629: </a>  SetupDiscretization(dm, &amp;ctx);
+<a name="line630">630: </a>  <a href="../../../../docs/manualpages/DM/DMCreateGlobalVector.html#DMCreateGlobalVector">DMCreateGlobalVector</a>(dm, &amp;u);
+<a name="line631">631: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) u, <font color="#666666">"u"</font>);
+<a name="line632">632: </a>  <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(u, &amp;r);
+<a name="line633">633: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) r, <font color="#666666">"r"</font>);
+<a name="line634">634: </a>  <font color="#B22222">/* create <a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a> */</font>
+<a name="line635">635: </a>  <a href="../../../../docs/manualpages/TS/TSCreate.html#TSCreate">TSCreate</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, &amp;ts);
+<a name="line636">636: </a>  <a href="../../../../docs/manualpages/TS/TSSetDM.html#TSSetDM">TSSetDM</a>(ts, dm);
+<a name="line637">637: </a>  <a href="../../../../docs/manualpages/TS/TSSetApplicationContext.html#TSSetApplicationContext">TSSetApplicationContext</a>(ts, &amp;ctx);
+<a name="line638">638: </a>  <a href="../../../../docs/manualpages/TS/DMTSSetBoundaryLocal.html#DMTSSetBoundaryLocal">DMTSSetBoundaryLocal</a>(dm, <a href="../../../../docs/manualpages/TS/DMPlexTSComputeBoundary.html#DMPlexTSComputeBoundary">DMPlexTSComputeBoundary</a>, &amp;ctx);
+<a name="line639">639: </a>  <font color="#4169E1">if</font> (ctx.implicit) {
+<a name="line640">640: </a>    <a href="../../../../docs/manualpages/TS/DMTSSetIFunctionLocal.html#DMTSSetIFunctionLocal">DMTSSetIFunctionLocal</a>(dm, <a href="../../../../docs/manualpages/TS/DMPlexTSComputeIFunctionFEM.html#DMPlexTSComputeIFunctionFEM">DMPlexTSComputeIFunctionFEM</a>, &amp;ctx);
+<a name="line641">641: </a>    <a href="../../../../docs/manualpages/TS/DMTSSetIJacobianLocal.html#DMTSSetIJacobianLocal">DMTSSetIJacobianLocal</a>(dm, <a href="../../../../docs/manualpages/TS/DMPlexTSComputeIJacobianFEM.html#DMPlexTSComputeIJacobianFEM">DMPlexTSComputeIJacobianFEM</a>, &amp;ctx);
+<a name="line642">642: </a>  } <font color="#4169E1">else</font> {
+<a name="line643">643: </a>    <a href="../../../../docs/manualpages/TS/DMTSSetRHSFunctionLocal.html#DMTSSetRHSFunctionLocal">DMTSSetRHSFunctionLocal</a>(dm, <a href="../../../../docs/manualpages/TS/DMPlexTSComputeRHSFunctionFVM.html#DMPlexTSComputeRHSFunctionFVM">DMPlexTSComputeRHSFunctionFVM</a>, &amp;ctx);
+<a name="line644">644: </a>  }
+<a name="line645">645: </a>  <a href="../../../../docs/manualpages/TS/TSSetExactFinalTime.html#TSSetExactFinalTime">TSSetExactFinalTime</a>(ts, <a href="../../../../docs/manualpages/TS/TSExactFinalTimeOption.html#TSExactFinalTimeOption">TS_EXACTFINALTIME_STEPOVER</a>);
+<a name="line646">646: </a>  <a href="../../../../docs/manualpages/TS/TSSetFromOptions.html#TSSetFromOptions">TSSetFromOptions</a>(ts);
+<a name="line647">647: </a>  <a href="../../../../docs/manualpages/TS/TSSetPostStep.html#TSSetPostStep">TSSetPostStep</a>(ts, PostStep);
+<a name="line648">648: </a>  <font color="#B22222">/* make solution &amp; solve */</font>
+<a name="line649">649: </a>  <a href="../../../../docs/manualpages/DM/DMProjectFunction.html#DMProjectFunction">DMProjectFunction</a>(dm, t, ctx.initialFuncs, (void **)ctxarr, <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">INSERT_ALL_VALUES</a>, u);
+<a name="line650">650: </a>  <a href="../../../../docs/manualpages/TS/TSSetSolution.html#TSSetSolution">TSSetSolution</a>(ts,u);
+<a name="line651">651: </a>  DMViewFromOptions(dm, NULL, <font color="#666666">"-dm_view"</font>);
+<a name="line652">652: </a>  PostStep(ts); <font color="#B22222">/* print the initial state */</font>
+<a name="line653">653: </a>  <a href="../../../../docs/manualpages/TS/TSSolve.html#TSSolve">TSSolve</a>(ts, u);
+<a name="line654">654: </a>  <a href="../../../../docs/manualpages/TS/TSGetTime.html#TSGetTime">TSGetTime</a>(ts, &amp;t);
+<a name="line655">655: </a>  <a href="../../../../docs/manualpages/DM/DMComputeL2Diff.html#DMComputeL2Diff">DMComputeL2Diff</a>(dm, t, ctx.initialFuncs, (void **)ctxarr, u, &amp;L2error);
+<a name="line656">656: </a>  <font color="#4169E1">if</font> (L2error &lt; 1.0e-11) {<a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, <font color="#666666">"L_2 Error: &lt; 1.0e-11\n"</font>);}
+<a name="line657">657: </a>  <font color="#4169E1">else</font>                   {<a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, <font color="#666666">"L_2 Error: %g\n"</font>, L2error);}
+<a name="line658">658: </a><font color="#A020F0">#if 0</font>
+<a name="line659">659: </a>  {
+<a name="line660">660: </a>    <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> res = 0.0;
+<a name="line661">661: </a>    <font color="#B22222">/* Check discretization error */</font>
+<a name="line662">662: </a>    VecViewFromOptions(u, NULL, <font color="#666666">"-initial_guess_view"</font>);
+<a name="line663">663: </a>    <a href="../../../../docs/manualpages/DM/DMComputeL2Diff.html#DMComputeL2Diff">DMComputeL2Diff</a>(dm, 0.0, ctx.exactFuncs, NULL, u, &amp;error);
+<a name="line664">664: </a>    <font color="#4169E1">if</font> (error &lt; 1.0e-11) {<a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, <font color="#666666">"L_2 Error: &lt; 1.0e-11\n"</font>);}
+<a name="line665">665: </a>    <font color="#4169E1">else</font>                 {<a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, <font color="#666666">"L_2 Error: %g\n"</font>, error);}
+<a name="line666">666: </a>    <font color="#B22222">/* Check residual */</font>
+<a name="line667">667: </a>    <a href="../../../../docs/manualpages/SNES/SNESComputeFunction.html#SNESComputeFunction">SNESComputeFunction</a>(snes, u, r);
+<a name="line668">668: </a>    <a href="../../../../docs/manualpages/Vec/VecChop.html#VecChop">VecChop</a>(r, 1.0e-10);
+<a name="line669">669: </a>    VecViewFromOptions(r, NULL, <font color="#666666">"-initial_residual_view"</font>);
+<a name="line670">670: </a>    <a href="../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(r, <a href="../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>, &amp;res);
+<a name="line671">671: </a>    <a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, <font color="#666666">"L_2 Residual: %g\n"</font>, res);
+<a name="line672">672: </a>    <font color="#B22222">/* Check Jacobian */</font>
+<a name="line673">673: </a>    {
+<a name="line674">674: </a>      <a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A;
+<a name="line675">675: </a>      <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> b;
+
+<a name="line677">677: </a>      <a href="../../../../docs/manualpages/SNES/SNESGetJacobian.html#SNESGetJacobian">SNESGetJacobian</a>(snes, &amp;A, NULL, NULL, NULL);
+<a name="line678">678: </a>      <a href="../../../../docs/manualpages/SNES/SNESComputeJacobian.html#SNESComputeJacobian">SNESComputeJacobian</a>(snes, u, A, A);
+<a name="line679">679: </a>      <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(u, &amp;b);
+<a name="line680">680: </a>      <a href="../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(r, 0.0);
+<a name="line681">681: </a>      <a href="../../../../docs/manualpages/SNES/SNESComputeFunction.html#SNESComputeFunction">SNESComputeFunction</a>(snes, r, b);
+<a name="line682">682: </a>      <a href="../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a>(A, u, r);
+<a name="line683">683: </a>      <a href="../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(r, 1.0, b);
+<a name="line684">684: </a>      <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;b);
+<a name="line685">685: </a>      <a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, <font color="#666666">"Au - b = Au + F(0)\n"</font>);
+<a name="line686">686: </a>      <a href="../../../../docs/manualpages/Vec/VecChop.html#VecChop">VecChop</a>(r, 1.0e-10);
+<a name="line687">687: </a>      VecViewFromOptions(r, NULL, <font color="#666666">"-linear_residual_view"</font>);
+<a name="line688">688: </a>      <a href="../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(r, <a href="../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>, &amp;res);
+<a name="line689">689: </a>      <a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, <font color="#666666">"Linear L_2 Residual: %g\n"</font>, res);
+<a name="line690">690: </a>    }
+<a name="line691">691: </a>  }
+<a name="line692">692: </a><font color="#A020F0">#endif</font>
+<a name="line693">693: </a>  <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;u);
+<a name="line694">694: </a>  <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;r);
+<a name="line695">695: </a>  <a href="../../../../docs/manualpages/TS/TSDestroy.html#TSDestroy">TSDestroy</a>(&amp;ts);
+<a name="line696">696: </a>  <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(&amp;dm);
+<a name="line697">697: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(ctx.initialFuncs);
+<a name="line698">698: </a>  <a href="../../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>();
+<a name="line699">699: </a>  <font color="#4169E1">return</font> ierr;
+<a name="line700">700: </a>}
+
+<a name="line702">702: </a><font color="#B22222">/*TEST</font>
+
+<a name="line704">704: </a><font color="#B22222">  test:</font>
+<a name="line705">705: </a><font color="#B22222">    suffix: 0</font>
+<a name="line706">706: </a><font color="#B22222">    args: -debug 1 -dim 2 -dm_refine 1 -x_periodicity PERIODIC -ts_max_steps 1 -ts_max_time 10. -ts_dt 1.0</font>
+<a name="line707">707: </a><font color="#B22222">  test:</font>
+<a name="line708">708: </a><font color="#B22222">    suffix: 1</font>
+<a name="line709">709: </a><font color="#B22222">    args: -debug 1 -dim 3 -dm_refine 1 -z_periodicity PERIODIC -ts_max_steps 1 -ts_max_time 10. -ts_dt 1.0 -domain_lo -2,-1,-1 -domain_hi 2,1,1</font>
+
+<a name="line711">711: </a><font color="#B22222">TEST*/</font>
+</pre>
+</body>
+
+</html>

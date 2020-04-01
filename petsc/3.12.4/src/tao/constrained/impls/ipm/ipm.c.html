@@ -1,0 +1,1109 @@
+<center><a href="ipm.c">Actual source code: ipm.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/tao/constrained/impls/ipm/ipm.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:34:32+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/tao/constrained/impls/ipm/ipm.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a> #include <A href="../../../../../include/petsctaolinesearch.h.html">&lt;petsctaolinesearch.h&gt;</A>
+<a name="line2">  2: </a> #include <A href="../../../../../include/../src/tao/constrained/impls/ipm/ipm.h.html">&lt;../src/tao/constrained/impls/ipm/ipm.h&gt;</A>
+
+<a name="line4">  4: </a><font color="#B22222">/*</font>
+<a name="line5">  5: </a><font color="#B22222">   x,d in R^n</font>
+<a name="line6">  6: </a><font color="#B22222">   f in R</font>
+<a name="line7">  7: </a><font color="#B22222">   nb = mi + nlb+nub</font>
+<a name="line8">  8: </a><font color="#B22222">   s in R^nb is slack vector CI(x) / x-XL / -x+XU</font>
+<a name="line9">  9: </a><font color="#B22222">   bin in R^mi (tao-&gt;constraints_inequality)</font>
+<a name="line10"> 10: </a><font color="#B22222">   beq in R^me (tao-&gt;constraints_equality)</font>
+<a name="line11"> 11: </a><font color="#B22222">   lamdai in R^nb (ipmP-&gt;lamdai)</font>
+<a name="line12"> 12: </a><font color="#B22222">   lamdae in R^me (ipmP-&gt;lamdae)</font>
+<a name="line13"> 13: </a><font color="#B22222">   Jeq in R^(me x n) (tao-&gt;jacobian_equality)</font>
+<a name="line14"> 14: </a><font color="#B22222">   Jin in R^(mi x n) (tao-&gt;jacobian_inequality)</font>
+<a name="line15"> 15: </a><font color="#B22222">   Ai in  R^(nb x n) (ipmP-&gt;Ai)</font>
+<a name="line16"> 16: </a><font color="#B22222">   H in R^(n x n) (tao-&gt;hessian)</font>
+<a name="line17"> 17: </a><font color="#B22222">   min f=(1/2)*x'*H*x + d'*x</font>
+<a name="line18"> 18: </a><font color="#B22222">   s.t.  CE(x) == 0</font>
+<a name="line19"> 19: </a><font color="#B22222">         CI(x) &gt;= 0</font>
+<a name="line20"> 20: </a><font color="#B22222">         x &gt;= tao-&gt;XL</font>
+<a name="line21"> 21: </a><font color="#B22222">         -x &gt;= -tao-&gt;XU</font>
+<a name="line22"> 22: </a><font color="#B22222">*/</font>
+
+<a name="line24"> 24: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMComputeKKT(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>;
+<a name="line25"> 25: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMPushInitialPoint(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>;
+<a name="line26"> 26: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMEvaluate(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>;
+<a name="line27"> 27: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMUpdateK(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>;
+<a name="line28"> 28: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMUpdateAi(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>;
+<a name="line29"> 29: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMGatherRHS(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>)</font></strong>;
+<a name="line30"> 30: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMScatterStep(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>)</font></strong>;
+<a name="line31"> 31: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMInitializeBounds(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>;
+
+<a name="line33"> 33: </a><strong><font color="#4169E1"><a name="TaoSolve_IPM"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoSolve_IPM(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line34"> 34: </a>{
+<a name="line35"> 35: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line36"> 36: </a>  TAO_IPM            *ipmP = (TAO_IPM*)tao-&gt;data;
+<a name="line37"> 37: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           its,i;
+<a name="line38"> 38: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>        stepsize=1.0;
+<a name="line39"> 39: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>        step_s,step_l,alpha,tau,sigma,phi_target;
+
+<a name="line42"> 42: </a>  <font color="#B22222">/* Push initial point away from bounds */</font>
+<a name="line43"> 43: </a>  IPMInitializeBounds(tao);
+<a name="line44"> 44: </a>  IPMPushInitialPoint(tao);
+<a name="line45"> 45: </a>  <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(tao-&gt;solution,ipmP-&gt;rhs_x);
+<a name="line46"> 46: </a>  IPMEvaluate(tao);
+<a name="line47"> 47: </a>  IPMComputeKKT(tao);
+<a name="line48"> 48: </a>
+<a name="line49"> 49: </a>  tao-&gt;reason = <a href="../../../../../docs/manualpages/Tao/TaoConvergedReason.html#TaoConvergedReason">TAO_CONTINUE_ITERATING</a>;
+<a name="line50"> 50: </a>  TaoLogConvergenceHistory(tao,ipmP-&gt;kkt_f,ipmP-&gt;phi,0.0,tao-&gt;ksp_its);
+<a name="line51"> 51: </a>  <a href="../../../../../docs/manualpages/Tao/TaoMonitor.html#TaoMonitor">TaoMonitor</a>(tao,tao-&gt;niter,ipmP-&gt;kkt_f,ipmP-&gt;phi,0.0,1.0);
+<a name="line52"> 52: </a>  (*tao-&gt;ops-&gt;convergencetest)(tao,tao-&gt;cnvP);
+<a name="line53"> 53: </a>
+<a name="line54"> 54: </a>  <font color="#4169E1">while</font> (tao-&gt;reason == <a href="../../../../../docs/manualpages/Tao/TaoConvergedReason.html#TaoConvergedReason">TAO_CONTINUE_ITERATING</a>) {
+<a name="line55"> 55: </a>    <font color="#B22222">/* Call general purpose update function */</font>
+<a name="line56"> 56: </a>    <font color="#4169E1">if</font> (tao-&gt;ops-&gt;update) {
+<a name="line57"> 57: </a>      (*tao-&gt;ops-&gt;update)(tao, tao-&gt;niter, tao-&gt;user_update);
+<a name="line58"> 58: </a>    }
+<a name="line59"> 59: </a>
+<a name="line60"> 60: </a>    tao-&gt;ksp_its=0;
+<a name="line61"> 61: </a>    IPMUpdateK(tao);
+<a name="line62"> 62: </a>    <font color="#B22222">/*</font>
+<a name="line63"> 63: </a><font color="#B22222">       rhs.x    = -rd</font>
+<a name="line64"> 64: </a><font color="#B22222">       rhs.lame = -rpe</font>
+<a name="line65"> 65: </a><font color="#B22222">       rhs.lami = -rpi</font>
+<a name="line66"> 66: </a><font color="#B22222">       rhs.com  = -com</font>
+<a name="line67"> 67: </a><font color="#B22222">    */</font>
+
+<a name="line69"> 69: </a>    <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;rd,ipmP-&gt;rhs_x);
+<a name="line70"> 70: </a>    <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line71"> 71: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;rpe,ipmP-&gt;rhs_lamdae);
+<a name="line72"> 72: </a>    }
+<a name="line73"> 73: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line74"> 74: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;rpi,ipmP-&gt;rhs_lamdai);
+<a name="line75"> 75: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;complementarity,ipmP-&gt;rhs_s);
+<a name="line76"> 76: </a>    }
+<a name="line77"> 77: </a>    IPMGatherRHS(tao,ipmP-&gt;bigrhs,ipmP-&gt;rhs_x,ipmP-&gt;rhs_lamdae,ipmP-&gt;rhs_lamdai,ipmP-&gt;rhs_s);
+<a name="line78"> 78: </a>    <a href="../../../../../docs/manualpages/Vec/VecScale.html#VecScale">VecScale</a>(ipmP-&gt;bigrhs,-1.0);
+
+<a name="line80"> 80: </a>    <font color="#B22222">/* solve K * step = rhs */</font>
+<a name="line81"> 81: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(tao-&gt;ksp,ipmP-&gt;K,ipmP-&gt;K);
+<a name="line82"> 82: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(tao-&gt;ksp,ipmP-&gt;bigrhs,ipmP-&gt;bigstep);
+
+<a name="line84"> 84: </a>    IPMScatterStep(tao,ipmP-&gt;bigstep,tao-&gt;stepdirection,ipmP-&gt;ds,ipmP-&gt;dlamdae,ipmP-&gt;dlamdai);
+<a name="line85"> 85: </a>    <a href="../../../../../docs/manualpages/KSP/KSPGetIterationNumber.html#KSPGetIterationNumber">KSPGetIterationNumber</a>(tao-&gt;ksp,&amp;its);
+<a name="line86"> 86: </a>    tao-&gt;ksp_its += its;
+<a name="line87"> 87: </a>    tao-&gt;ksp_tot_its+=its;
+<a name="line88"> 88: </a>     <font color="#B22222">/* Find distance along step direction to closest bound */</font>
+<a name="line89"> 89: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line90"> 90: </a>      <a href="../../../../../docs/manualpages/Vec/VecStepBoundInfo.html#VecStepBoundInfo">VecStepBoundInfo</a>(ipmP-&gt;s,ipmP-&gt;ds,ipmP-&gt;Zero_nb,ipmP-&gt;Inf_nb,&amp;step_s,NULL,NULL);
+<a name="line91"> 91: </a>      <a href="../../../../../docs/manualpages/Vec/VecStepBoundInfo.html#VecStepBoundInfo">VecStepBoundInfo</a>(ipmP-&gt;lamdai,ipmP-&gt;dlamdai,ipmP-&gt;Zero_nb,ipmP-&gt;Inf_nb,&amp;step_l,NULL,NULL);
+<a name="line92"> 92: </a>      alpha = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(step_s,step_l);
+<a name="line93"> 93: </a>      alpha = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(alpha,1.0);
+<a name="line94"> 94: </a>      ipmP-&gt;alpha1 = alpha;
+<a name="line95"> 95: </a>    } <font color="#4169E1">else</font> {
+<a name="line96"> 96: </a>      ipmP-&gt;alpha1 = alpha = 1.0;
+<a name="line97"> 97: </a>    }
+
+<a name="line99"> 99: </a>    <font color="#B22222">/* x_aff = x + alpha*d */</font>
+<a name="line100">100: </a>    <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(tao-&gt;solution,ipmP-&gt;save_x);
+<a name="line101">101: </a>    <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line102">102: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;lamdae,ipmP-&gt;save_lamdae);
+<a name="line103">103: </a>    }
+<a name="line104">104: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line105">105: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;lamdai,ipmP-&gt;save_lamdai);
+<a name="line106">106: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;s,ipmP-&gt;save_s);
+<a name="line107">107: </a>    }
+
+<a name="line109">109: </a>    <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(tao-&gt;solution,alpha,tao-&gt;stepdirection);
+<a name="line110">110: </a>    <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line111">111: </a>      <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;lamdae,alpha,ipmP-&gt;dlamdae);
+<a name="line112">112: </a>    }
+<a name="line113">113: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line114">114: </a>      <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;lamdai,alpha,ipmP-&gt;dlamdai);
+<a name="line115">115: </a>      <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;s,alpha,ipmP-&gt;ds);
+<a name="line116">116: </a>    }
+
+<a name="line118">118: </a>    <font color="#B22222">/* Recompute kkt to find centering parameter sigma = (new_mu/old_mu)^3 */</font>
+<a name="line119">119: </a>    <font color="#4169E1">if</font> (ipmP-&gt;mu == 0.0) {
+<a name="line120">120: </a>      sigma = 0.0;
+<a name="line121">121: </a>    } <font color="#4169E1">else</font> {
+<a name="line122">122: </a>      sigma = 1.0/ipmP-&gt;mu;
+<a name="line123">123: </a>    }
+<a name="line124">124: </a>    IPMComputeKKT(tao);
+<a name="line125">125: </a>    sigma *= ipmP-&gt;mu;
+<a name="line126">126: </a>    sigma*=sigma*sigma;
+
+<a name="line128">128: </a>    <font color="#B22222">/* revert kkt info */</font>
+<a name="line129">129: </a>    <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;save_x,tao-&gt;solution);
+<a name="line130">130: </a>    <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line131">131: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;save_lamdae,ipmP-&gt;lamdae);
+<a name="line132">132: </a>    }
+<a name="line133">133: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line134">134: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;save_lamdai,ipmP-&gt;lamdai);
+<a name="line135">135: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;save_s,ipmP-&gt;s);
+<a name="line136">136: </a>    }
+<a name="line137">137: </a>    IPMComputeKKT(tao);
+
+<a name="line139">139: </a>    <font color="#B22222">/* update rhs with new complementarity vector */</font>
+<a name="line140">140: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line141">141: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;complementarity,ipmP-&gt;rhs_s);
+<a name="line142">142: </a>      <a href="../../../../../docs/manualpages/Vec/VecScale.html#VecScale">VecScale</a>(ipmP-&gt;rhs_s,-1.0);
+<a name="line143">143: </a>      <a href="../../../../../docs/manualpages/Vec/VecShift.html#VecShift">VecShift</a>(ipmP-&gt;rhs_s,sigma*ipmP-&gt;mu);
+<a name="line144">144: </a>    }
+<a name="line145">145: </a>    IPMGatherRHS(tao,ipmP-&gt;bigrhs,NULL,NULL,NULL,ipmP-&gt;rhs_s);
+
+<a name="line147">147: </a>    <font color="#B22222">/* solve K * step = rhs */</font>
+<a name="line148">148: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(tao-&gt;ksp,ipmP-&gt;K,ipmP-&gt;K);
+<a name="line149">149: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(tao-&gt;ksp,ipmP-&gt;bigrhs,ipmP-&gt;bigstep);
+
+<a name="line151">151: </a>    IPMScatterStep(tao,ipmP-&gt;bigstep,tao-&gt;stepdirection,ipmP-&gt;ds,ipmP-&gt;dlamdae,ipmP-&gt;dlamdai);
+<a name="line152">152: </a>    <a href="../../../../../docs/manualpages/KSP/KSPGetIterationNumber.html#KSPGetIterationNumber">KSPGetIterationNumber</a>(tao-&gt;ksp,&amp;its);
+<a name="line153">153: </a>    tao-&gt;ksp_its += its;
+<a name="line154">154: </a>    tao-&gt;ksp_tot_its+=its;
+<a name="line155">155: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line156">156: </a>      <font color="#B22222">/* Get max step size and apply frac-to-boundary */</font>
+<a name="line157">157: </a>      tau = <a href="../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(ipmP-&gt;taumin,1.0-ipmP-&gt;mu);
+<a name="line158">158: </a>      tau = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(tau,1.0);
+<a name="line159">159: </a>      <font color="#4169E1">if</font> (tau != 1.0) {
+<a name="line160">160: </a>        <a href="../../../../../docs/manualpages/Vec/VecScale.html#VecScale">VecScale</a>(ipmP-&gt;s,tau);
+<a name="line161">161: </a>        <a href="../../../../../docs/manualpages/Vec/VecScale.html#VecScale">VecScale</a>(ipmP-&gt;lamdai,tau);
+<a name="line162">162: </a>      }
+<a name="line163">163: </a>      <a href="../../../../../docs/manualpages/Vec/VecStepBoundInfo.html#VecStepBoundInfo">VecStepBoundInfo</a>(ipmP-&gt;s,ipmP-&gt;ds,ipmP-&gt;Zero_nb,ipmP-&gt;Inf_nb,&amp;step_s,NULL,NULL);
+<a name="line164">164: </a>      <a href="../../../../../docs/manualpages/Vec/VecStepBoundInfo.html#VecStepBoundInfo">VecStepBoundInfo</a>(ipmP-&gt;lamdai,ipmP-&gt;dlamdai,ipmP-&gt;Zero_nb,ipmP-&gt;Inf_nb,&amp;step_l,NULL,NULL);
+<a name="line165">165: </a>      <font color="#4169E1">if</font> (tau != 1.0) {
+<a name="line166">166: </a>        <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;save_s,ipmP-&gt;s);
+<a name="line167">167: </a>        <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;save_lamdai,ipmP-&gt;lamdai);
+<a name="line168">168: </a>      }
+<a name="line169">169: </a>      alpha = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(step_s,step_l);
+<a name="line170">170: </a>      alpha = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(alpha,1.0);
+<a name="line171">171: </a>    } <font color="#4169E1">else</font> {
+<a name="line172">172: </a>      alpha = 1.0;
+<a name="line173">173: </a>    }
+<a name="line174">174: </a>    ipmP-&gt;alpha2 = alpha;
+<a name="line175">175: </a>    <font color="#B22222">/* TODO make phi_target meaningful */</font>
+<a name="line176">176: </a>    phi_target = ipmP-&gt;dec * ipmP-&gt;phi;
+<a name="line177">177: </a>    <font color="#4169E1">for</font> (i=0; i&lt;11;i++) {
+<a name="line178">178: </a>      <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(tao-&gt;solution,alpha,tao-&gt;stepdirection);
+<a name="line179">179: </a>      <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line180">180: </a>        <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;s,alpha,ipmP-&gt;ds);
+<a name="line181">181: </a>        <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;lamdai,alpha,ipmP-&gt;dlamdai);
+<a name="line182">182: </a>      }
+<a name="line183">183: </a>      <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line184">184: </a>        <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;lamdae,alpha,ipmP-&gt;dlamdae);
+<a name="line185">185: </a>      }
+
+<a name="line187">187: </a>      <font color="#B22222">/* update dual variables */</font>
+<a name="line188">188: </a>      <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line189">189: </a>        <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;lamdae,tao-&gt;DE);
+<a name="line190">190: </a>      }
+
+<a name="line192">192: </a>      IPMEvaluate(tao);
+<a name="line193">193: </a>      IPMComputeKKT(tao);
+<a name="line194">194: </a>      <font color="#4169E1">if</font> (ipmP-&gt;phi &lt;= phi_target) <font color="#4169E1">break</font>;
+<a name="line195">195: </a>      alpha /= 2.0;
+<a name="line196">196: </a>    }
+
+<a name="line198">198: </a>    TaoLogConvergenceHistory(tao,ipmP-&gt;kkt_f,ipmP-&gt;phi,0.0,tao-&gt;ksp_its);
+<a name="line199">199: </a>    <a href="../../../../../docs/manualpages/Tao/TaoMonitor.html#TaoMonitor">TaoMonitor</a>(tao,tao-&gt;niter,ipmP-&gt;kkt_f,ipmP-&gt;phi,0.0,stepsize);
+<a name="line200">200: </a>    (*tao-&gt;ops-&gt;convergencetest)(tao,tao-&gt;cnvP);
+<a name="line201">201: </a>    tao-&gt;niter++;
+<a name="line202">202: </a>  }
+<a name="line203">203: </a>  <font color="#4169E1">return</font>(0);
+<a name="line204">204: </a>}
+
+<a name="line206">206: </a><strong><font color="#4169E1"><a name="TaoSetup_IPM"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoSetup_IPM(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line207">207: </a>{
+<a name="line208">208: </a>  TAO_IPM        *ipmP = (TAO_IPM*)tao-&gt;data;
+
+<a name="line212">212: </a>  ipmP-&gt;nb = ipmP-&gt;mi = ipmP-&gt;me = 0;
+<a name="line213">213: </a>  ipmP-&gt;K=0;
+<a name="line214">214: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(tao-&gt;solution,&amp;ipmP-&gt;n);
+<a name="line215">215: </a>  <font color="#4169E1">if</font> (!tao-&gt;gradient) {
+<a name="line216">216: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;solution, &amp;tao-&gt;gradient);
+<a name="line217">217: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;solution, &amp;tao-&gt;stepdirection);
+<a name="line218">218: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;solution, &amp;ipmP-&gt;rd);
+<a name="line219">219: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;solution, &amp;ipmP-&gt;rhs_x);
+<a name="line220">220: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;solution, &amp;ipmP-&gt;work);
+<a name="line221">221: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;solution, &amp;ipmP-&gt;save_x);
+<a name="line222">222: </a>  }
+<a name="line223">223: </a>  <font color="#4169E1">if</font> (tao-&gt;constraints_equality) {
+<a name="line224">224: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(tao-&gt;constraints_equality,&amp;ipmP-&gt;me);
+<a name="line225">225: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;constraints_equality,&amp;ipmP-&gt;lamdae);
+<a name="line226">226: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;constraints_equality,&amp;ipmP-&gt;dlamdae);
+<a name="line227">227: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;constraints_equality,&amp;ipmP-&gt;rhs_lamdae);
+<a name="line228">228: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;constraints_equality,&amp;ipmP-&gt;save_lamdae);
+<a name="line229">229: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;constraints_equality,&amp;ipmP-&gt;rpe);
+<a name="line230">230: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;constraints_equality,&amp;tao-&gt;DE);
+<a name="line231">231: </a>  }
+<a name="line232">232: </a>  <font color="#4169E1">if</font> (tao-&gt;constraints_inequality) {
+<a name="line233">233: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;constraints_inequality,&amp;tao-&gt;DI);
+<a name="line234">234: </a>  }
+<a name="line235">235: </a>  <font color="#4169E1">return</font>(0);
+<a name="line236">236: </a>}
+
+<a name="line238">238: </a><strong><font color="#4169E1"><a name="IPMInitializeBounds"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMInitializeBounds(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line239">239: </a>{
+<a name="line240">240: </a>  TAO_IPM        *ipmP = (TAO_IPM*)tao-&gt;data;
+<a name="line241">241: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            xtmp;
+<a name="line242">242: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       xstart,xend;
+<a name="line243">243: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       ucstart,ucend; <font color="#B22222">/* user ci */</font>
+<a name="line244">244: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       ucestart,uceend; <font color="#B22222">/* user ce */</font>
+<a name="line245">245: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       sstart = 0 ,send = 0;
+<a name="line246">246: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       bigsize;
+<a name="line247">247: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,counter,nloc;
+<a name="line248">248: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *cind,*xind,*ucind,*uceind,*stepind;
+<a name="line249">249: </a>  <a href="../../../../../docs/manualpages/Vec/VecType.html#VecType">VecType</a>        vtype;
+<a name="line250">250: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *xli,*xui;
+<a name="line251">251: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       xl_offset,xu_offset;
+<a name="line252">252: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>             bigxl,bigxu,isuc,isc,isx,sis,is1;
+<a name="line254">254: </a>  <a href="../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>       comm;
+
+<a name="line257">257: </a>  cind=xind=ucind=uceind=stepind=0;
+<a name="line258">258: </a>  ipmP-&gt;mi=0;
+<a name="line259">259: </a>  ipmP-&gt;nxlb=0;
+<a name="line260">260: </a>  ipmP-&gt;nxub=0;
+<a name="line261">261: </a>  ipmP-&gt;nb=0;
+<a name="line262">262: </a>  ipmP-&gt;nslack=0;
+
+<a name="line264">264: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;solution,&amp;xtmp);
+<a name="line265">265: </a>  <font color="#4169E1">if</font> (!tao-&gt;XL &amp;&amp; !tao-&gt;XU &amp;&amp; tao-&gt;ops-&gt;computebounds) {
+<a name="line266">266: </a>    <a href="../../../../../docs/manualpages/Tao/TaoComputeVariableBounds.html#TaoComputeVariableBounds">TaoComputeVariableBounds</a>(tao);
+<a name="line267">267: </a>  }
+<a name="line268">268: </a>  <font color="#4169E1">if</font> (tao-&gt;XL) {
+<a name="line269">269: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(xtmp,PETSC_NINFINITY);
+<a name="line270">270: </a>    <a href="../../../../../docs/manualpages/Vec/VecWhichGreaterThan.html#VecWhichGreaterThan">VecWhichGreaterThan</a>(tao-&gt;XL,xtmp,&amp;ipmP-&gt;isxl);
+<a name="line271">271: </a>    <a href="../../../../../docs/manualpages/IS/ISGetSize.html#ISGetSize">ISGetSize</a>(ipmP-&gt;isxl,&amp;ipmP-&gt;nxlb);
+<a name="line272">272: </a>  } <font color="#4169E1">else</font> {
+<a name="line273">273: </a>    ipmP-&gt;nxlb=0;
+<a name="line274">274: </a>  }
+<a name="line275">275: </a>  <font color="#4169E1">if</font> (tao-&gt;XU) {
+<a name="line276">276: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(xtmp,PETSC_INFINITY);
+<a name="line277">277: </a>    <a href="../../../../../docs/manualpages/Vec/VecWhichLessThan.html#VecWhichLessThan">VecWhichLessThan</a>(tao-&gt;XU,xtmp,&amp;ipmP-&gt;isxu);
+<a name="line278">278: </a>    <a href="../../../../../docs/manualpages/IS/ISGetSize.html#ISGetSize">ISGetSize</a>(ipmP-&gt;isxu,&amp;ipmP-&gt;nxub);
+<a name="line279">279: </a>  } <font color="#4169E1">else</font> {
+<a name="line280">280: </a>    ipmP-&gt;nxub=0;
+<a name="line281">281: </a>  }
+<a name="line282">282: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;xtmp);
+<a name="line283">283: </a>  <font color="#4169E1">if</font> (tao-&gt;constraints_inequality) {
+<a name="line284">284: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(tao-&gt;constraints_inequality,&amp;ipmP-&gt;mi);
+<a name="line285">285: </a>  } <font color="#4169E1">else</font> {
+<a name="line286">286: </a>    ipmP-&gt;mi = 0;
+<a name="line287">287: </a>  }
+<a name="line288">288: </a>  ipmP-&gt;nb = ipmP-&gt;nxlb + ipmP-&gt;nxub + ipmP-&gt;mi;
+
+<a name="line290">290: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)tao-&gt;solution,&amp;comm);
+
+<a name="line292">292: </a>  bigsize = ipmP-&gt;n+2*ipmP-&gt;nb+ipmP-&gt;me;
+<a name="line293">293: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(bigsize,&amp;stepind);
+<a name="line294">294: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ipmP-&gt;n,&amp;xind);
+<a name="line295">295: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ipmP-&gt;me,&amp;uceind);
+<a name="line296">296: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(tao-&gt;solution,&amp;xstart,&amp;xend);
+
+<a name="line298">298: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line299">299: </a>    <a href="../../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(comm,&amp;ipmP-&gt;s);
+<a name="line300">300: </a>    <a href="../../../../../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a>(ipmP-&gt;s,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,ipmP-&gt;nb);
+<a name="line301">301: </a>    <a href="../../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>(ipmP-&gt;s);
+<a name="line302">302: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;ds);
+<a name="line303">303: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;rhs_s);
+<a name="line304">304: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;complementarity);
+<a name="line305">305: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;ci);
+
+<a name="line307">307: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;lamdai);
+<a name="line308">308: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;dlamdai);
+<a name="line309">309: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;rhs_lamdai);
+<a name="line310">310: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;save_lamdai);
+
+<a name="line312">312: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;save_s);
+<a name="line313">313: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;rpi);
+<a name="line314">314: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;Zero_nb);
+<a name="line315">315: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(ipmP-&gt;Zero_nb,0.0);
+<a name="line316">316: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;One_nb);
+<a name="line317">317: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(ipmP-&gt;One_nb,1.0);
+<a name="line318">318: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;s,&amp;ipmP-&gt;Inf_nb);
+<a name="line319">319: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(ipmP-&gt;Inf_nb,PETSC_INFINITY);
+
+<a name="line321">321: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ipmP-&gt;nb,&amp;cind);
+<a name="line322">322: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ipmP-&gt;mi,&amp;ucind);
+<a name="line323">323: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(ipmP-&gt;s,&amp;sstart,&amp;send);
+
+<a name="line325">325: </a>    <font color="#4169E1">if</font> (ipmP-&gt;mi &gt; 0) {
+<a name="line326">326: </a>      <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(tao-&gt;constraints_inequality,&amp;ucstart,&amp;ucend);
+<a name="line327">327: </a>      counter=0;
+<a name="line328">328: </a>      <font color="#4169E1">for</font> (i=ucstart;i&lt;ucend;i++) {
+<a name="line329">329: </a>        cind[counter++] = i;
+<a name="line330">330: </a>      }
+<a name="line331">331: </a>      <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,counter,cind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;isuc);
+<a name="line332">332: </a>      <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,counter,cind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;isc);
+<a name="line333">333: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(tao-&gt;constraints_inequality,isuc,ipmP-&gt;ci,isc,&amp;ipmP-&gt;ci_scat);
+
+<a name="line335">335: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;isuc);
+<a name="line336">336: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;isc);
+<a name="line337">337: </a>    }
+<a name="line338">338: </a>    <font color="#B22222">/* need to know how may xbound indices are on each process */</font>
+<a name="line339">339: </a>    <font color="#B22222">/* TODO better way */</font>
+<a name="line340">340: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nxlb) {
+<a name="line341">341: </a>      <a href="../../../../../docs/manualpages/IS/ISAllGather.html#ISAllGather">ISAllGather</a>(ipmP-&gt;isxl,&amp;bigxl);
+<a name="line342">342: </a>      <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(bigxl,&amp;xli);
+<a name="line343">343: </a>      <font color="#B22222">/* find offsets for this processor */</font>
+<a name="line344">344: </a>      xl_offset = ipmP-&gt;mi;
+<a name="line345">345: </a>      <font color="#4169E1">for</font> (i=0;i&lt;ipmP-&gt;nxlb;i++) {
+<a name="line346">346: </a>        <font color="#4169E1">if</font> (xli[i] &lt; xstart) {
+<a name="line347">347: </a>          xl_offset++;
+<a name="line348">348: </a>        } <font color="#4169E1">else</font> <font color="#4169E1">break</font>;
+<a name="line349">349: </a>      }
+<a name="line350">350: </a>      <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(bigxl,&amp;xli);
+
+<a name="line352">352: </a>      <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(ipmP-&gt;isxl,&amp;xli);
+<a name="line353">353: </a>      <a href="../../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(ipmP-&gt;isxl,&amp;nloc);
+<a name="line354">354: </a>      <font color="#4169E1">for</font> (i=0;i&lt;nloc;i++) {
+<a name="line355">355: </a>        xind[i] = xli[i];
+<a name="line356">356: </a>        cind[i] = xl_offset+i;
+<a name="line357">357: </a>      }
+
+<a name="line359">359: </a>      <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,nloc,xind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;isx);
+<a name="line360">360: </a>      <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,nloc,cind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;isc);
+<a name="line361">361: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(tao-&gt;XL,isx,ipmP-&gt;ci,isc,&amp;ipmP-&gt;xl_scat);
+<a name="line362">362: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;isx);
+<a name="line363">363: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;isc);
+<a name="line364">364: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;bigxl);
+<a name="line365">365: </a>    }
+
+<a name="line367">367: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nxub) {
+<a name="line368">368: </a>      <a href="../../../../../docs/manualpages/IS/ISAllGather.html#ISAllGather">ISAllGather</a>(ipmP-&gt;isxu,&amp;bigxu);
+<a name="line369">369: </a>      <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(bigxu,&amp;xui);
+<a name="line370">370: </a>      <font color="#B22222">/* find offsets for this processor */</font>
+<a name="line371">371: </a>      xu_offset = ipmP-&gt;mi + ipmP-&gt;nxlb;
+<a name="line372">372: </a>      <font color="#4169E1">for</font> (i=0;i&lt;ipmP-&gt;nxub;i++) {
+<a name="line373">373: </a>        <font color="#4169E1">if</font> (xui[i] &lt; xstart) {
+<a name="line374">374: </a>          xu_offset++;
+<a name="line375">375: </a>        } <font color="#4169E1">else</font> <font color="#4169E1">break</font>;
+<a name="line376">376: </a>      }
+<a name="line377">377: </a>      <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(bigxu,&amp;xui);
+
+<a name="line379">379: </a>      <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(ipmP-&gt;isxu,&amp;xui);
+<a name="line380">380: </a>      <a href="../../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(ipmP-&gt;isxu,&amp;nloc);
+<a name="line381">381: </a>      <font color="#4169E1">for</font> (i=0;i&lt;nloc;i++) {
+<a name="line382">382: </a>        xind[i] = xui[i];
+<a name="line383">383: </a>        cind[i] = xu_offset+i;
+<a name="line384">384: </a>      }
+
+<a name="line386">386: </a>      <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,nloc,xind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;isx);
+<a name="line387">387: </a>      <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,nloc,cind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;isc);
+<a name="line388">388: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(tao-&gt;XU,isx,ipmP-&gt;ci,isc,&amp;ipmP-&gt;xu_scat);
+<a name="line389">389: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;isx);
+<a name="line390">390: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;isc);
+<a name="line391">391: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;bigxu);
+<a name="line392">392: </a>    }
+<a name="line393">393: </a>  }
+<a name="line394">394: </a>  <a href="../../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(comm,&amp;ipmP-&gt;bigrhs);
+<a name="line395">395: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetType.html#VecGetType">VecGetType</a>(tao-&gt;solution,&amp;vtype);
+<a name="line396">396: </a>  <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(ipmP-&gt;bigrhs,vtype);
+<a name="line397">397: </a>  <a href="../../../../../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a>(ipmP-&gt;bigrhs,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,bigsize);
+<a name="line398">398: </a>  <a href="../../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>(ipmP-&gt;bigrhs);
+<a name="line399">399: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(ipmP-&gt;bigrhs,&amp;ipmP-&gt;bigstep);
+
+<a name="line401">401: </a>  <font color="#B22222">/* create scatters for step-&gt;x and x-&gt;rhs */</font>
+<a name="line402">402: </a>  <font color="#4169E1">for</font> (i=xstart;i&lt;xend;i++) {
+<a name="line403">403: </a>    stepind[i-xstart] = i;
+<a name="line404">404: </a>    xind[i-xstart] = i;
+<a name="line405">405: </a>  }
+<a name="line406">406: </a>  <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,xend-xstart,stepind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;sis);
+<a name="line407">407: </a>  <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,xend-xstart,xind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;is1);
+<a name="line408">408: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(ipmP-&gt;bigstep,sis,tao-&gt;solution,is1,&amp;ipmP-&gt;step1);
+<a name="line409">409: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(tao-&gt;solution,is1,ipmP-&gt;bigrhs,sis,&amp;ipmP-&gt;rhs1);
+<a name="line410">410: </a>  <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;sis);
+<a name="line411">411: </a>  <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;is1);
+
+<a name="line413">413: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line414">414: </a>    <font color="#4169E1">for</font> (i=sstart;i&lt;send;i++) {
+<a name="line415">415: </a>      stepind[i-sstart] = i+ipmP-&gt;n;
+<a name="line416">416: </a>      cind[i-sstart] = i;
+<a name="line417">417: </a>    }
+<a name="line418">418: </a>    <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,send-sstart,stepind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;sis);
+<a name="line419">419: </a>    <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,send-sstart,cind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;is1);
+<a name="line420">420: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(ipmP-&gt;bigstep,sis,ipmP-&gt;s,is1,&amp;ipmP-&gt;step2);
+<a name="line421">421: </a>    <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;sis);
+
+<a name="line423">423: </a>    <font color="#4169E1">for</font> (i=sstart;i&lt;send;i++) {
+<a name="line424">424: </a>      stepind[i-sstart] = i+ipmP-&gt;n+ipmP-&gt;me;
+<a name="line425">425: </a>      cind[i-sstart] = i;
+<a name="line426">426: </a>    }
+<a name="line427">427: </a>    <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,send-sstart,stepind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;sis);
+<a name="line428">428: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(ipmP-&gt;s,is1,ipmP-&gt;bigrhs,sis,&amp;ipmP-&gt;rhs3);
+<a name="line429">429: </a>    <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;sis);
+<a name="line430">430: </a>    <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;is1);
+<a name="line431">431: </a>  }
+
+<a name="line433">433: </a>  <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line434">434: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(tao-&gt;constraints_equality,&amp;ucestart,&amp;uceend);
+<a name="line435">435: </a>    <font color="#4169E1">for</font> (i=ucestart;i&lt;uceend;i++) {
+<a name="line436">436: </a>      stepind[i-ucestart] = i + ipmP-&gt;n+ipmP-&gt;nb;
+<a name="line437">437: </a>      uceind[i-ucestart] = i;
+<a name="line438">438: </a>    }
+
+<a name="line440">440: </a>    <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,uceend-ucestart,stepind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;sis);
+<a name="line441">441: </a>    <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,uceend-ucestart,uceind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;is1);
+<a name="line442">442: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(ipmP-&gt;bigstep,sis,tao-&gt;constraints_equality,is1,&amp;ipmP-&gt;step3);
+<a name="line443">443: </a>    <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;sis);
+
+<a name="line445">445: </a>    <font color="#4169E1">for</font> (i=ucestart;i&lt;uceend;i++) {
+<a name="line446">446: </a>      stepind[i-ucestart] = i + ipmP-&gt;n;
+<a name="line447">447: </a>    }
+
+<a name="line449">449: </a>    <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,uceend-ucestart,stepind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;sis);
+<a name="line450">450: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(tao-&gt;constraints_equality,is1,ipmP-&gt;bigrhs,sis,&amp;ipmP-&gt;rhs2);
+<a name="line451">451: </a>    <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;sis);
+<a name="line452">452: </a>    <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;is1);
+<a name="line453">453: </a>  }
+
+<a name="line455">455: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line456">456: </a>    <font color="#4169E1">for</font> (i=sstart;i&lt;send;i++) {
+<a name="line457">457: </a>      stepind[i-sstart] = i + ipmP-&gt;n + ipmP-&gt;nb + ipmP-&gt;me;
+<a name="line458">458: </a>      cind[i-sstart] = i;
+<a name="line459">459: </a>    }
+<a name="line460">460: </a>    <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,send-sstart,cind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;is1);
+<a name="line461">461: </a>    <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,send-sstart,stepind,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;sis);
+<a name="line462">462: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(ipmP-&gt;bigstep,sis,ipmP-&gt;s,is1,&amp;ipmP-&gt;step4);
+<a name="line463">463: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(ipmP-&gt;s,is1,ipmP-&gt;bigrhs,sis,&amp;ipmP-&gt;rhs4);
+<a name="line464">464: </a>    <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;sis);
+<a name="line465">465: </a>    <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;is1);
+<a name="line466">466: </a>  }
+
+<a name="line468">468: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(stepind);
+<a name="line469">469: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(cind);
+<a name="line470">470: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(ucind);
+<a name="line471">471: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(uceind);
+<a name="line472">472: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(xind);
+<a name="line473">473: </a>  <font color="#4169E1">return</font>(0);
+<a name="line474">474: </a>}
+
+<a name="line476">476: </a><strong><font color="#4169E1"><a name="TaoDestroy_IPM"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoDestroy_IPM(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line477">477: </a>{
+<a name="line478">478: </a>  TAO_IPM        *ipmP = (TAO_IPM*)tao-&gt;data;
+
+<a name="line482">482: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;rd);
+<a name="line483">483: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;rpe);
+<a name="line484">484: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;rpi);
+<a name="line485">485: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;work);
+<a name="line486">486: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;lamdae);
+<a name="line487">487: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;lamdai);
+<a name="line488">488: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;s);
+<a name="line489">489: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;ds);
+<a name="line490">490: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;ci);
+
+<a name="line492">492: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;rhs_x);
+<a name="line493">493: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;rhs_lamdae);
+<a name="line494">494: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;rhs_lamdai);
+<a name="line495">495: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;rhs_s);
+
+<a name="line497">497: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;save_x);
+<a name="line498">498: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;save_lamdae);
+<a name="line499">499: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;save_lamdai);
+<a name="line500">500: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;save_s);
+
+<a name="line502">502: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;step1);
+<a name="line503">503: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;step2);
+<a name="line504">504: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;step3);
+<a name="line505">505: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;step4);
+
+<a name="line507">507: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;rhs1);
+<a name="line508">508: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;rhs2);
+<a name="line509">509: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;rhs3);
+<a name="line510">510: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;rhs4);
+
+<a name="line512">512: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;ci_scat);
+<a name="line513">513: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;xl_scat);
+<a name="line514">514: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;ipmP-&gt;xu_scat);
+
+<a name="line516">516: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;dlamdai);
+<a name="line517">517: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;dlamdae);
+<a name="line518">518: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;Zero_nb);
+<a name="line519">519: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;One_nb);
+<a name="line520">520: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;Inf_nb);
+<a name="line521">521: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;complementarity);
+
+<a name="line523">523: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;bigrhs);
+<a name="line524">524: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;ipmP-&gt;bigstep);
+<a name="line525">525: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;ipmP-&gt;Ai);
+<a name="line526">526: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;ipmP-&gt;K);
+<a name="line527">527: </a>  <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;ipmP-&gt;isxu);
+<a name="line528">528: </a>  <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;ipmP-&gt;isxl);
+<a name="line529">529: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(tao-&gt;data);
+<a name="line530">530: </a>  <font color="#4169E1">return</font>(0);
+<a name="line531">531: </a>}
+
+<a name="line533">533: </a><strong><font color="#4169E1"><a name="TaoSetFromOptions_IPM"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoSetFromOptions_IPM(PetscOptionItems *PetscOptionsObject,<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line534">534: </a>{
+<a name="line535">535: </a>  TAO_IPM        *ipmP = (TAO_IPM*)tao-&gt;data;
+
+<a name="line539">539: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsHead.html#PetscOptionsHead">PetscOptionsHead</a>(PetscOptionsObject,<font color="#666666">"IPM method for constrained optimization"</font>);
+<a name="line540">540: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-tao_ipm_monitorkkt"</font>,<font color="#666666">"monitor kkt status"</font>,NULL,ipmP-&gt;monitorkkt,&amp;ipmP-&gt;monitorkkt,NULL);
+<a name="line541">541: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-tao_ipm_pushs"</font>,<font color="#666666">"parameter to push initial slack variables away from bounds"</font>,NULL,ipmP-&gt;pushs,&amp;ipmP-&gt;pushs,NULL);
+<a name="line542">542: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-tao_ipm_pushnu"</font>,<font color="#666666">"parameter to push initial (inequality) dual variables away from bounds"</font>,NULL,ipmP-&gt;pushnu,&amp;ipmP-&gt;pushnu,NULL);
+<a name="line543">543: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsTail.html#PetscOptionsTail">PetscOptionsTail</a>();
+<a name="line544">544: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(tao-&gt;ksp);
+<a name="line545">545: </a>  <font color="#4169E1">return</font>(0);
+<a name="line546">546: </a>}
+
+<a name="line548">548: </a><strong><font color="#4169E1"><a name="TaoView_IPM"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoView_IPM(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao, <a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line549">549: </a>{
+<a name="line550">550: </a>  <font color="#4169E1">return</font> 0;
+<a name="line551">551: </a>}
+
+<a name="line553">553: </a><font color="#B22222">/* IPMObjectiveAndGradient()</font>
+<a name="line554">554: </a><font color="#B22222">   f = d'x + 0.5 * x' * H * x</font>
+<a name="line555">555: </a><font color="#B22222">   rd = H*x + d + Ae'*lame - Ai'*lami</font>
+<a name="line556">556: </a><font color="#B22222">   rpe = Ae*x - be</font>
+<a name="line557">557: </a><font color="#B22222">   rpi = Ai*x - yi - bi</font>
+<a name="line558">558: </a><font color="#B22222">   mu = yi' * lami/mi;</font>
+<a name="line559">559: </a><font color="#B22222">   com = yi.*lami</font>
+
+<a name="line561">561: </a><font color="#B22222">   phi = ||rd|| + ||rpe|| + ||rpi|| + ||com||</font>
+<a name="line562">562: </a><font color="#B22222">*/</font>
+<a name="line563">563: </a><font color="#B22222">/*</font>
+<a name="line564">564: </a><font color="#B22222"><strong></font><font color="#4169E1"><a name="IPMObjective"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMObjective(TaoLineSearch ls, <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X, <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *f, void *tptr)</font></strong>
+<a name="line565">565: </a>{
+<a name="line566">566: </a>  <a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao = (<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a>)tptr;
+<a name="line567">567: </a>  TAO_IPM *ipmP = (TAO_IPM*)tao-&gt;data;
+<a name="line570">570: </a>  IPMComputeKKT(tao);
+<a name="line571">571: </a>  *f = ipmP-&gt;phi;
+<a name="line572">572: </a>  return(0);
+<a name="line573">573: </a>}
+<a name="line574">574: </a>*/
+
+<a name="line576">576: </a><font color="#B22222">/*</font>
+<a name="line577">577: </a><font color="#B22222">   f = d'x + 0.5 * x' * H * x</font>
+<a name="line578">578: </a><font color="#B22222">   rd = H*x + d + Ae'*lame - Ai'*lami</font>
+<a name="line579">579: </a><font color="#B22222">       Ai =   jac_ineq</font>
+<a name="line580">580: </a><font color="#B22222">               I (w/lb)</font>
+<a name="line581">581: </a><font color="#B22222">              -I (w/ub)</font>
+
+<a name="line583">583: </a><font color="#B22222">   rpe = ce</font>
+<a name="line584">584: </a><font color="#B22222">   rpi = ci - s;</font>
+<a name="line585">585: </a><font color="#B22222">   com = s.*lami</font>
+<a name="line586">586: </a><font color="#B22222">   mu = yi' * lami/mi;</font>
+
+<a name="line588">588: </a><font color="#B22222">   phi = ||rd|| + ||rpe|| + ||rpi|| + ||com||</font>
+<a name="line589">589: </a><font color="#B22222">*/</font>
+<a name="line590">590: </a><strong><font color="#4169E1"><a name="IPMComputeKKT"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMComputeKKT(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line591">591: </a>{
+<a name="line592">592: </a>  TAO_IPM        *ipmP = (TAO_IPM *)tao-&gt;data;
+<a name="line593">593: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    norm;
+
+<a name="line597">597: </a>  <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(tao-&gt;gradient,ipmP-&gt;rd);
+
+<a name="line599">599: </a>  <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line600">600: </a>    <font color="#B22222">/* rd = gradient + Ae'*lamdae */</font>
+<a name="line601">601: </a>    <a href="../../../../../docs/manualpages/Mat/MatMultTranspose.html#MatMultTranspose">MatMultTranspose</a>(tao-&gt;jacobian_equality,ipmP-&gt;lamdae,ipmP-&gt;work);
+<a name="line602">602: </a>    <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;rd, 1.0, ipmP-&gt;work);
+
+<a name="line604">604: </a>    <font color="#B22222">/* rpe = ce(x) */</font>
+<a name="line605">605: </a>    <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(tao-&gt;constraints_equality,ipmP-&gt;rpe);
+<a name="line606">606: </a>  }
+<a name="line607">607: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line608">608: </a>    <font color="#B22222">/* rd = rd - Ai'*lamdai */</font>
+<a name="line609">609: </a>    <a href="../../../../../docs/manualpages/Mat/MatMultTranspose.html#MatMultTranspose">MatMultTranspose</a>(ipmP-&gt;Ai,ipmP-&gt;lamdai,ipmP-&gt;work);
+<a name="line610">610: </a>    <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;rd, -1.0, ipmP-&gt;work);
+
+<a name="line612">612: </a>    <font color="#B22222">/* rpi = cin - s */</font>
+<a name="line613">613: </a>    <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(ipmP-&gt;ci,ipmP-&gt;rpi);
+<a name="line614">614: </a>    <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;rpi, -1.0, ipmP-&gt;s);
+
+<a name="line616">616: </a>    <font color="#B22222">/* com = s .* lami */</font>
+<a name="line617">617: </a>    <a href="../../../../../docs/manualpages/Vec/VecPointwiseMult.html#VecPointwiseMult">VecPointwiseMult</a>(ipmP-&gt;complementarity, ipmP-&gt;s,ipmP-&gt;lamdai);
+<a name="line618">618: </a>  }
+<a name="line619">619: </a>  <font color="#B22222">/* phi = ||rd; rpe; rpi; com|| */</font>
+<a name="line620">620: </a>  <a href="../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(ipmP-&gt;rd,ipmP-&gt;rd,&amp;norm);
+<a name="line621">621: </a>  ipmP-&gt;phi = norm;
+<a name="line622">622: </a>  <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0 ) {
+<a name="line623">623: </a>    <a href="../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(ipmP-&gt;rpe,ipmP-&gt;rpe,&amp;norm);
+<a name="line624">624: </a>    ipmP-&gt;phi += norm;
+<a name="line625">625: </a>  }
+<a name="line626">626: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line627">627: </a>    <a href="../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(ipmP-&gt;rpi,ipmP-&gt;rpi,&amp;norm);
+<a name="line628">628: </a>    ipmP-&gt;phi += norm;
+<a name="line629">629: </a>    <a href="../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(ipmP-&gt;complementarity,ipmP-&gt;complementarity,&amp;norm);
+<a name="line630">630: </a>    ipmP-&gt;phi += norm;
+<a name="line631">631: </a>    <font color="#B22222">/* mu = s'*lami/nb */</font>
+<a name="line632">632: </a>    <a href="../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(ipmP-&gt;s,ipmP-&gt;lamdai,&amp;ipmP-&gt;mu);
+<a name="line633">633: </a>    ipmP-&gt;mu /= ipmP-&gt;nb;
+<a name="line634">634: </a>  } <font color="#4169E1">else</font> {
+<a name="line635">635: </a>    ipmP-&gt;mu = 1.0;
+<a name="line636">636: </a>  }
+
+<a name="line638">638: </a>  ipmP-&gt;phi = PetscSqrtScalar(ipmP-&gt;phi);
+<a name="line639">639: </a>  <font color="#4169E1">return</font>(0);
+<a name="line640">640: </a>}
+
+<a name="line642">642: </a><font color="#B22222">/* evaluate user info at current point */</font>
+<a name="line643">643: </a><strong><font color="#4169E1"><a name="IPMEvaluate"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMEvaluate(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line644">644: </a>{
+<a name="line645">645: </a>  TAO_IPM        *ipmP = (TAO_IPM *)tao-&gt;data;
+
+<a name="line649">649: </a>  <a href="../../../../../docs/manualpages/Tao/TaoComputeObjectiveAndGradient.html#TaoComputeObjectiveAndGradient">TaoComputeObjectiveAndGradient</a>(tao,tao-&gt;solution,&amp;ipmP-&gt;kkt_f,tao-&gt;gradient);
+<a name="line650">650: </a>  <a href="../../../../../docs/manualpages/Tao/TaoComputeHessian.html#TaoComputeHessian">TaoComputeHessian</a>(tao,tao-&gt;solution,tao-&gt;hessian,tao-&gt;hessian_pre);
+<a name="line651">651: </a>  <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line652">652: </a>    <a href="../../../../../docs/manualpages/Tao/TaoComputeEqualityConstraints.html#TaoComputeEqualityConstraints">TaoComputeEqualityConstraints</a>(tao,tao-&gt;solution,tao-&gt;constraints_equality);
+<a name="line653">653: </a>    <a href="../../../../../docs/manualpages/Tao/TaoComputeJacobianEquality.html#TaoComputeJacobianEquality">TaoComputeJacobianEquality</a>(tao,tao-&gt;solution,tao-&gt;jacobian_equality,tao-&gt;jacobian_equality_pre);
+<a name="line654">654: </a>  }
+<a name="line655">655: </a>  <font color="#4169E1">if</font> (ipmP-&gt;mi &gt; 0) {
+<a name="line656">656: </a>    <a href="../../../../../docs/manualpages/Tao/TaoComputeInequalityConstraints.html#TaoComputeInequalityConstraints">TaoComputeInequalityConstraints</a>(tao,tao-&gt;solution,tao-&gt;constraints_inequality);
+<a name="line657">657: </a>    <a href="../../../../../docs/manualpages/Tao/TaoComputeJacobianInequality.html#TaoComputeJacobianInequality">TaoComputeJacobianInequality</a>(tao,tao-&gt;solution,tao-&gt;jacobian_inequality,tao-&gt;jacobian_inequality_pre);
+<a name="line658">658: </a>  }
+<a name="line659">659: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line660">660: </a>    <font color="#B22222">/* Ai' =   jac_ineq | I (w/lb) | -I (w/ub)  */</font>
+<a name="line661">661: </a>    IPMUpdateAi(tao);
+<a name="line662">662: </a>  }
+<a name="line663">663: </a>  <font color="#4169E1">return</font>(0);
+<a name="line664">664: </a>}
+
+<a name="line666">666: </a><font color="#B22222">/* Push initial point away from bounds */</font>
+<a name="line667">667: </a><strong><font color="#4169E1"><a name="IPMPushInitialPoint"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMPushInitialPoint(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line668">668: </a>{
+<a name="line669">669: </a>  TAO_IPM        *ipmP = (TAO_IPM *)tao-&gt;data;
+
+<a name="line673">673: </a>  <a href="../../../../../docs/manualpages/Tao/TaoComputeVariableBounds.html#TaoComputeVariableBounds">TaoComputeVariableBounds</a>(tao);
+<a name="line674">674: </a>  <font color="#4169E1">if</font> (tao-&gt;XL &amp;&amp; tao-&gt;XU) {
+<a name="line675">675: </a>    <a href="../../../../../docs/manualpages/Vec/VecMedian.html#VecMedian">VecMedian</a>(tao-&gt;XL, tao-&gt;solution, tao-&gt;XU, tao-&gt;solution);
+<a name="line676">676: </a>  }
+<a name="line677">677: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line678">678: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(ipmP-&gt;s,ipmP-&gt;pushs);
+<a name="line679">679: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(ipmP-&gt;lamdai,ipmP-&gt;pushnu);
+<a name="line680">680: </a>    <font color="#4169E1">if</font> (ipmP-&gt;mi &gt; 0) {
+<a name="line681">681: </a>      <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(tao-&gt;DI,ipmP-&gt;pushnu);
+<a name="line682">682: </a>    }
+<a name="line683">683: </a>  }
+<a name="line684">684: </a>  <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line685">685: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(tao-&gt;DE,1.0);
+<a name="line686">686: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(ipmP-&gt;lamdae,1.0);
+<a name="line687">687: </a>  }
+<a name="line688">688: </a>  <font color="#4169E1">return</font>(0);
+<a name="line689">689: </a>}
+
+<a name="line691">691: </a><strong><font color="#4169E1"><a name="IPMUpdateAi"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMUpdateAi(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line692">692: </a>{
+<a name="line693">693: </a>  <font color="#B22222">/* Ai =     Ji</font>
+<a name="line694">694: </a><font color="#B22222">              I (w/lb)</font>
+<a name="line695">695: </a><font color="#B22222">             -I (w/ub) */</font>
+
+<a name="line697">697: </a>  <font color="#B22222">/* Ci =    user-&gt;ci</font>
+<a name="line698">698: </a><font color="#B22222">             Xi - lb (w/lb)</font>
+<a name="line699">699: </a><font color="#B22222">             -Xi + ub (w/ub)  */</font>
+
+<a name="line701">701: </a>  TAO_IPM           *ipmP = (TAO_IPM *)tao-&gt;data;
+<a name="line702">702: </a>  <a href="../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>          comm;
+<a name="line703">703: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i;
+<a name="line704">704: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       newval;
+<a name="line705">705: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          newrow,newcol,ncols;
+<a name="line706">706: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *vals;
+<a name="line707">707: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *cols;
+<a name="line708">708: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          astart,aend,jstart,jend;
+<a name="line709">709: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          *nonzeros;
+<a name="line710">710: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          r2,r3,r4;
+<a name="line711">711: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>       size;
+<a name="line712">712: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line713">713: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>               solu;
+<a name="line714">714: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          nloc;
+
+<a name="line717">717: </a>  r2 = ipmP-&gt;mi;
+<a name="line718">718: </a>  r3 = r2 + ipmP-&gt;nxlb;
+<a name="line719">719: </a>  r4 = r3 + ipmP-&gt;nxub;
+
+<a name="line721">721: </a>  <font color="#4169E1">if</font> (!ipmP-&gt;nb) <font color="#4169E1">return</font>(0);
+
+<a name="line723">723: </a>  <font color="#B22222">/* Create Ai matrix if it doesn't exist yet */</font>
+<a name="line724">724: </a>  <font color="#4169E1">if</font> (!ipmP-&gt;Ai) {
+<a name="line725">725: </a>    comm = ((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)(tao-&gt;solution))-&gt;comm;
+<a name="line726">726: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm,&amp;size);
+<a name="line727">727: </a>    <font color="#4169E1">if</font> (size == 1) {
+<a name="line728">728: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ipmP-&gt;nb,&amp;nonzeros);
+<a name="line729">729: </a>      <font color="#4169E1">for</font> (i=0;i&lt;ipmP-&gt;mi;i++) {
+<a name="line730">730: </a>        <a href="../../../../../docs/manualpages/Mat/MatGetRow.html#MatGetRow">MatGetRow</a>(tao-&gt;jacobian_inequality,i,&amp;ncols,NULL,NULL);
+<a name="line731">731: </a>        nonzeros[i] = ncols;
+<a name="line732">732: </a>        <a href="../../../../../docs/manualpages/Mat/MatRestoreRow.html#MatRestoreRow">MatRestoreRow</a>(tao-&gt;jacobian_inequality,i,&amp;ncols,NULL,NULL);
+<a name="line733">733: </a>      }
+<a name="line734">734: </a>      <font color="#4169E1">for</font> (i=r2;i&lt;r4;i++) {
+<a name="line735">735: </a>        nonzeros[i] = 1;
+<a name="line736">736: </a>      }
+<a name="line737">737: </a>    }
+<a name="line738">738: </a>    <a href="../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(comm,&amp;ipmP-&gt;Ai);
+<a name="line739">739: </a>    <a href="../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(ipmP-&gt;Ai,<a href="../../../../../docs/manualpages/Mat/MATAIJ.html#MATAIJ">MATAIJ</a>);
+
+<a name="line741">741: </a>    <a href="../../../../../docs/manualpages/Tao/TaoGetSolutionVector.html#TaoGetSolutionVector">TaoGetSolutionVector</a>(tao,&amp;solu);
+<a name="line742">742: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(solu,&amp;nloc);
+<a name="line743">743: </a>    <a href="../../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(ipmP-&gt;Ai,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,nloc,ipmP-&gt;nb,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>);
+<a name="line744">744: </a>    <a href="../../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(ipmP-&gt;Ai);
+<a name="line745">745: </a>    <a href="../../../../../docs/manualpages/Mat/MatMPIAIJSetPreallocation.html#MatMPIAIJSetPreallocation">MatMPIAIJSetPreallocation</a>(ipmP-&gt;Ai,ipmP-&gt;nb,NULL,ipmP-&gt;nb,NULL);
+<a name="line746">746: </a>    <a href="../../../../../docs/manualpages/Mat/MatSeqAIJSetPreallocation.html#MatSeqAIJSetPreallocation">MatSeqAIJSetPreallocation</a>(ipmP-&gt;Ai,<a href="../../../../../docs/manualpages/Sys/PETSC_DEFAULT.html#PETSC_DEFAULT">PETSC_DEFAULT</a>,nonzeros);
+<a name="line747">747: </a>    <font color="#4169E1">if</font> (size ==1) {
+<a name="line748">748: </a>      <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(nonzeros);
+<a name="line749">749: </a>    }
+<a name="line750">750: </a>  }
+
+<a name="line752">752: </a>  <font color="#B22222">/* Copy values from user jacobian to Ai */</font>
+<a name="line753">753: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(ipmP-&gt;Ai,&amp;astart,&amp;aend);
+
+<a name="line755">755: </a>  <font color="#B22222">/* Ai w/lb */</font>
+<a name="line756">756: </a>  <font color="#4169E1">if</font> (ipmP-&gt;mi) {
+<a name="line757">757: </a>    <a href="../../../../../docs/manualpages/Mat/MatZeroEntries.html#MatZeroEntries">MatZeroEntries</a>(ipmP-&gt;Ai);
+<a name="line758">758: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(tao-&gt;jacobian_inequality,&amp;jstart,&amp;jend);
+<a name="line759">759: </a>    <font color="#4169E1">for</font> (i=jstart;i&lt;jend;i++) {
+<a name="line760">760: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetRow.html#MatGetRow">MatGetRow</a>(tao-&gt;jacobian_inequality,i,&amp;ncols,&amp;cols,&amp;vals);
+<a name="line761">761: </a>      newrow = i;
+<a name="line762">762: </a>      <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(ipmP-&gt;Ai,1,&amp;newrow,ncols,cols,vals,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line763">763: </a>      <a href="../../../../../docs/manualpages/Mat/MatRestoreRow.html#MatRestoreRow">MatRestoreRow</a>(tao-&gt;jacobian_inequality,i,&amp;ncols,&amp;cols,&amp;vals);
+<a name="line764">764: </a>    }
+<a name="line765">765: </a>  }
+
+<a name="line767">767: </a>  <font color="#B22222">/* I w/ xlb */</font>
+<a name="line768">768: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nxlb) {
+<a name="line769">769: </a>    <font color="#4169E1">for</font> (i=0;i&lt;ipmP-&gt;nxlb;i++) {
+<a name="line770">770: </a>      <font color="#4169E1">if</font> (i&gt;=astart &amp;&amp; i&lt;aend) {
+<a name="line771">771: </a>        newrow = i+r2;
+<a name="line772">772: </a>        newcol = i;
+<a name="line773">773: </a>        newval = 1.0;
+<a name="line774">774: </a>        <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(ipmP-&gt;Ai,1,&amp;newrow,1,&amp;newcol,&amp;newval,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line775">775: </a>      }
+<a name="line776">776: </a>    }
+<a name="line777">777: </a>  }
+<a name="line778">778: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nxub) {
+<a name="line779">779: </a>    <font color="#B22222">/* I w/ xub */</font>
+<a name="line780">780: </a>    <font color="#4169E1">for</font> (i=0;i&lt;ipmP-&gt;nxub;i++) {
+<a name="line781">781: </a>      <font color="#4169E1">if</font> (i&gt;=astart &amp;&amp; i&lt;aend) {
+<a name="line782">782: </a>      newrow = i+r3;
+<a name="line783">783: </a>      newcol = i;
+<a name="line784">784: </a>      newval = -1.0;
+<a name="line785">785: </a>      <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(ipmP-&gt;Ai,1,&amp;newrow,1,&amp;newcol,&amp;newval,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line786">786: </a>      }
+<a name="line787">787: </a>    }
+<a name="line788">788: </a>  }
+
+<a name="line790">790: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(ipmP-&gt;Ai,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line791">791: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(ipmP-&gt;Ai,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line792">792: </a>  <a href="../../../../../docs/manualpages/Sys/CHKMEMQ.html#CHKMEMQ">CHKMEMQ</a>;
+
+<a name="line794">794: </a>  <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(ipmP-&gt;ci,0.0);
+
+<a name="line796">796: </a>  <font color="#B22222">/* user ci */</font>
+<a name="line797">797: </a>  <font color="#4169E1">if</font> (ipmP-&gt;mi &gt; 0) {
+<a name="line798">798: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;ci_scat,tao-&gt;constraints_inequality,ipmP-&gt;ci,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line799">799: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;ci_scat,tao-&gt;constraints_inequality,ipmP-&gt;ci,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line800">800: </a>  }
+<a name="line801">801: </a>  <font color="#4169E1">if</font> (!ipmP-&gt;work){
+<a name="line802">802: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(tao-&gt;solution,&amp;ipmP-&gt;work);
+<a name="line803">803: </a>  }
+<a name="line804">804: </a>  <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(tao-&gt;solution,ipmP-&gt;work);
+<a name="line805">805: </a>  <font color="#4169E1">if</font> (tao-&gt;XL) {
+<a name="line806">806: </a>    <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;work,-1.0,tao-&gt;XL);
+
+<a name="line808">808: </a>    <font color="#B22222">/* lower bounds on variables */</font>
+<a name="line809">809: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nxlb &gt; 0) {
+<a name="line810">810: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;xl_scat,ipmP-&gt;work,ipmP-&gt;ci,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line811">811: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;xl_scat,ipmP-&gt;work,ipmP-&gt;ci,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line812">812: </a>    }
+<a name="line813">813: </a>  }
+<a name="line814">814: </a>  <font color="#4169E1">if</font> (tao-&gt;XU) {
+<a name="line815">815: </a>    <font color="#B22222">/* upper bounds on variables */</font>
+<a name="line816">816: </a>    <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(tao-&gt;solution,ipmP-&gt;work);
+<a name="line817">817: </a>    <a href="../../../../../docs/manualpages/Vec/VecScale.html#VecScale">VecScale</a>(ipmP-&gt;work,-1.0);
+<a name="line818">818: </a>    <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(ipmP-&gt;work,1.0,tao-&gt;XU);
+<a name="line819">819: </a>    <font color="#4169E1">if</font> (ipmP-&gt;nxub &gt; 0) {
+<a name="line820">820: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;xu_scat,ipmP-&gt;work,ipmP-&gt;ci,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line821">821: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;xu_scat,ipmP-&gt;work,ipmP-&gt;ci,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line822">822: </a>    }
+<a name="line823">823: </a>  }
+<a name="line824">824: </a>  <font color="#4169E1">return</font>(0);
+<a name="line825">825: </a>}
+
+<a name="line827">827: </a><font color="#B22222">/* create K = [ Hlag , 0 , Ae', -Ai'];</font>
+<a name="line828">828: </a><font color="#B22222">              [Ae , 0,   0  , 0];</font>
+<a name="line829">829: </a><font color="#B22222">              [Ai ,-I,   0 ,  0];</font>
+<a name="line830">830: </a><font color="#B22222">              [ 0 , S ,  0,   Y ];  */</font>
+<a name="line831">831: </a><strong><font color="#4169E1"><a name="IPMUpdateK"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMUpdateK(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line832">832: </a>{
+<a name="line833">833: </a>  TAO_IPM         *ipmP = (TAO_IPM *)tao-&gt;data;
+<a name="line834">834: </a>  <a href="../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>        comm;
+<a name="line835">835: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>     size;
+<a name="line836">836: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line837">837: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        i,j,row;
+<a name="line838">838: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        ncols,newcol,newcols[2],newrow;
+<a name="line839">839: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  *cols;
+<a name="line840">840: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *vals;
+<a name="line841">841: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *l,*y;
+<a name="line842">842: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>       *newvals;
+<a name="line843">843: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>       newval;
+<a name="line844">844: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        subsize;
+<a name="line845">845: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  *indices;
+<a name="line846">846: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        *nonzeros,*d_nonzeros,*o_nonzeros;
+<a name="line847">847: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        bigsize;
+<a name="line848">848: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        r1,r2,r3;
+<a name="line849">849: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        c1,c2,c3;
+<a name="line850">850: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        klocalsize;
+<a name="line851">851: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        hstart,hend,kstart,kend;
+<a name="line852">852: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        aistart,aiend,aestart,aeend;
+<a name="line853">853: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        sstart,send;
+
+<a name="line856">856: </a>  comm = ((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)(tao-&gt;solution))-&gt;comm;
+<a name="line857">857: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm,&amp;size);
+<a name="line858">858: </a>  IPMUpdateAi(tao);
+
+<a name="line860">860: </a>  <font color="#B22222">/* allocate workspace */</font>
+<a name="line861">861: </a>  subsize = <a href="../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(ipmP-&gt;n,ipmP-&gt;nb);
+<a name="line862">862: </a>  subsize = <a href="../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(ipmP-&gt;me,subsize);
+<a name="line863">863: </a>  subsize = <a href="../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(2,subsize);
+<a name="line864">864: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(subsize,(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>**)&amp;indices);
+<a name="line865">865: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(subsize,&amp;newvals);
+
+<a name="line867">867: </a>  r1 = c1 = ipmP-&gt;n;
+<a name="line868">868: </a>  r2 = r1 + ipmP-&gt;me;  c2 = c1 + ipmP-&gt;nb;
+<a name="line869">869: </a>  r3 = c3 = r2 + ipmP-&gt;nb;
+
+<a name="line871">871: </a>  bigsize = ipmP-&gt;n+2*ipmP-&gt;nb+ipmP-&gt;me;
+<a name="line872">872: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(ipmP-&gt;bigrhs,&amp;kstart,&amp;kend);
+<a name="line873">873: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(tao-&gt;hessian,&amp;hstart,&amp;hend);
+<a name="line874">874: </a>  klocalsize = kend-kstart;
+<a name="line875">875: </a>  <font color="#4169E1">if</font> (!ipmP-&gt;K) {
+<a name="line876">876: </a>    <font color="#4169E1">if</font> (size == 1) {
+<a name="line877">877: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(kend-kstart,&amp;nonzeros);
+<a name="line878">878: </a>      <font color="#4169E1">for</font> (i=0;i&lt;bigsize;i++) {
+<a name="line879">879: </a>        <font color="#4169E1">if</font> (i&lt;r1) {
+<a name="line880">880: </a>          <a href="../../../../../docs/manualpages/Mat/MatGetRow.html#MatGetRow">MatGetRow</a>(tao-&gt;hessian,i,&amp;ncols,NULL,NULL);
+<a name="line881">881: </a>          nonzeros[i] = ncols;
+<a name="line882">882: </a>          <a href="../../../../../docs/manualpages/Mat/MatRestoreRow.html#MatRestoreRow">MatRestoreRow</a>(tao-&gt;hessian,i,&amp;ncols,NULL,NULL);
+<a name="line883">883: </a>          nonzeros[i] += ipmP-&gt;me+ipmP-&gt;nb;
+<a name="line884">884: </a>        } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (i&lt;r2) {
+<a name="line885">885: </a>          nonzeros[i-kstart] = ipmP-&gt;n;
+<a name="line886">886: </a>        } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (i&lt;r3) {
+<a name="line887">887: </a>          nonzeros[i-kstart] = ipmP-&gt;n+1;
+<a name="line888">888: </a>        } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (i&lt;bigsize) {
+<a name="line889">889: </a>          nonzeros[i-kstart] = 2;
+<a name="line890">890: </a>        }
+<a name="line891">891: </a>      }
+<a name="line892">892: </a>      <a href="../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(comm,&amp;ipmP-&gt;K);
+<a name="line893">893: </a>      <a href="../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(ipmP-&gt;K,<a href="../../../../../docs/manualpages/Mat/MATSEQAIJ.html#MATSEQAIJ">MATSEQAIJ</a>);
+<a name="line894">894: </a>      <a href="../../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(ipmP-&gt;K,klocalsize,klocalsize,<a href="../../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>);
+<a name="line895">895: </a>      <a href="../../../../../docs/manualpages/Mat/MatSeqAIJSetPreallocation.html#MatSeqAIJSetPreallocation">MatSeqAIJSetPreallocation</a>(ipmP-&gt;K,0,nonzeros);
+<a name="line896">896: </a>      <a href="../../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(ipmP-&gt;K);
+<a name="line897">897: </a>      <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(nonzeros);
+<a name="line898">898: </a>    } <font color="#4169E1">else</font> {
+<a name="line899">899: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(kend-kstart,&amp;d_nonzeros);
+<a name="line900">900: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(kend-kstart,&amp;o_nonzeros);
+<a name="line901">901: </a>      <font color="#4169E1">for</font> (i=kstart;i&lt;kend;i++) {
+<a name="line902">902: </a>        <font color="#4169E1">if</font> (i&lt;r1) {
+<a name="line903">903: </a>          <font color="#B22222">/* TODO fix preallocation for mpi mats */</font>
+<a name="line904">904: </a>          d_nonzeros[i-kstart] = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(ipmP-&gt;n+ipmP-&gt;me+ipmP-&gt;nb,kend-kstart);
+<a name="line905">905: </a>          o_nonzeros[i-kstart] = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(ipmP-&gt;n+ipmP-&gt;me+ipmP-&gt;nb,bigsize-(kend-kstart));
+<a name="line906">906: </a>        } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (i&lt;r2) {
+<a name="line907">907: </a>          d_nonzeros[i-kstart] = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(ipmP-&gt;n,kend-kstart);
+<a name="line908">908: </a>          o_nonzeros[i-kstart] = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(ipmP-&gt;n,bigsize-(kend-kstart));
+<a name="line909">909: </a>        } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (i&lt;r3) {
+<a name="line910">910: </a>          d_nonzeros[i-kstart] = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(ipmP-&gt;n+2,kend-kstart);
+<a name="line911">911: </a>          o_nonzeros[i-kstart] = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(ipmP-&gt;n+2,bigsize-(kend-kstart));
+<a name="line912">912: </a>        } <font color="#4169E1">else</font> {
+<a name="line913">913: </a>          d_nonzeros[i-kstart] = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(2,kend-kstart);
+<a name="line914">914: </a>          o_nonzeros[i-kstart] = <a href="../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(2,bigsize-(kend-kstart));
+<a name="line915">915: </a>        }
+<a name="line916">916: </a>      }
+<a name="line917">917: </a>      <a href="../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(comm,&amp;ipmP-&gt;K);
+<a name="line918">918: </a>      <a href="../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(ipmP-&gt;K,<a href="../../../../../docs/manualpages/Mat/MATMPIAIJ.html#MATMPIAIJ">MATMPIAIJ</a>);
+<a name="line919">919: </a>      <a href="../../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(ipmP-&gt;K,klocalsize,klocalsize,<a href="../../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>);
+<a name="line920">920: </a>      <a href="../../../../../docs/manualpages/Mat/MatMPIAIJSetPreallocation.html#MatMPIAIJSetPreallocation">MatMPIAIJSetPreallocation</a>(ipmP-&gt;K,0,d_nonzeros,0,o_nonzeros);
+<a name="line921">921: </a>      <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(d_nonzeros);
+<a name="line922">922: </a>      <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(o_nonzeros);
+<a name="line923">923: </a>      <a href="../../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(ipmP-&gt;K);
+<a name="line924">924: </a>    }
+<a name="line925">925: </a>  }
+
+<a name="line927">927: </a>  <a href="../../../../../docs/manualpages/Mat/MatZeroEntries.html#MatZeroEntries">MatZeroEntries</a>(ipmP-&gt;K);
+<a name="line928">928: </a>  <font color="#B22222">/* Copy H */</font>
+<a name="line929">929: </a>  <font color="#4169E1">for</font> (i=hstart;i&lt;hend;i++) {
+<a name="line930">930: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetRow.html#MatGetRow">MatGetRow</a>(tao-&gt;hessian,i,&amp;ncols,&amp;cols,&amp;vals);
+<a name="line931">931: </a>    <font color="#4169E1">if</font> (ncols &gt; 0) {
+<a name="line932">932: </a>      <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(ipmP-&gt;K,1,&amp;i,ncols,cols,vals,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line933">933: </a>    }
+<a name="line934">934: </a>    <a href="../../../../../docs/manualpages/Mat/MatRestoreRow.html#MatRestoreRow">MatRestoreRow</a>(tao-&gt;hessian,i,&amp;ncols,&amp;cols,&amp;vals);
+<a name="line935">935: </a>  }
+
+<a name="line937">937: </a>  <font color="#B22222">/* Copy Ae and Ae' */</font>
+<a name="line938">938: </a>  <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0) {
+<a name="line939">939: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(tao-&gt;jacobian_equality,&amp;aestart,&amp;aeend);
+<a name="line940">940: </a>    <font color="#4169E1">for</font> (i=aestart;i&lt;aeend;i++) {
+<a name="line941">941: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetRow.html#MatGetRow">MatGetRow</a>(tao-&gt;jacobian_equality,i,&amp;ncols,&amp;cols,&amp;vals);
+<a name="line942">942: </a>      <font color="#4169E1">if</font> (ncols &gt; 0) {
+<a name="line943">943: </a>        <font color="#B22222">/*Ae*/</font>
+<a name="line944">944: </a>        row = i+r1;
+<a name="line945">945: </a>        <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(ipmP-&gt;K,1,&amp;row,ncols,cols,vals,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line946">946: </a>        <font color="#B22222">/*Ae'*/</font>
+<a name="line947">947: </a>        <font color="#4169E1">for</font> (j=0;j&lt;ncols;j++) {
+<a name="line948">948: </a>          newcol = i + c2;
+<a name="line949">949: </a>          newrow = cols[j];
+<a name="line950">950: </a>          newval = vals[j];
+<a name="line951">951: </a>          <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(ipmP-&gt;K,1,&amp;newrow,1,&amp;newcol,&amp;newval,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line952">952: </a>        }
+<a name="line953">953: </a>      }
+<a name="line954">954: </a>      <a href="../../../../../docs/manualpages/Mat/MatRestoreRow.html#MatRestoreRow">MatRestoreRow</a>(tao-&gt;jacobian_equality,i,&amp;ncols,&amp;cols,&amp;vals);
+<a name="line955">955: </a>    }
+<a name="line956">956: </a>  }
+
+<a name="line958">958: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line959">959: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(ipmP-&gt;Ai,&amp;aistart,&amp;aiend);
+<a name="line960">960: </a>    <font color="#B22222">/* Copy Ai,and Ai' */</font>
+<a name="line961">961: </a>    <font color="#4169E1">for</font> (i=aistart;i&lt;aiend;i++) {
+<a name="line962">962: </a>      row = i+r2;
+<a name="line963">963: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetRow.html#MatGetRow">MatGetRow</a>(ipmP-&gt;Ai,i,&amp;ncols,&amp;cols,&amp;vals);
+<a name="line964">964: </a>      <font color="#4169E1">if</font> (ncols &gt; 0) {
+<a name="line965">965: </a>        <font color="#B22222">/*Ai*/</font>
+<a name="line966">966: </a>        <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(ipmP-&gt;K,1,&amp;row,ncols,cols,vals,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line967">967: </a>        <font color="#B22222">/*-Ai'*/</font>
+<a name="line968">968: </a>        <font color="#4169E1">for</font> (j=0;j&lt;ncols;j++) {
+<a name="line969">969: </a>          newcol = i + c3;
+<a name="line970">970: </a>          newrow = cols[j];
+<a name="line971">971: </a>          newval = -vals[j];
+<a name="line972">972: </a>          <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(ipmP-&gt;K,1,&amp;newrow,1,&amp;newcol,&amp;newval,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line973">973: </a>        }
+<a name="line974">974: </a>      }
+<a name="line975">975: </a>      <a href="../../../../../docs/manualpages/Mat/MatRestoreRow.html#MatRestoreRow">MatRestoreRow</a>(ipmP-&gt;Ai,i,&amp;ncols,&amp;cols,&amp;vals);
+<a name="line976">976: </a>    }
+
+<a name="line978">978: </a>    <font color="#B22222">/* -I */</font>
+<a name="line979">979: </a>    <font color="#4169E1">for</font> (i=kstart;i&lt;kend;i++) {
+<a name="line980">980: </a>      <font color="#4169E1">if</font> (i&gt;=r2 &amp;&amp; i&lt;r3) {
+<a name="line981">981: </a>        newrow = i;
+<a name="line982">982: </a>        newcol = i-r2+c1;
+<a name="line983">983: </a>        newval = -1.0;
+<a name="line984">984: </a>        <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(ipmP-&gt;K,1,&amp;newrow,1,&amp;newcol,&amp;newval,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line985">985: </a>      }
+<a name="line986">986: </a>    }
+
+<a name="line988">988: </a>    <font color="#B22222">/* Copy L,Y */</font>
+<a name="line989">989: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(ipmP-&gt;s,&amp;sstart,&amp;send);
+<a name="line990">990: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(ipmP-&gt;lamdai,&amp;l);
+<a name="line991">991: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(ipmP-&gt;s,&amp;y);
+
+<a name="line993">993: </a>    <font color="#4169E1">for</font> (i=sstart;i&lt;send;i++) {
+<a name="line994">994: </a>      newcols[0] = c1+i;
+<a name="line995">995: </a>      newcols[1] = c3+i;
+<a name="line996">996: </a>      newvals[0] = l[i-sstart];
+<a name="line997">997: </a>      newvals[1] = y[i-sstart];
+<a name="line998">998: </a>      newrow = r3+i;
+<a name="line999">999: </a>      <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(ipmP-&gt;K,1,&amp;newrow,2,newcols,newvals,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line1000">1000: </a>    }
+
+<a name="line1002">1002: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(ipmP-&gt;lamdai,&amp;l);
+<a name="line1003">1003: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(ipmP-&gt;s,&amp;y);
+<a name="line1004">1004: </a>  }
+
+<a name="line1006">1006: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(indices);
+<a name="line1007">1007: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(newvals);
+<a name="line1008">1008: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(ipmP-&gt;K,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line1009">1009: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(ipmP-&gt;K,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line1010">1010: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1011">1011: </a>}
+
+<a name="line1013">1013: </a><strong><font color="#4169E1"><a name="IPMGatherRHS"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMGatherRHS(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> RHS,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X1,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X2,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X3,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X4)</font></strong>
+<a name="line1014">1014: </a>{
+<a name="line1015">1015: </a>  TAO_IPM        *ipmP = (TAO_IPM *)tao-&gt;data;
+
+<a name="line1019">1019: </a>  <font color="#B22222">/* rhs = [<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>      (n)</font>
+<a name="line1020">1020: </a><font color="#B22222">            <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>     (me)</font>
+<a name="line1021">1021: </a><font color="#B22222">            <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>     (nb)</font>
+<a name="line1022">1022: </a><font color="#B22222">            x4     (nb)] */</font>
+<a name="line1023">1023: </a>  <font color="#4169E1">if</font> (X1) {
+<a name="line1024">1024: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;rhs1,X1,RHS,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1025">1025: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;rhs1,X1,RHS,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1026">1026: </a>  }
+<a name="line1027">1027: </a>  <font color="#4169E1">if</font> (ipmP-&gt;me &gt; 0 &amp;&amp; X2) {
+<a name="line1028">1028: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;rhs2,X2,RHS,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1029">1029: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;rhs2,X2,RHS,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1030">1030: </a>  }
+<a name="line1031">1031: </a>  <font color="#4169E1">if</font> (ipmP-&gt;nb &gt; 0) {
+<a name="line1032">1032: </a>    <font color="#4169E1">if</font> (X3) {
+<a name="line1033">1033: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;rhs3,X3,RHS,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1034">1034: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;rhs3,X3,RHS,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1035">1035: </a>    }
+<a name="line1036">1036: </a>    <font color="#4169E1">if</font> (X4) {
+<a name="line1037">1037: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;rhs4,X4,RHS,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1038">1038: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;rhs4,X4,RHS,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1039">1039: </a>    }
+<a name="line1040">1040: </a>  }
+<a name="line1041">1041: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1042">1042: </a>}
+
+<a name="line1044">1044: </a><strong><font color="#4169E1"><a name="IPMScatterStep"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> IPMScatterStep(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao, <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> STEP, <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X1, <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X2, <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X3, <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X4)</font></strong>
+<a name="line1045">1045: </a>{
+<a name="line1046">1046: </a>  TAO_IPM        *ipmP = (TAO_IPM *)tao-&gt;data;
+
+<a name="line1050">1050: </a>  <a href="../../../../../docs/manualpages/Sys/CHKMEMQ.html#CHKMEMQ">CHKMEMQ</a>;
+<a name="line1051">1051: </a>  <font color="#B22222">/*        [<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>    (n)</font>
+<a name="line1052">1052: </a><font color="#B22222">             <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>    (nb) may be 0</font>
+<a name="line1053">1053: </a><font color="#B22222">             <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>    (me) may be 0</font>
+<a name="line1054">1054: </a><font color="#B22222">             x4    (nb) may be 0 */</font>
+<a name="line1055">1055: </a>  <font color="#4169E1">if</font> (X1) {
+<a name="line1056">1056: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;step1,STEP,X1,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1057">1057: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;step1,STEP,X1,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1058">1058: </a>  }
+<a name="line1059">1059: </a>  <font color="#4169E1">if</font> (X2 &amp;&amp; ipmP-&gt;nb &gt; 0) {
+<a name="line1060">1060: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;step2,STEP,X2,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1061">1061: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;step2,STEP,X2,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1062">1062: </a>  }
+<a name="line1063">1063: </a>  <font color="#4169E1">if</font> (X3 &amp;&amp; ipmP-&gt;me &gt; 0) {
+<a name="line1064">1064: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;step3,STEP,X3,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1065">1065: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;step3,STEP,X3,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1066">1066: </a>  }
+<a name="line1067">1067: </a>  <font color="#4169E1">if</font> (X4 &amp;&amp; ipmP-&gt;nb &gt; 0) {
+<a name="line1068">1068: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(ipmP-&gt;step4,STEP,X4,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1069">1069: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(ipmP-&gt;step4,STEP,X4,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line1070">1070: </a>  }
+<a name="line1071">1071: </a>  <a href="../../../../../docs/manualpages/Sys/CHKMEMQ.html#CHKMEMQ">CHKMEMQ</a>;
+<a name="line1072">1072: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1073">1073: </a>}
+
+<a name="line1075">1075: </a><font color="#B22222">/*MC</font>
+<a name="line1076">1076: </a><font color="#B22222">  <a href="../../../../../docs/manualpages/Tao/TAOIPM.html#TAOIPM">TAOIPM</a> - Interior point algorithm for generally constrained optimization.</font>
+
+<a name="line1078">1078: </a><font color="#B22222">  Option Database Keys:</font>
+<a name="line1079">1079: </a><font color="#B22222">+   -tao_ipm_pushnu - parameter to push initial dual variables away from bounds</font>
+<a name="line1080">1080: </a><font color="#B22222">-   -tao_ipm_pushs - parameter to push initial slack variables away from bounds</font>
+
+<a name="line1082">1082: </a><font color="#B22222">  Notes:</font>
+<a name="line1083">1083: </a><font color="#B22222">    This algorithm is more of a place-holder for future constrained optimization algorithms and should not yet be used for large problems or production code.</font>
+<a name="line1084">1084: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line1086">1086: </a><font color="#B22222">M*/</font>
+
+<a name="line1088">1088: </a><strong><font color="#4169E1"><a name="TaoCreate_IPM"></a>PETSC_EXTERN <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> TaoCreate_IPM(<a href="../../../../../docs/manualpages/Tao/Tao.html#Tao">Tao</a> tao)</font></strong>
+<a name="line1089">1089: </a>{
+<a name="line1090">1090: </a>  TAO_IPM        *ipmP;
+
+<a name="line1094">1094: </a>  tao-&gt;ops-&gt;setup = TaoSetup_IPM;
+<a name="line1095">1095: </a>  tao-&gt;ops-&gt;solve = TaoSolve_IPM;
+<a name="line1096">1096: </a>  tao-&gt;ops-&gt;view = TaoView_IPM;
+<a name="line1097">1097: </a>  tao-&gt;ops-&gt;setfromoptions = TaoSetFromOptions_IPM;
+<a name="line1098">1098: </a>  tao-&gt;ops-&gt;destroy = TaoDestroy_IPM;
+<a name="line1099">1099: </a>  <font color="#B22222">/* tao-&gt;ops-&gt;computedual = TaoComputeDual_IPM; */</font>
+
+<a name="line1101">1101: </a>  <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(tao,&amp;ipmP);
+<a name="line1102">1102: </a>  tao-&gt;data = (void*)ipmP;
+
+<a name="line1104">1104: </a>  <font color="#B22222">/* Override default settings (unless already changed) */</font>
+<a name="line1105">1105: </a>  <font color="#4169E1">if</font> (!tao-&gt;max_it_changed) tao-&gt;max_it = 200;
+<a name="line1106">1106: </a>  <font color="#4169E1">if</font> (!tao-&gt;max_funcs_changed) tao-&gt;max_funcs = 500;
+
+<a name="line1108">1108: </a>  ipmP-&gt;dec = 10000; <font color="#B22222">/* line search critera */</font>
+<a name="line1109">1109: </a>  ipmP-&gt;taumin = 0.995;
+<a name="line1110">1110: </a>  ipmP-&gt;monitorkkt = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1111">1111: </a>  ipmP-&gt;pushs = 100;
+<a name="line1112">1112: </a>  ipmP-&gt;pushnu = 100;
+<a name="line1113">1113: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)tao)-&gt;comm, &amp;tao-&gt;ksp);
+<a name="line1114">1114: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectIncrementTabLevel.html#PetscObjectIncrementTabLevel">PetscObjectIncrementTabLevel</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)tao-&gt;ksp, (<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)tao, 1);
+<a name="line1115">1115: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetOptionsPrefix.html#KSPSetOptionsPrefix">KSPSetOptionsPrefix</a>(tao-&gt;ksp, tao-&gt;hdr.prefix);
+<a name="line1116">1116: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1117">1117: </a>}
+</pre>
+</body>
+
+</html>

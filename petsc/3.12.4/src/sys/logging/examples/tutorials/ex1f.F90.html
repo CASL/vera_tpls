@@ -1,0 +1,316 @@
+<center><a href="ex1f.F90">Actual source code: ex1f.F90</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/sys/logging/examples/tutorials/ex1f.F90.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:33:11+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/sys/logging/examples/tutorials/ex1f.F90.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a>!
+<a name="line2">  2: </a>!
+<a name="line3">  3: </a>!   Description: Demonstrates how users can augment the PETSc profiling by
+<a name="line4">  4: </a>!                inserting their own event logging.
+<a name="line5">  5: </a>!
+<a name="line6">  6: </a>!<font color="#B22222">/*T</font>
+<a name="line7">  7: </a><font color="#B22222">!   Concepts: PetscLog^user-defined event profiling (basic example);</font>
+<a name="line8">  8: </a><font color="#B22222">!   Concepts: PetscLog^activating/deactivating events for profiling (basic example);</font>
+<a name="line9">  9: </a><font color="#B22222">!   Processors: n</font>
+<a name="line10"> 10: </a><font color="#B22222">!T*/</font>
+<a name="line11"> 11: </a>! -----------------------------------------------------------------------
+
+<a name="line13"> 13: </a>      program SchoolDay
+<a name="line14"> 14: </a> #include <A href="../../../../../include/petsc/finclude/petscsys.h.html">&lt;petsc/finclude/petscsys.h&gt;</A>
+<a name="line15"> 15: </a> #include <A href="../../../../../include/petsc/finclude/petsclog.h.html">&lt;petsc/finclude/petsclog.h&gt;</A>
+<a name="line16"> 16: </a>      use petscsys
+<a name="line17"> 17: </a>      implicit none
+
+<a name="line19"> 19: </a>!====================================================================
+<a name="line20"> 20: </a>!     Local Variables
+
+<a name="line22"> 22: </a>      ! Settings:
+<a name="line23"> 23: </a>      integer, parameter        :: verbose=0               ! 0: silent, &gt;=1 : increasing amount of debugging output
+<a name="line24"> 24: </a>      integer, parameter        :: msgLen = 30             ! number of reals which is sent with <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Isend.html#MPI_Isend">MPI_Isend</a>
+<a name="line25"> 25: </a>      <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>, parameter      :: second=0.1;             ! time is sped up by a factor 10
+
+<a name="line27"> 27: </a>      ! Codes
+<a name="line28"> 28: </a>      integer, parameter        :: BOY=1, GIRL=2, TEACHER=0
+<a name="line29"> 29: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>, parameter    :: tagMsg   = 1200;
+
+<a name="line31"> 31: </a>      ! Timers
+<a name="line32"> 32: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> :: Morning,  Afternoon
+<a name="line33"> 33: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> :: PlayBall, SkipRope
+<a name="line34"> 34: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> :: TidyClass
+<a name="line35"> 35: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> :: Lessons,  CorrectHomework
+
+<a name="line37"> 37: </a>      ! Petsc-stuff
+<a name="line38"> 38: </a>      <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>            :: ierr
+
+<a name="line40"> 40: </a>      ! MPI-stuff
+<a name="line41"> 41: </a>      integer                   :: rank, size
+<a name="line42"> 42: </a>      <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>, allocatable    :: message(:,:)
+<a name="line43"> 43: </a>      integer                   :: item, maxItem
+<a name="line44"> 44: </a>      integer                   :: status(MPI_STATUS_SIZE)
+<a name="line45"> 45: </a>      integer                   :: req
+
+<a name="line47"> 47: </a>      ! Own stuff
+<a name="line48"> 48: </a>      integer                   :: role                 ! is this process a BOY, a GIRL or a TEACHER?
+<a name="line49"> 49: </a>      integer                   :: i, j
+<a name="line50"> 50: </a>!====================================================================
+<a name="line51"> 51: </a>!     Initializations
+<a name="line52"> 52: </a>      call <a href="../../../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(PETSC_NULL_CHARACTER,ierr)
+<a name="line53"> 53: </a>      <font color="#4169E1">if</font> (ierr .ne. 0) then
+<a name="line54"> 54: </a>        print*,'Unable to initialize PETSc'
+<a name="line55"> 55: </a>        stop
+<a name="line56"> 56: </a>      endif
+<a name="line57"> 57: </a>      call <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, size,ierr)
+<a name="line58"> 58: </a>      call <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, rank,ierr)
+
+<a name="line60"> 60: </a>      <font color="#4169E1">if</font> (rank==0) then
+<a name="line61"> 61: </a>         role = TEACHER
+<a name="line62"> 62: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (rank&lt;0.4*size) then
+<a name="line63"> 63: </a>         role = GIRL
+<a name="line64"> 64: </a>      <font color="#4169E1">else</font>
+<a name="line65"> 65: </a>         role = BOY
+<a name="line66"> 66: </a>      end <font color="#4169E1">if</font>
+
+<a name="line68"> 68: </a>      allocate(message(msgLen,msglen))
+<a name="line69"> 69: </a>      <font color="#4169E1">do</font> i = 1,msgLen
+<a name="line70"> 70: </a>         <font color="#4169E1">do</font> j  = 1,msgLen
+<a name="line71"> 71: </a>            message(i,j) = 10.0*j + i*1.0/(rank+1)
+<a name="line72"> 72: </a>         end <font color="#4169E1">do</font>
+<a name="line73"> 73: </a>      end <font color="#4169E1">do</font>
+<a name="line74"> 74: </a>!
+<a name="line75"> 75: </a>!====================================================================
+<a name="line76"> 76: </a>!     Create new user-defined events
+<a name="line77"> 77: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventRegister.html#PetscLogEventRegister">PetscLogEventRegister</a>('Morning',         0, Morning,   ierr)
+<a name="line78"> 78: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventRegister.html#PetscLogEventRegister">PetscLogEventRegister</a>('Afternoon',       0, Afternoon, ierr)
+<a name="line79"> 79: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventRegister.html#PetscLogEventRegister">PetscLogEventRegister</a>('Play Ball',       0, PlayBall,  ierr)
+<a name="line80"> 80: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventRegister.html#PetscLogEventRegister">PetscLogEventRegister</a>('Skip Rope',       0, SkipRope,  ierr)
+<a name="line81"> 81: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventRegister.html#PetscLogEventRegister">PetscLogEventRegister</a>('Tidy Classroom',  0, TidyClass, ierr)
+<a name="line82"> 82: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventRegister.html#PetscLogEventRegister">PetscLogEventRegister</a>('Lessons',         0, Lessons,   ierr)
+<a name="line83"> 83: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventRegister.html#PetscLogEventRegister">PetscLogEventRegister</a>('Correct Homework',0,CorrectHomework,          &amp;
+<a name="line84"> 84: </a>     &amp;                                                            ierr)
+<a name="line85"> 85: </a>      <font color="#4169E1">if</font> (verbose&gt;=1) then
+<a name="line86"> 86: </a>      print '(a,i0,a)','[',rank,'] SchoolDay events have been defined'
+<a name="line87"> 87: </a>      endif
+
+<a name="line89"> 89: </a>!====================================================================
+<a name="line90"> 90: </a>!     Go through the school day
+<a name="line91"> 91: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Morning,ierr)
+
+<a name="line93"> 93: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(190000d0,ierr)
+<a name="line94"> 94: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.5*second,ierr)
+
+<a name="line96"> 96: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Lessons,ierr)
+<a name="line97"> 97: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(23000d0,ierr)
+<a name="line98"> 98: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(1*second, ierr)
+<a name="line99"> 99: </a>         <font color="#4169E1">if</font> (size&gt;1) then
+<a name="line100">100: </a>         call <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Isend.html#MPI_Isend">MPI_Isend</a>( message, msgLen, MPI_DOUBLE_PRECISION,                             &amp;
+<a name="line101">101: </a>     &amp;                        mod(rank+1,size),                                             &amp;
+<a name="line102">102: </a>     &amp;                        tagMsg+rank, <a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, req, ierr)
+<a name="line103">103: </a>         call  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Recv.html#MPI_Recv">MPI_Recv</a>( message, msgLen, MPI_DOUBLE_PRECISION,                             &amp;
+<a name="line104">104: </a>     &amp;                       mod(rank-1+size,size),                                         &amp;
+<a name="line105">105: </a>     &amp;                  tagMsg+mod(rank-1+size,size), <a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,                     &amp;
+<a name="line106">106: </a>     &amp;        status, ierr)
+<a name="line107">107: </a>         call <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Wait.html#MPI_Wait">MPI_Wait</a>(req,MPI_STATUS_IGNORE,ierr)
+<a name="line108">108: </a>         end <font color="#4169E1">if</font>
+<a name="line109">109: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Lessons,ierr)
+
+<a name="line111">111: </a>         <font color="#4169E1">if</font> (role==TEACHER) then
+<a name="line112">112: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(TidyClass,ierr)
+<a name="line113">113: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(600000d0,ierr)
+<a name="line114">114: </a>            call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.6*second, ierr)
+<a name="line115">115: </a>               call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(CorrectHomework,ierr)
+<a name="line116">116: </a>               call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(234700d0,ierr)
+<a name="line117">117: </a>               call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.4*second, ierr)
+<a name="line118">118: </a>               call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(CorrectHomework,ierr)
+<a name="line119">119: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(TidyClass,ierr)
+<a name="line120">120: </a>         <font color="#4169E1">else</font> <font color="#4169E1">if</font> (role==BOY) then
+<a name="line121">121: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(SkipRope,ierr)
+<a name="line122">122: </a>            call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.8*second, ierr)
+<a name="line123">123: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(SkipRope,ierr)
+<a name="line124">124: </a>         <font color="#4169E1">else</font>
+<a name="line125">125: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(PlayBall,ierr)
+<a name="line126">126: </a>            call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.9*second, ierr)
+<a name="line127">127: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(PlayBall,ierr)
+<a name="line128">128: </a>         end <font color="#4169E1">if</font>
+
+<a name="line130">130: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Lessons,ierr)
+<a name="line131">131: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(120000d0,ierr)
+<a name="line132">132: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.7*second, ierr)
+<a name="line133">133: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Lessons,ierr)
+
+<a name="line135">135: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Morning,ierr)
+
+<a name="line137">137: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Afternoon,ierr)
+
+<a name="line139">139: </a>         item = rank*(3-rank)
+<a name="line140">140: </a>         call <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Allreduce.html#MPI_Allreduce">MPI_Allreduce</a>(item, maxItem, 1, MPI_INTEGER, MPI_MAX,                    &amp;
+<a name="line141">141: </a>     &amp;                           <a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, ierr)
+
+<a name="line143">143: </a>         item = rank*(10-rank)
+<a name="line144">144: </a>         call <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Allreduce.html#MPI_Allreduce">MPI_Allreduce</a>(item, maxItem, 1, MPI_INTEGER, MPI_MAX,                    &amp;
+<a name="line145">145: </a>     &amp;                           <a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, ierr)
+
+<a name="line147">147: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(58988d0,ierr)
+<a name="line148">148: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.6*second,ierr)
+
+<a name="line150">150: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Lessons,ierr)
+<a name="line151">151: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(123456d0,ierr)
+<a name="line152">152: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(1*second, ierr)
+<a name="line153">153: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Lessons,ierr)
+
+<a name="line155">155: </a>         <font color="#4169E1">if</font> (role==TEACHER) then
+<a name="line156">156: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(TidyClass,ierr)
+<a name="line157">157: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(17800d0,ierr)
+<a name="line158">158: </a>            call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(1.1*second, ierr)
+<a name="line159">159: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Lessons,ierr)
+<a name="line160">160: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(72344d0,ierr)
+<a name="line161">161: </a>            call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.5*second, ierr)
+<a name="line162">162: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Lessons,ierr)
+<a name="line163">163: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(TidyClass,ierr)
+<a name="line164">164: </a>         <font color="#4169E1">else</font> <font color="#4169E1">if</font> (role==GIRL) then
+<a name="line165">165: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(SkipRope,ierr)
+<a name="line166">166: </a>            call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.7*second, ierr)
+<a name="line167">167: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(SkipRope,ierr)
+<a name="line168">168: </a>         <font color="#4169E1">else</font>
+<a name="line169">169: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(PlayBall,ierr)
+<a name="line170">170: </a>            call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.8*second, ierr)
+<a name="line171">171: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(PlayBall,ierr)
+<a name="line172">172: </a>         end <font color="#4169E1">if</font>
+
+<a name="line174">174: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Lessons,ierr)
+<a name="line175">175: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(72344d0,ierr)
+<a name="line176">176: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.5*second, ierr)
+<a name="line177">177: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Lessons,ierr)
+
+<a name="line179">179: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Afternoon,ierr)
+
+<a name="line181">181: </a>      <font color="#4169E1">if</font> (.false.) then
+<a name="line182">182: </a>         <font color="#4169E1">continue</font>
+<a name="line183">183: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (role==TEACHER) then
+<a name="line184">184: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(TidyClass,ierr)
+<a name="line185">185: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(612300d0,ierr)
+<a name="line186">186: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(1.1*second, ierr)
+<a name="line187">187: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(TidyClass,ierr)
+<a name="line188">188: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(CorrectHomework,ierr)
+<a name="line189">189: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(234700d0,ierr)
+<a name="line190">190: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(1.1*second, ierr)
+<a name="line191">191: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(CorrectHomework,ierr)
+<a name="line192">192: </a>      <font color="#4169E1">else</font>
+<a name="line193">193: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(SkipRope,ierr)
+<a name="line194">194: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.7*second, ierr)
+<a name="line195">195: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(SkipRope,ierr)
+<a name="line196">196: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(PlayBall,ierr)
+<a name="line197">197: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.8*second, ierr)
+<a name="line198">198: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(PlayBall,ierr)
+<a name="line199">199: </a>      end <font color="#4169E1">if</font>
+
+<a name="line201">201: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Lessons,ierr)
+<a name="line202">202: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(120000d0,ierr)
+<a name="line203">203: </a>      call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.7*second, ierr)
+<a name="line204">204: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Lessons,ierr)
+
+<a name="line206">206: </a>      call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.25*second,ierr)
+
+<a name="line208">208: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Morning,ierr)
+
+<a name="line210">210: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(190000d0,ierr)
+<a name="line211">211: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.5*second,ierr)
+
+<a name="line213">213: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Lessons,ierr)
+<a name="line214">214: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(23000d0,ierr)
+<a name="line215">215: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(1*second, ierr)
+<a name="line216">216: </a>         <font color="#4169E1">if</font> (size&gt;1) then
+<a name="line217">217: </a>         call <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Isend.html#MPI_Isend">MPI_Isend</a>( message, msgLen, MPI_DOUBLE_PRECISION,                             &amp;
+<a name="line218">218: </a>     &amp;                        mod(rank+1,size),                                             &amp;
+<a name="line219">219: </a>     &amp;                   tagMsg+rank, <a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, req, ierr)
+<a name="line220">220: </a>         call <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Recv.html#MPI_Recv">MPI_Recv</a>( message, msgLen, MPI_DOUBLE_PRECISION,                              &amp;
+<a name="line221">221: </a>     &amp;                  mod(rank-1+size,size),                                              &amp;
+<a name="line222">222: </a>     &amp;                  tagMsg+mod(rank-1+size,size), <a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,                     &amp;
+<a name="line223">223: </a>     &amp;                   status, ierr)
+<a name="line224">224: </a>         call <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Wait.html#MPI_Wait">MPI_Wait</a>(req,MPI_STATUS_IGNORE,ierr)
+<a name="line225">225: </a>         end <font color="#4169E1">if</font>
+<a name="line226">226: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Lessons,ierr)
+
+<a name="line228">228: </a>         <font color="#4169E1">if</font> (role==TEACHER) then
+<a name="line229">229: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(TidyClass,ierr)
+<a name="line230">230: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(600000d0,ierr)
+<a name="line231">231: </a>            call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(1.2*second, ierr)
+<a name="line232">232: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(TidyClass,ierr)
+<a name="line233">233: </a>         <font color="#4169E1">else</font> <font color="#4169E1">if</font> (role==BOY) then
+<a name="line234">234: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(SkipRope,ierr)
+<a name="line235">235: </a>            call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.8*second, ierr)
+<a name="line236">236: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(SkipRope,ierr)
+<a name="line237">237: </a>         <font color="#4169E1">else</font>
+<a name="line238">238: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(PlayBall,ierr)
+<a name="line239">239: </a>            call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.9*second, ierr)
+<a name="line240">240: </a>            call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(PlayBall,ierr)
+<a name="line241">241: </a>         end <font color="#4169E1">if</font>
+
+<a name="line243">243: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(Lessons,ierr)
+<a name="line244">244: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(120000d0,ierr)
+<a name="line245">245: </a>         call <a href="../../../../../docs/manualpages/Sys/PetscSleep.html#PetscSleep">PetscSleep</a>(0.7*second, ierr)
+<a name="line246">246: </a>         call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Lessons,ierr)
+
+<a name="line248">248: </a>      call <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(Morning,ierr)
+
+<a name="line250">250: </a>      deallocate(message)
+
+<a name="line252">252: </a>      call <a href="../../../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>(ierr)
+
+<a name="line254">254: </a>      end program SchoolDay
+
+<a name="line256">256: </a>!<font color="#B22222">/*TEST</font>
+<a name="line257">257: </a><font color="#B22222">!</font>
+<a name="line258">258: </a><font color="#B22222">! testset:</font>
+<a name="line259">259: </a><font color="#B22222">!   args: -log_view ascii:filename.txt</font>
+<a name="line260">260: </a><font color="#B22222">!   output_file: output/ex1f.out</font>
+<a name="line261">261: </a><font color="#B22222">!   test:</font>
+<a name="line262">262: </a><font color="#B22222">!     suffix: 1</font>
+<a name="line263">263: </a><font color="#B22222">!     nsize: 1</font>
+<a name="line264">264: </a><font color="#B22222">!   test:</font>
+<a name="line265">265: </a><font color="#B22222">!     suffix: 2</font>
+<a name="line266">266: </a><font color="#B22222">!     nsize: 2</font>
+<a name="line267">267: </a><font color="#B22222">!   test:</font>
+<a name="line268">268: </a><font color="#B22222">!     suffix: 3</font>
+<a name="line269">269: </a><font color="#B22222">!     nsize: 3</font>
+<a name="line270">270: </a><font color="#B22222">!</font>
+<a name="line271">271: </a><font color="#B22222">! testset:</font>
+<a name="line272">272: </a><font color="#B22222">!   suffix: detail</font>
+<a name="line273">273: </a><font color="#B22222">!   args: -log_view ascii:filename.txt:ascii_info_detail</font>
+<a name="line274">274: </a><font color="#B22222">!   output_file: output/ex1f.out</font>
+<a name="line275">275: </a><font color="#B22222">!   test:</font>
+<a name="line276">276: </a><font color="#B22222">!     suffix: 1</font>
+<a name="line277">277: </a><font color="#B22222">!     nsize: 1</font>
+<a name="line278">278: </a><font color="#B22222">!   test:</font>
+<a name="line279">279: </a><font color="#B22222">!     suffix: 2</font>
+<a name="line280">280: </a><font color="#B22222">!     nsize: 2</font>
+<a name="line281">281: </a><font color="#B22222">!   test:</font>
+<a name="line282">282: </a><font color="#B22222">!     suffix: 3</font>
+<a name="line283">283: </a><font color="#B22222">!     nsize: 3</font>
+<a name="line284">284: </a><font color="#B22222">!</font>
+<a name="line285">285: </a><font color="#B22222">! testset:</font>
+<a name="line286">286: </a><font color="#B22222">!   suffix: xml</font>
+<a name="line287">287: </a><font color="#B22222">!   args: -log_view ascii:filename.xml:ascii_xml</font>
+<a name="line288">288: </a><font color="#B22222">!   output_file: output/ex1f.out</font>
+<a name="line289">289: </a><font color="#B22222">!   test:</font>
+<a name="line290">290: </a><font color="#B22222">!     suffix: 1</font>
+<a name="line291">291: </a><font color="#B22222">!     nsize: 1</font>
+<a name="line292">292: </a><font color="#B22222">!   test:</font>
+<a name="line293">293: </a><font color="#B22222">!     suffix: 2</font>
+<a name="line294">294: </a><font color="#B22222">!     nsize: 2</font>
+<a name="line295">295: </a><font color="#B22222">!   test:</font>
+<a name="line296">296: </a><font color="#B22222">!     suffix: 3</font>
+<a name="line297">297: </a><font color="#B22222">!     nsize: 3</font>
+<a name="line298">298: </a><font color="#B22222">!</font>
+<a name="line299">299: </a><font color="#B22222">!TEST*/</font>
+</pre>
+</body>
+
+</html>

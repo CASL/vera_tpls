@@ -1,0 +1,751 @@
+<center><a href="fdmpiaij.c">Actual source code: fdmpiaij.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/mat/impls/aij/mpi/fdmpiaij.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:45:12+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/mat/impls/aij/mpi/fdmpiaij.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a> #include <A href="../../../../../include/../src/mat/impls/sell/mpi/mpisell.h.html">&lt;../src/mat/impls/sell/mpi/mpisell.h&gt;</A>
+<a name="line2">  2: </a> #include <A href="../../../../../include/../src/mat/impls/aij/mpi/mpiaij.h.html">&lt;../src/mat/impls/aij/mpi/mpiaij.h&gt;</A>
+<a name="line3">  3: </a> #include <A href="../../../../../include/../src/mat/impls/baij/mpi/mpibaij.h.html">&lt;../src/mat/impls/baij/mpi/mpibaij.h&gt;</A>
+<a name="line4">  4: </a> #include <A href="../../../../../include/petsc/private/isimpl.h.html">&lt;petsc/private/isimpl.h&gt;</A>
+
+<a name="line6">  6: </a><strong><font color="#4169E1"><a name="MatFDColoringApply_BAIJ"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatFDColoringApply_BAIJ(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> J,<a href="../../../../../docs/manualpages/Mat/MatFDColoring.html#MatFDColoring">MatFDColoring</a> coloring,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,void *sctx)</font></strong>
+<a name="line7">  7: </a>{
+<a name="line8">  8: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    (*f)(void*,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,void*)=(<a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> (*)(void*,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,void*))coloring-&gt;f;
+<a name="line9">  9: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line10"> 10: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          k,cstart,cend,l,row,col,nz,spidx,i,j;
+<a name="line11"> 11: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       dx=0.0,*w3_array,*dy_i,*dy=coloring-&gt;dy;
+<a name="line12"> 12: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *vscale_array;
+<a name="line13"> 13: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xx;
+<a name="line14"> 14: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         epsilon=coloring-&gt;error_rel,umin=coloring-&gt;umin,unorm;
+<a name="line15"> 15: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>               w1=coloring-&gt;w1,w2=coloring-&gt;w2,w3,vscale=coloring-&gt;vscale;
+<a name="line16"> 16: </a>  void              *fctx=coloring-&gt;fctx;
+<a name="line17"> 17: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          ctype=coloring-&gt;ctype,nxloc,nrows_k;
+<a name="line18"> 18: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *valaddr;
+<a name="line19"> 19: </a>  MatEntry          *Jentry=coloring-&gt;matentry;
+<a name="line20"> 20: </a>  MatEntry2         *Jentry2=coloring-&gt;matentry2;
+<a name="line21"> 21: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    ncolors=coloring-&gt;ncolors,*ncolumns=coloring-&gt;ncolumns,*nrows=coloring-&gt;nrows;
+<a name="line22"> 22: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          bs=J-&gt;rmap-&gt;bs;
+
+<a name="line25"> 25: </a>  <a href="../../../../../docs/manualpages/Vec/VecPinToCPU.html#VecPinToCPU">VecPinToCPU</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line26"> 26: </a>  <font color="#B22222">/* (1) Set w1 = F(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>) */</font>
+<a name="line27"> 27: </a>  <font color="#4169E1">if</font> (!coloring-&gt;fset) {
+<a name="line28"> 28: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(MAT_FDColoringFunction,coloring,0,0,0);
+<a name="line29"> 29: </a>    (*f)(sctx,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,w1,fctx);
+<a name="line30"> 30: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(MAT_FDColoringFunction,coloring,0,0,0);
+<a name="line31"> 31: </a>  } <font color="#4169E1">else</font> {
+<a name="line32"> 32: </a>    coloring-&gt;fset = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line33"> 33: </a>  }
+
+<a name="line35"> 35: </a>  <font color="#B22222">/* (2) Compute vscale = 1./dx - the local scale factors, including ghost points */</font>
+<a name="line36"> 36: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,&amp;nxloc);
+<a name="line37"> 37: </a>  <font color="#4169E1">if</font> (coloring-&gt;htype[0] == 'w') {
+<a name="line38"> 38: </a>    <font color="#B22222">/* vscale = dx is a constant scalar */</font>
+<a name="line39"> 39: </a>    <a href="../../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,<a href="../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,&amp;unorm);
+<a name="line40"> 40: </a>    dx = 1.0/(PetscSqrtReal(1.0 + unorm)*epsilon);
+<a name="line41"> 41: </a>  } <font color="#4169E1">else</font> {
+<a name="line42"> 42: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,&amp;xx);
+<a name="line43"> 43: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(vscale,&amp;vscale_array);
+<a name="line44"> 44: </a>    <font color="#4169E1">for</font> (col=0; col&lt;nxloc; col++) {
+<a name="line45"> 45: </a>      dx = xx[col];
+<a name="line46"> 46: </a>      <font color="#4169E1">if</font> (PetscAbsScalar(dx) &lt; umin) {
+<a name="line47"> 47: </a>        <font color="#4169E1">if</font> (<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(dx) &gt;= 0.0)      dx = umin;
+<a name="line48"> 48: </a>        <font color="#4169E1">else</font> <font color="#4169E1">if</font> (<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(dx) &lt; 0.0 ) dx = -umin;
+<a name="line49"> 49: </a>      }
+<a name="line50"> 50: </a>      dx               *= epsilon;
+<a name="line51"> 51: </a>      vscale_array[col] = 1.0/dx;
+<a name="line52"> 52: </a>    }
+<a name="line53"> 53: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,&amp;xx);
+<a name="line54"> 54: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(vscale,&amp;vscale_array);
+<a name="line55"> 55: </a>  }
+<a name="line56"> 56: </a>  <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a> &amp;&amp; coloring-&gt;htype[0] == 'd') {
+<a name="line57"> 57: </a>    <a href="../../../../../docs/manualpages/Vec/VecGhostUpdateBegin.html#VecGhostUpdateBegin">VecGhostUpdateBegin</a>(vscale,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line58"> 58: </a>    <a href="../../../../../docs/manualpages/Vec/VecGhostUpdateEnd.html#VecGhostUpdateEnd">VecGhostUpdateEnd</a>(vscale,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line59"> 59: </a>  }
+
+<a name="line61"> 61: </a>  <font color="#B22222">/* (3) Loop over each color */</font>
+<a name="line62"> 62: </a>  <font color="#4169E1">if</font> (!coloring-&gt;w3) {
+<a name="line63"> 63: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,&amp;coloring-&gt;w3);
+<a name="line64"> 64: </a>    <font color="#B22222">/* <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> is used instensively in particular piece of scalar CPU code; won't benifit from bouncing back and forth to the GPU */</font>
+<a name="line65"> 65: </a>    <a href="../../../../../docs/manualpages/Vec/VecPinToCPU.html#VecPinToCPU">VecPinToCPU</a>(coloring-&gt;w3,<a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line66"> 66: </a>    PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)coloring,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)coloring-&gt;w3);
+<a name="line67"> 67: </a>  }
+<a name="line68"> 68: </a>  w3 = coloring-&gt;w3;
+
+<a name="line70"> 70: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,&amp;cstart,&amp;cend); <font color="#B22222">/* used by ghosted vscale */</font>
+<a name="line71"> 71: </a>  <font color="#4169E1">if</font> (vscale) {
+<a name="line72"> 72: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(vscale,&amp;vscale_array);
+<a name="line73"> 73: </a>  }
+<a name="line74"> 74: </a>  nz = 0;
+<a name="line75"> 75: </a>  <font color="#4169E1">for</font> (k=0; k&lt;ncolors; k++) {
+<a name="line76"> 76: </a>    coloring-&gt;currentcolor = k;
+
+<a name="line78"> 78: </a>    <font color="#B22222">/*</font>
+<a name="line79"> 79: </a><font color="#B22222">      (3-1) Loop over each column associated with color</font>
+<a name="line80"> 80: </a><font color="#B22222">      adding the perturbation to the vector w3 = <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + dx.</font>
+<a name="line81"> 81: </a><font color="#B22222">    */</font>
+<a name="line82"> 82: </a>    <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,w3);
+<a name="line83"> 83: </a>    dy_i = dy;
+<a name="line84"> 84: </a>    <font color="#4169E1">for</font> (i=0; i&lt;bs; i++) {     <font color="#B22222">/* Loop over a block of columns */</font>
+<a name="line85"> 85: </a>      <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(w3,&amp;w3_array);
+<a name="line86"> 86: </a>      <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a>) w3_array -= cstart; <font color="#B22222">/* shift pointer so global index can be used */</font>
+<a name="line87"> 87: </a>      <font color="#4169E1">if</font> (coloring-&gt;htype[0] == 'w') {
+<a name="line88"> 88: </a>        <font color="#4169E1">for</font> (l=0; l&lt;ncolumns[k]; l++) {
+<a name="line89"> 89: </a>          col            = i + bs*coloring-&gt;columns[k][l];  <font color="#B22222">/* local column (in global index!) of the matrix we are probing for */</font>
+<a name="line90"> 90: </a>          w3_array[col] += 1.0/dx;
+<a name="line91"> 91: </a>          <font color="#4169E1">if</font> (i) w3_array[col-1] -= 1.0/dx; <font color="#B22222">/* resume original w3[col-1] */</font>
+<a name="line92"> 92: </a>        }
+<a name="line93"> 93: </a>      } <font color="#4169E1">else</font> { <font color="#B22222">/* htype == 'ds' */</font>
+<a name="line94"> 94: </a>        vscale_array -= cstart; <font color="#B22222">/* shift pointer so global index can be used */</font>
+<a name="line95"> 95: </a>        <font color="#4169E1">for</font> (l=0; l&lt;ncolumns[k]; l++) {
+<a name="line96"> 96: </a>          col = i + bs*coloring-&gt;columns[k][l]; <font color="#B22222">/* local column (in global index!) of the matrix we are probing for */</font>
+<a name="line97"> 97: </a>          w3_array[col] += 1.0/vscale_array[col];
+<a name="line98"> 98: </a>          <font color="#4169E1">if</font> (i) w3_array[col-1] -=  1.0/vscale_array[col-1]; <font color="#B22222">/* resume original w3[col-1] */</font>
+<a name="line99"> 99: </a>        }
+<a name="line100">100: </a>        vscale_array += cstart;
+<a name="line101">101: </a>      }
+<a name="line102">102: </a>      <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a>) w3_array += cstart;
+<a name="line103">103: </a>      <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(w3,&amp;w3_array);
+
+<a name="line105">105: </a>      <font color="#B22222">/*</font>
+<a name="line106">106: </a><font color="#B22222">       (3-2) Evaluate function at w3 = <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + dx (here dx is a vector of perturbations)</font>
+<a name="line107">107: </a><font color="#B22222">                           w2 = F(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + dx) - F(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>)</font>
+<a name="line108">108: </a><font color="#B22222">       */</font>
+<a name="line109">109: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(MAT_FDColoringFunction,0,0,0,0);
+<a name="line110">110: </a>      <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(w2,dy_i); <font color="#B22222">/* place w2 to the array dy_i */</font>
+<a name="line111">111: </a>      (*f)(sctx,w3,w2,fctx);
+<a name="line112">112: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(MAT_FDColoringFunction,0,0,0,0);
+<a name="line113">113: </a>      <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(w2,-1.0,w1);
+<a name="line114">114: </a>      <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(w2);
+<a name="line115">115: </a>      dy_i += nxloc; <font color="#B22222">/* points to dy+i*nxloc */</font>
+<a name="line116">116: </a>    }
+
+<a name="line118">118: </a>    <font color="#B22222">/*</font>
+<a name="line119">119: </a><font color="#B22222">     (3-3) Loop over rows of vector, putting results into Jacobian matrix</font>
+<a name="line120">120: </a><font color="#B22222">    */</font>
+<a name="line121">121: </a>    nrows_k = nrows[k];
+<a name="line122">122: </a>    <font color="#4169E1">if</font> (coloring-&gt;htype[0] == 'w') {
+<a name="line123">123: </a>      <font color="#4169E1">for</font> (l=0; l&lt;nrows_k; l++) {
+<a name="line124">124: </a>        row     = bs*Jentry2[nz].row;   <font color="#B22222">/* local row index */</font>
+<a name="line125">125: </a>        valaddr = Jentry2[nz++].valaddr;
+<a name="line126">126: </a>        spidx   = 0;
+<a name="line127">127: </a>        dy_i    = dy;
+<a name="line128">128: </a>        <font color="#4169E1">for</font> (i=0; i&lt;bs; i++) {   <font color="#B22222">/* column of the block */</font>
+<a name="line129">129: </a>          <font color="#4169E1">for</font> (j=0; j&lt;bs; j++) { <font color="#B22222">/* row of the block */</font>
+<a name="line130">130: </a>            valaddr[spidx++] = dy_i[row+j]*dx;
+<a name="line131">131: </a>          }
+<a name="line132">132: </a>          dy_i += nxloc; <font color="#B22222">/* points to dy+i*nxloc */</font>
+<a name="line133">133: </a>        }
+<a name="line134">134: </a>      }
+<a name="line135">135: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* htype == 'ds' */</font>
+<a name="line136">136: </a>      <font color="#4169E1">for</font> (l=0; l&lt;nrows_k; l++) {
+<a name="line137">137: </a>        row     = bs*Jentry[nz].row;   <font color="#B22222">/* local row index */</font>
+<a name="line138">138: </a>        col     = bs*Jentry[nz].col;   <font color="#B22222">/* local column index */</font>
+<a name="line139">139: </a>        valaddr = Jentry[nz++].valaddr;
+<a name="line140">140: </a>        spidx   = 0;
+<a name="line141">141: </a>        dy_i    = dy;
+<a name="line142">142: </a>        <font color="#4169E1">for</font> (i=0; i&lt;bs; i++) {   <font color="#B22222">/* column of the block */</font>
+<a name="line143">143: </a>          <font color="#4169E1">for</font> (j=0; j&lt;bs; j++) { <font color="#B22222">/* row of the block */</font>
+<a name="line144">144: </a>            valaddr[spidx++] = dy_i[row+j]*vscale_array[col+i];
+<a name="line145">145: </a>          }
+<a name="line146">146: </a>          dy_i += nxloc; <font color="#B22222">/* points to dy+i*nxloc */</font>
+<a name="line147">147: </a>        }
+<a name="line148">148: </a>      }
+<a name="line149">149: </a>    }
+<a name="line150">150: </a>  }
+<a name="line151">151: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(J,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line152">152: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(J,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line153">153: </a>  <font color="#4169E1">if</font> (vscale) {
+<a name="line154">154: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(vscale,&amp;vscale_array);
+<a name="line155">155: </a>  }
+
+<a name="line157">157: </a>  coloring-&gt;currentcolor = -1;
+<a name="line158">158: </a>  <a href="../../../../../docs/manualpages/Vec/VecPinToCPU.html#VecPinToCPU">VecPinToCPU</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line159">159: </a>  <font color="#4169E1">return</font>(0);
+<a name="line160">160: </a>}
+
+<a name="line162">162: </a><font color="#B22222">/* this is declared PETSC_EXTERN because it is used by <a href="../../../../../docs/manualpages/DM/MatFDColoringUseDM.html#MatFDColoringUseDM">MatFDColoringUseDM</a>() which is in the <a href="../../../../../docs/manualpages/DM/DM.html#DM">DM</a> library */</font>
+<a name="line163">163: </a><strong><font color="#4169E1"><a name="MatFDColoringApply_AIJ"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  MatFDColoringApply_AIJ(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> J,<a href="../../../../../docs/manualpages/Mat/MatFDColoring.html#MatFDColoring">MatFDColoring</a> coloring,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,void *sctx)</font></strong>
+<a name="line164">164: </a>{
+<a name="line165">165: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    (*f)(void*,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,void*) = (<a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> (*)(void*,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,void*))coloring-&gt;f;
+<a name="line166">166: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line167">167: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          k,cstart,cend,l,row,col,nz;
+<a name="line168">168: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       dx=0.0,*y,*w3_array;
+<a name="line169">169: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *xx;
+<a name="line170">170: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *vscale_array;
+<a name="line171">171: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         epsilon=coloring-&gt;error_rel,umin=coloring-&gt;umin,unorm;
+<a name="line172">172: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>               w1=coloring-&gt;w1,w2=coloring-&gt;w2,w3,vscale=coloring-&gt;vscale;
+<a name="line173">173: </a>  void              *fctx=coloring-&gt;fctx;
+<a name="line174">174: </a>  <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">ISColoringType</a>    ctype=coloring-&gt;ctype;
+<a name="line175">175: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          nxloc,nrows_k;
+<a name="line176">176: </a>  MatEntry          *Jentry=coloring-&gt;matentry;
+<a name="line177">177: </a>  MatEntry2         *Jentry2=coloring-&gt;matentry2;
+<a name="line178">178: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    ncolors=coloring-&gt;ncolors,*ncolumns=coloring-&gt;ncolumns,*nrows=coloring-&gt;nrows;
+
+<a name="line181">181: </a>  <a href="../../../../../docs/manualpages/Vec/VecPinToCPU.html#VecPinToCPU">VecPinToCPU</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line182">182: </a>  <font color="#4169E1">if</font> ((ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_LOCAL</a>) &amp;&amp; (J-&gt;ops-&gt;fdcoloringapply == MatFDColoringApply_AIJ)) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)J),PETSC_ERR_SUP,<font color="#666666">"Must call MatColoringUseDM() with <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_LOCAL</a>"</font>);
+<a name="line183">183: </a>  <font color="#B22222">/* (1) Set w1 = F(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>) */</font>
+<a name="line184">184: </a>  <font color="#4169E1">if</font> (!coloring-&gt;fset) {
+<a name="line185">185: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(MAT_FDColoringFunction,0,0,0,0);
+<a name="line186">186: </a>    (*f)(sctx,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,w1,fctx);
+<a name="line187">187: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(MAT_FDColoringFunction,0,0,0,0);
+<a name="line188">188: </a>  } <font color="#4169E1">else</font> {
+<a name="line189">189: </a>    coloring-&gt;fset = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line190">190: </a>  }
+
+<a name="line192">192: </a>  <font color="#B22222">/* (2) Compute vscale = 1./dx - the local scale factors, including ghost points */</font>
+<a name="line193">193: </a>  <font color="#4169E1">if</font> (coloring-&gt;htype[0] == 'w') {
+<a name="line194">194: </a>    <font color="#B22222">/* vscale = 1./dx is a constant scalar */</font>
+<a name="line195">195: </a>    <a href="../../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,<a href="../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,&amp;unorm);
+<a name="line196">196: </a>    dx = 1.0/(PetscSqrtReal(1.0 + unorm)*epsilon);
+<a name="line197">197: </a>  } <font color="#4169E1">else</font> {
+<a name="line198">198: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,&amp;nxloc);
+<a name="line199">199: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,&amp;xx);
+<a name="line200">200: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(vscale,&amp;vscale_array);
+<a name="line201">201: </a>    <font color="#4169E1">for</font> (col=0; col&lt;nxloc; col++) {
+<a name="line202">202: </a>      dx = xx[col];
+<a name="line203">203: </a>      <font color="#4169E1">if</font> (PetscAbsScalar(dx) &lt; umin) {
+<a name="line204">204: </a>        <font color="#4169E1">if</font> (<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(dx) &gt;= 0.0)      dx = umin;
+<a name="line205">205: </a>        <font color="#4169E1">else</font> <font color="#4169E1">if</font> (<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(dx) &lt; 0.0 ) dx = -umin;
+<a name="line206">206: </a>      }
+<a name="line207">207: </a>      dx               *= epsilon;
+<a name="line208">208: </a>      vscale_array[col] = 1.0/dx;
+<a name="line209">209: </a>    }
+<a name="line210">210: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,&amp;xx);
+<a name="line211">211: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(vscale,&amp;vscale_array);
+<a name="line212">212: </a>  }
+<a name="line213">213: </a>  <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a> &amp;&amp; coloring-&gt;htype[0] == 'd') {
+<a name="line214">214: </a>    <a href="../../../../../docs/manualpages/Vec/VecGhostUpdateBegin.html#VecGhostUpdateBegin">VecGhostUpdateBegin</a>(vscale,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line215">215: </a>    <a href="../../../../../docs/manualpages/Vec/VecGhostUpdateEnd.html#VecGhostUpdateEnd">VecGhostUpdateEnd</a>(vscale,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line216">216: </a>  }
+
+<a name="line218">218: </a>  <font color="#B22222">/* (3) Loop over each color */</font>
+<a name="line219">219: </a>  <font color="#4169E1">if</font> (!coloring-&gt;w3) {
+<a name="line220">220: </a>    <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,&amp;coloring-&gt;w3);
+<a name="line221">221: </a>    PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)coloring,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)coloring-&gt;w3);
+<a name="line222">222: </a>  }
+<a name="line223">223: </a>  w3 = coloring-&gt;w3;
+
+<a name="line225">225: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,&amp;cstart,&amp;cend); <font color="#B22222">/* used by ghosted vscale */</font>
+<a name="line226">226: </a>  <font color="#4169E1">if</font> (vscale) {
+<a name="line227">227: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(vscale,&amp;vscale_array);
+<a name="line228">228: </a>  }
+<a name="line229">229: </a>  nz = 0;
+
+<a name="line231">231: </a>  <font color="#4169E1">if</font> (coloring-&gt;bcols &gt; 1) { <font color="#B22222">/* use blocked insertion of Jentry */</font>
+<a name="line232">232: </a>    <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    i,m=J-&gt;rmap-&gt;n,nbcols,bcols=coloring-&gt;bcols;
+<a name="line233">233: </a>    <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *dy=coloring-&gt;dy,*dy_k;
+
+<a name="line235">235: </a>    nbcols = 0;
+<a name="line236">236: </a>    <font color="#4169E1">for</font> (k=0; k&lt;ncolors; k+=bcols) {
+
+<a name="line238">238: </a>      <font color="#B22222">/*</font>
+<a name="line239">239: </a><font color="#B22222">       (3-1) Loop over each column associated with color</font>
+<a name="line240">240: </a><font color="#B22222">       adding the perturbation to the vector w3 = <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + dx.</font>
+<a name="line241">241: </a><font color="#B22222">       */</font>
+
+<a name="line243">243: </a>      dy_k = dy;
+<a name="line244">244: </a>      <font color="#4169E1">if</font> (k + bcols &gt; ncolors) bcols = ncolors - k;
+<a name="line245">245: </a>      <font color="#4169E1">for</font> (i=0; i&lt;bcols; i++) {
+<a name="line246">246: </a>        coloring-&gt;currentcolor = k+i;
+
+<a name="line248">248: </a>        <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,w3);
+<a name="line249">249: </a>        <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(w3,&amp;w3_array);
+<a name="line250">250: </a>        <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a>) w3_array -= cstart; <font color="#B22222">/* shift pointer so global index can be used */</font>
+<a name="line251">251: </a>        <font color="#4169E1">if</font> (coloring-&gt;htype[0] == 'w') {
+<a name="line252">252: </a>          <font color="#4169E1">for</font> (l=0; l&lt;ncolumns[k+i]; l++) {
+<a name="line253">253: </a>            col = coloring-&gt;columns[k+i][l]; <font color="#B22222">/* local column (in global index!) of the matrix we are probing for */</font>
+<a name="line254">254: </a>            w3_array[col] += 1.0/dx;
+<a name="line255">255: </a>          }
+<a name="line256">256: </a>        } <font color="#4169E1">else</font> { <font color="#B22222">/* htype == 'ds' */</font>
+<a name="line257">257: </a>          vscale_array -= cstart; <font color="#B22222">/* shift pointer so global index can be used */</font>
+<a name="line258">258: </a>          <font color="#4169E1">for</font> (l=0; l&lt;ncolumns[k+i]; l++) {
+<a name="line259">259: </a>            col = coloring-&gt;columns[k+i][l]; <font color="#B22222">/* local column (in global index!) of the matrix we are probing for */</font>
+<a name="line260">260: </a>            w3_array[col] += 1.0/vscale_array[col];
+<a name="line261">261: </a>          }
+<a name="line262">262: </a>          vscale_array += cstart;
+<a name="line263">263: </a>        }
+<a name="line264">264: </a>        <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a>) w3_array += cstart;
+<a name="line265">265: </a>        <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(w3,&amp;w3_array);
+
+<a name="line267">267: </a>        <font color="#B22222">/*</font>
+<a name="line268">268: </a><font color="#B22222">         (3-2) Evaluate function at w3 = <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + dx (here dx is a vector of perturbations)</font>
+<a name="line269">269: </a><font color="#B22222">                           w2 = F(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + dx) - F(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>)</font>
+<a name="line270">270: </a><font color="#B22222">         */</font>
+<a name="line271">271: </a>        <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(MAT_FDColoringFunction,0,0,0,0);
+<a name="line272">272: </a>        <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(w2,dy_k); <font color="#B22222">/* place w2 to the array dy_i */</font>
+<a name="line273">273: </a>        (*f)(sctx,w3,w2,fctx);
+<a name="line274">274: </a>        <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(MAT_FDColoringFunction,0,0,0,0);
+<a name="line275">275: </a>        <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(w2,-1.0,w1);
+<a name="line276">276: </a>        <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(w2);
+<a name="line277">277: </a>        dy_k += m; <font color="#B22222">/* points to dy+i*nxloc */</font>
+<a name="line278">278: </a>      }
+
+<a name="line280">280: </a>      <font color="#B22222">/*</font>
+<a name="line281">281: </a><font color="#B22222">       (3-3) Loop over block rows of vector, putting results into Jacobian matrix</font>
+<a name="line282">282: </a><font color="#B22222">       */</font>
+<a name="line283">283: </a>      nrows_k = nrows[nbcols++];
+
+<a name="line285">285: </a>      <font color="#4169E1">if</font> (coloring-&gt;htype[0] == 'w') {
+<a name="line286">286: </a>        <font color="#4169E1">for</font> (l=0; l&lt;nrows_k; l++) {
+<a name="line287">287: </a>          row                      = Jentry2[nz].row;   <font color="#B22222">/* local row index */</font>
+<a name="line288">288: </a>          *(Jentry2[nz++].valaddr) = dy[row]*dx;
+<a name="line289">289: </a>        }
+<a name="line290">290: </a>      } <font color="#4169E1">else</font> { <font color="#B22222">/* htype == 'ds' */</font>
+<a name="line291">291: </a>        <font color="#4169E1">for</font> (l=0; l&lt;nrows_k; l++) {
+<a name="line292">292: </a>          row                   = Jentry[nz].row;   <font color="#B22222">/* local row index */</font>
+<a name="line293">293: </a>          *(Jentry[nz].valaddr) = dy[row]*vscale_array[Jentry[nz].col];
+<a name="line294">294: </a>          nz++;
+<a name="line295">295: </a>        }
+<a name="line296">296: </a>      }
+<a name="line297">297: </a>    }
+<a name="line298">298: </a>  } <font color="#4169E1">else</font> { <font color="#B22222">/* bcols == 1 */</font>
+<a name="line299">299: </a>    <font color="#4169E1">for</font> (k=0; k&lt;ncolors; k++) {
+<a name="line300">300: </a>      coloring-&gt;currentcolor = k;
+
+<a name="line302">302: </a>      <font color="#B22222">/*</font>
+<a name="line303">303: </a><font color="#B22222">       (3-1) Loop over each column associated with color</font>
+<a name="line304">304: </a><font color="#B22222">       adding the perturbation to the vector w3 = <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + dx.</font>
+<a name="line305">305: </a><font color="#B22222">       */</font>
+<a name="line306">306: </a>      <a href="../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,w3);
+<a name="line307">307: </a>      <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(w3,&amp;w3_array);
+<a name="line308">308: </a>      <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a>) w3_array -= cstart; <font color="#B22222">/* shift pointer so global index can be used */</font>
+<a name="line309">309: </a>      <font color="#4169E1">if</font> (coloring-&gt;htype[0] == 'w') {
+<a name="line310">310: </a>        <font color="#4169E1">for</font> (l=0; l&lt;ncolumns[k]; l++) {
+<a name="line311">311: </a>          col = coloring-&gt;columns[k][l]; <font color="#B22222">/* local column (in global index!) of the matrix we are probing for */</font>
+<a name="line312">312: </a>          w3_array[col] += 1.0/dx;
+<a name="line313">313: </a>        }
+<a name="line314">314: </a>      } <font color="#4169E1">else</font> { <font color="#B22222">/* htype == 'ds' */</font>
+<a name="line315">315: </a>        vscale_array -= cstart; <font color="#B22222">/* shift pointer so global index can be used */</font>
+<a name="line316">316: </a>        <font color="#4169E1">for</font> (l=0; l&lt;ncolumns[k]; l++) {
+<a name="line317">317: </a>          col = coloring-&gt;columns[k][l]; <font color="#B22222">/* local column (in global index!) of the matrix we are probing for */</font>
+<a name="line318">318: </a>          w3_array[col] += 1.0/vscale_array[col];
+<a name="line319">319: </a>        }
+<a name="line320">320: </a>        vscale_array += cstart;
+<a name="line321">321: </a>      }
+<a name="line322">322: </a>      <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a>) w3_array += cstart;
+<a name="line323">323: </a>      <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(w3,&amp;w3_array);
+
+<a name="line325">325: </a>      <font color="#B22222">/*</font>
+<a name="line326">326: </a><font color="#B22222">       (3-2) Evaluate function at w3 = <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + dx (here dx is a vector of perturbations)</font>
+<a name="line327">327: </a><font color="#B22222">                           w2 = F(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> + dx) - F(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>)</font>
+<a name="line328">328: </a><font color="#B22222">       */</font>
+<a name="line329">329: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(MAT_FDColoringFunction,0,0,0,0);
+<a name="line330">330: </a>      (*f)(sctx,w3,w2,fctx);
+<a name="line331">331: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(MAT_FDColoringFunction,0,0,0,0);
+<a name="line332">332: </a>      <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(w2,-1.0,w1);
+
+<a name="line334">334: </a>      <font color="#B22222">/*</font>
+<a name="line335">335: </a><font color="#B22222">       (3-3) Loop over rows of vector, putting results into Jacobian matrix</font>
+<a name="line336">336: </a><font color="#B22222">       */</font>
+<a name="line337">337: </a>      nrows_k = nrows[k];
+<a name="line338">338: </a>      <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(w2,&amp;y);
+<a name="line339">339: </a>      <font color="#4169E1">if</font> (coloring-&gt;htype[0] == 'w') {
+<a name="line340">340: </a>        <font color="#4169E1">for</font> (l=0; l&lt;nrows_k; l++) {
+<a name="line341">341: </a>          row                      = Jentry2[nz].row;   <font color="#B22222">/* local row index */</font>
+<a name="line342">342: </a>          *(Jentry2[nz++].valaddr) = y[row]*dx;
+<a name="line343">343: </a>        }
+<a name="line344">344: </a>      } <font color="#4169E1">else</font> { <font color="#B22222">/* htype == 'ds' */</font>
+<a name="line345">345: </a>        <font color="#4169E1">for</font> (l=0; l&lt;nrows_k; l++) {
+<a name="line346">346: </a>          row                   = Jentry[nz].row;   <font color="#B22222">/* local row index */</font>
+<a name="line347">347: </a>          *(Jentry[nz].valaddr) = y[row]*vscale_array[Jentry[nz].col];
+<a name="line348">348: </a>          nz++;
+<a name="line349">349: </a>        }
+<a name="line350">350: </a>      }
+<a name="line351">351: </a>      <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(w2,&amp;y);
+<a name="line352">352: </a>    }
+<a name="line353">353: </a>  }
+
+<a name="line355">355: </a><font color="#A020F0">#if defined(PETSC_HAVE_VIENNACL) || defined(PETSC_HAVE_CUDA)</font>
+<a name="line356">356: </a>  <font color="#4169E1">if</font> (J-&gt;offloadmask != <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_UNALLOCATED</a>) J-&gt;offloadmask = <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_CPU</a>;
+<a name="line357">357: </a><font color="#A020F0">#endif</font>
+<a name="line358">358: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(J,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line359">359: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(J,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line360">360: </a>  <font color="#4169E1">if</font> (vscale) {
+<a name="line361">361: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(vscale,&amp;vscale_array);
+<a name="line362">362: </a>  }
+<a name="line363">363: </a>  coloring-&gt;currentcolor = -1;
+<a name="line364">364: </a>  <a href="../../../../../docs/manualpages/Vec/VecPinToCPU.html#VecPinToCPU">VecPinToCPU</a>(<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line365">365: </a>  <font color="#4169E1">return</font>(0);
+<a name="line366">366: </a>}
+
+<a name="line368">368: </a><strong><font color="#4169E1"><a name="MatFDColoringSetUp_MPIXAIJ"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatFDColoringSetUp_MPIXAIJ(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> mat,<a href="../../../../../docs/manualpages/IS/ISColoring.html#ISColoring">ISColoring</a> iscoloring,<a href="../../../../../docs/manualpages/Mat/MatFDColoring.html#MatFDColoring">MatFDColoring</a> c)</font></strong>
+<a name="line369">369: </a>{
+<a name="line370">370: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+<a name="line371">371: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>            size,*ncolsonproc,*disp,nn;
+<a name="line372">372: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               i,n,nrows,nrows_i,j,k,m,ncols,col,*rowhit,cstart,cend,colb;
+<a name="line373">373: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>         *is,*A_ci,*A_cj,*B_ci,*B_cj,*row=NULL,*ltog=NULL;
+<a name="line374">374: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               nis=iscoloring-&gt;n,nctot,*cols,tmp = 0;
+<a name="line375">375: </a>  <a href="../../../../../docs/manualpages/IS/ISLocalToGlobalMapping.html#ISLocalToGlobalMapping">ISLocalToGlobalMapping</a> map=mat-&gt;cmap-&gt;mapping;
+<a name="line376">376: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               ctype=c-&gt;ctype,*spidxA,*spidxB,nz,bs,bs2,spidx;
+<a name="line377">377: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>                    A,B;
+<a name="line378">378: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>            *A_val,*B_val,**valaddrhit;
+<a name="line379">379: </a>  MatEntry               *Jentry;
+<a name="line380">380: </a>  MatEntry2              *Jentry2;
+<a name="line381">381: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>              isBAIJ,isSELL;
+<a name="line382">382: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               bcols=c-&gt;bcols;
+<a name="line383">383: </a><font color="#A020F0">#if defined(PETSC_USE_CTABLE)</font>
+<a name="line384">384: </a>  PetscTable             colmap=NULL;
+<a name="line385">385: </a><font color="#A020F0">#else</font>
+<a name="line386">386: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               *colmap=NULL;     <font color="#B22222">/* local col number of off-diag col */</font>
+<a name="line387">387: </a><font color="#A020F0">#endif</font>
+
+<a name="line390">390: </a>  <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_LOCAL</a>) {
+<a name="line391">391: </a>    <font color="#4169E1">if</font> (!map) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat),PETSC_ERR_ARG_INCOMP,<font color="#666666">"When using ghosted differencing matrix must have local to global mapping provided with <a href="../../../../../docs/manualpages/Mat/MatSetLocalToGlobalMapping.html#MatSetLocalToGlobalMapping">MatSetLocalToGlobalMapping</a>"</font>);
+<a name="line392">392: </a>    <a href="../../../../../docs/manualpages/IS/ISLocalToGlobalMappingGetIndices.html#ISLocalToGlobalMappingGetIndices">ISLocalToGlobalMappingGetIndices</a>(map,&amp;ltog);
+<a name="line393">393: </a>  }
+
+<a name="line395">395: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetBlockSize.html#MatGetBlockSize">MatGetBlockSize</a>(mat,&amp;bs);
+<a name="line396">396: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectBaseTypeCompare.html#PetscObjectBaseTypeCompare">PetscObjectBaseTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat,<a href="../../../../../docs/manualpages/Mat/MATMPIBAIJ.html#MATMPIBAIJ">MATMPIBAIJ</a>,&amp;isBAIJ);
+<a name="line397">397: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat,<a href="../../../../../docs/manualpages/Mat/MATMPISELL.html#MATMPISELL">MATMPISELL</a>,&amp;isSELL);
+<a name="line398">398: </a>  <font color="#4169E1">if</font> (isBAIJ) {
+<a name="line399">399: </a>    Mat_MPIBAIJ *baij=(Mat_MPIBAIJ*)mat-&gt;data;
+<a name="line400">400: </a>    Mat_SeqBAIJ *spA,*spB;
+<a name="line401">401: </a>    A = baij-&gt;A;  spA = (Mat_SeqBAIJ*)A-&gt;data; A_val = spA-&gt;a;
+<a name="line402">402: </a>    B = baij-&gt;B;  spB = (Mat_SeqBAIJ*)B-&gt;data; B_val = spB-&gt;a;
+<a name="line403">403: </a>    nz = spA-&gt;nz + spB-&gt;nz; <font color="#B22222">/* total nonzero entries of mat */</font>
+<a name="line404">404: </a>    <font color="#4169E1">if</font> (!baij-&gt;colmap) {
+<a name="line405">405: </a>      MatCreateColmap_MPIBAIJ_Private(mat);
+<a name="line406">406: </a>    }
+<a name="line407">407: </a>    colmap = baij-&gt;colmap;
+<a name="line408">408: </a>    MatGetColumnIJ_SeqBAIJ_Color(A,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;A_ci,&amp;A_cj,&amp;spidxA,NULL);
+<a name="line409">409: </a>    MatGetColumnIJ_SeqBAIJ_Color(B,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;B_ci,&amp;B_cj,&amp;spidxB,NULL);
+
+<a name="line411">411: </a>    <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a> &amp;&amp; c-&gt;htype[0] == 'd') {  <font color="#B22222">/* create vscale for storing dx */</font>
+<a name="line412">412: </a>      <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *garray;
+<a name="line413">413: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(B-&gt;cmap-&gt;n,&amp;garray);
+<a name="line414">414: </a>      <font color="#4169E1">for</font> (i=0; i&lt;baij-&gt;B-&gt;cmap-&gt;n/bs; i++) {
+<a name="line415">415: </a>        <font color="#4169E1">for</font> (j=0; j&lt;bs; j++) {
+<a name="line416">416: </a>          garray[i*bs+j] = bs*baij-&gt;garray[i]+j;
+<a name="line417">417: </a>        }
+<a name="line418">418: </a>      }
+<a name="line419">419: </a>      <a href="../../../../../docs/manualpages/Vec/VecCreateGhost.html#VecCreateGhost">VecCreateGhost</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat),mat-&gt;cmap-&gt;n,<a href="../../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>,B-&gt;cmap-&gt;n,garray,&amp;c-&gt;vscale);
+<a name="line420">420: </a>      <a href="../../../../../docs/manualpages/Vec/VecPinToCPU.html#VecPinToCPU">VecPinToCPU</a>(c-&gt;vscale,<a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line421">421: </a>      <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(garray);
+<a name="line422">422: </a>    }
+<a name="line423">423: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isSELL) {
+<a name="line424">424: </a>    Mat_MPISELL *sell=(Mat_MPISELL*)mat-&gt;data;
+<a name="line425">425: </a>    Mat_SeqSELL *spA,*spB;
+<a name="line426">426: </a>    A = sell-&gt;A;  spA = (Mat_SeqSELL*)A-&gt;data; A_val = spA-&gt;val;
+<a name="line427">427: </a>    B = sell-&gt;B;  spB = (Mat_SeqSELL*)B-&gt;data; B_val = spB-&gt;val;
+<a name="line428">428: </a>    nz = spA-&gt;nz + spB-&gt;nz; <font color="#B22222">/* total nonzero entries of mat */</font>
+<a name="line429">429: </a>    <font color="#4169E1">if</font> (!sell-&gt;colmap) {
+<a name="line430">430: </a>      <font color="#B22222">/* Allow access to data structures of local part of matrix</font>
+<a name="line431">431: </a><font color="#B22222">       - creates aij-&gt;colmap which maps global column number to local number in part B */</font>
+<a name="line432">432: </a>      MatCreateColmap_MPISELL_Private(mat);
+<a name="line433">433: </a>    }
+<a name="line434">434: </a>    colmap = sell-&gt;colmap;
+<a name="line435">435: </a>    MatGetColumnIJ_SeqSELL_Color(A,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;A_ci,&amp;A_cj,&amp;spidxA,NULL);
+<a name="line436">436: </a>    MatGetColumnIJ_SeqSELL_Color(B,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;B_ci,&amp;B_cj,&amp;spidxB,NULL);
+
+<a name="line438">438: </a>    bs = 1; <font color="#B22222">/* only bs=1 is supported for non MPIBAIJ matrix */</font>
+
+<a name="line440">440: </a>    <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a> &amp;&amp; c-&gt;htype[0] == 'd') { <font color="#B22222">/* create vscale for storing dx */</font>
+<a name="line441">441: </a>      <a href="../../../../../docs/manualpages/Vec/VecCreateGhost.html#VecCreateGhost">VecCreateGhost</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat),mat-&gt;cmap-&gt;n,<a href="../../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>,B-&gt;cmap-&gt;n,sell-&gt;garray,&amp;c-&gt;vscale);
+<a name="line442">442: </a>      <a href="../../../../../docs/manualpages/Vec/VecPinToCPU.html#VecPinToCPU">VecPinToCPU</a>(c-&gt;vscale,<a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line443">443: </a>    }
+<a name="line444">444: </a>  } <font color="#4169E1">else</font> {
+<a name="line445">445: </a>    Mat_MPIAIJ *aij=(Mat_MPIAIJ*)mat-&gt;data;
+<a name="line446">446: </a>    Mat_SeqAIJ *spA,*spB;
+<a name="line447">447: </a>    A = aij-&gt;A;  spA = (Mat_SeqAIJ*)A-&gt;data; A_val = spA-&gt;a;
+<a name="line448">448: </a>    B = aij-&gt;B;  spB = (Mat_SeqAIJ*)B-&gt;data; B_val = spB-&gt;a;
+<a name="line449">449: </a>    nz = spA-&gt;nz + spB-&gt;nz; <font color="#B22222">/* total nonzero entries of mat */</font>
+<a name="line450">450: </a>    <font color="#4169E1">if</font> (!aij-&gt;colmap) {
+<a name="line451">451: </a>      <font color="#B22222">/* Allow access to data structures of local part of matrix</font>
+<a name="line452">452: </a><font color="#B22222">       - creates aij-&gt;colmap which maps global column number to local number in part B */</font>
+<a name="line453">453: </a>      MatCreateColmap_MPIAIJ_Private(mat);
+<a name="line454">454: </a>    }
+<a name="line455">455: </a>    colmap = aij-&gt;colmap;
+<a name="line456">456: </a>    MatGetColumnIJ_SeqAIJ_Color(A,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;A_ci,&amp;A_cj,&amp;spidxA,NULL);
+<a name="line457">457: </a>    MatGetColumnIJ_SeqAIJ_Color(B,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;B_ci,&amp;B_cj,&amp;spidxB,NULL);
+
+<a name="line459">459: </a>    bs = 1; <font color="#B22222">/* only bs=1 is supported for non MPIBAIJ matrix */</font>
+
+<a name="line461">461: </a>    <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a> &amp;&amp; c-&gt;htype[0] == 'd') { <font color="#B22222">/* create vscale for storing dx */</font>
+<a name="line462">462: </a>      <a href="../../../../../docs/manualpages/Vec/VecCreateGhost.html#VecCreateGhost">VecCreateGhost</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat),mat-&gt;cmap-&gt;n,<a href="../../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>,B-&gt;cmap-&gt;n,aij-&gt;garray,&amp;c-&gt;vscale);
+<a name="line463">463: </a>      <a href="../../../../../docs/manualpages/Vec/VecPinToCPU.html#VecPinToCPU">VecPinToCPU</a>(c-&gt;vscale,<a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line464">464: </a>    }
+<a name="line465">465: </a>  }
+
+<a name="line467">467: </a>  m      = mat-&gt;rmap-&gt;n/bs;
+<a name="line468">468: </a>  cstart = mat-&gt;cmap-&gt;rstart/bs;
+<a name="line469">469: </a>  cend   = mat-&gt;cmap-&gt;rend/bs;
+
+<a name="line471">471: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(nis,&amp;c-&gt;ncolumns,nis,&amp;c-&gt;columns);
+<a name="line472">472: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nis,&amp;c-&gt;nrows);
+<a name="line473">473: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)c,3*nis*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>));
+
+<a name="line475">475: </a>  <font color="#4169E1">if</font> (c-&gt;htype[0] == 'd') {
+<a name="line476">476: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nz,&amp;Jentry);
+<a name="line477">477: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)c,nz*<font color="#4169E1">sizeof</font>(MatEntry));
+<a name="line478">478: </a>    c-&gt;matentry = Jentry;
+<a name="line479">479: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (c-&gt;htype[0] == 'w') {
+<a name="line480">480: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nz,&amp;Jentry2);
+<a name="line481">481: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)c,nz*<font color="#4169E1">sizeof</font>(MatEntry2));
+<a name="line482">482: </a>    c-&gt;matentry2 = Jentry2;
+<a name="line483">483: </a>  } <font color="#4169E1">else</font> <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat),PETSC_ERR_SUP,<font color="#666666">"htype is not supported"</font>);
+
+<a name="line485">485: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(m+1,&amp;rowhit,m+1,&amp;valaddrhit);
+<a name="line486">486: </a>  nz   = 0;
+<a name="line487">487: </a>  <a href="../../../../../docs/manualpages/IS/ISColoringGetIS.html#ISColoringGetIS">ISColoringGetIS</a>(iscoloring,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>, <a href="../../../../../docs/manualpages/Sys/PETSC_IGNORE.html#PETSC_IGNORE">PETSC_IGNORE</a>,&amp;c-&gt;isa);
+
+<a name="line489">489: </a>  <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a>) {
+<a name="line490">490: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat),&amp;size);
+<a name="line491">491: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(size,&amp;ncolsonproc,size,&amp;disp);
+<a name="line492">492: </a>  }
+
+<a name="line494">494: </a>  <font color="#4169E1">for</font> (i=0; i&lt;nis; i++) { <font color="#B22222">/* for each local color */</font>
+<a name="line495">495: </a>    <a href="../../../../../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(c-&gt;isa[i],&amp;n);
+<a name="line496">496: </a>    <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(c-&gt;isa[i],&amp;is);
+
+<a name="line498">498: </a>    c-&gt;ncolumns[i] = n; <font color="#B22222">/* local number of columns of this color on this process */</font>
+<a name="line499">499: </a>    c-&gt;columns[i]  = (<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*)is;
+
+<a name="line501">501: </a>    <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a>) {
+<a name="line502">502: </a>      <font color="#B22222">/* Determine nctot, the total (parallel) number of columns of this color */</font>
+<a name="line503">503: </a>      <font color="#B22222">/* ncolsonproc[j]: local ncolumns on proc[j] of this color */</font>
+<a name="line504">504: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMPIIntCast.html#PetscMPIIntCast">PetscMPIIntCast</a>(n,&amp;nn);
+<a name="line505">505: </a>      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Allgather.html#MPI_Allgather">MPI_Allgather</a>(&amp;nn,1,MPI_INT,ncolsonproc,1,MPI_INT,<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat));
+<a name="line506">506: </a>      nctot = 0; <font color="#4169E1">for</font> (j=0; j&lt;size; j++) nctot += ncolsonproc[j];
+<a name="line507">507: </a>      <font color="#4169E1">if</font> (!nctot) {
+<a name="line508">508: </a>        <a href="../../../../../docs/manualpages/Profiling/PetscInfo.html#PetscInfo">PetscInfo</a>(mat,<font color="#666666">"Coloring of matrix has some unneeded colors with no corresponding rows\n"</font>);
+<a name="line509">509: </a>      }
+
+<a name="line511">511: </a>      disp[0] = 0;
+<a name="line512">512: </a>      <font color="#4169E1">for</font> (j=1; j&lt;size; j++) {
+<a name="line513">513: </a>        disp[j] = disp[j-1] + ncolsonproc[j-1];
+<a name="line514">514: </a>      }
+
+<a name="line516">516: </a>      <font color="#B22222">/* Get cols, the complete list of columns for this color on each process */</font>
+<a name="line517">517: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nctot+1,&amp;cols);
+<a name="line518">518: </a>      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Allgatherv.html#MPI_Allgatherv">MPI_Allgatherv</a>((void*)is,n,<a href="../../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,cols,ncolsonproc,disp,<a href="../../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat));
+<a name="line519">519: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_LOCAL</a>) {
+<a name="line520">520: </a>      <font color="#B22222">/* Determine local number of columns of this color on this process, including ghost points */</font>
+<a name="line521">521: </a>      nctot = n;
+<a name="line522">522: </a>      cols  = (<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*)is;
+<a name="line523">523: </a>    } <font color="#4169E1">else</font> <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Not provided for this <a href="../../../../../docs/manualpages/Mat/MatFDColoring.html#MatFDColoring">MatFDColoring</a> type"</font>);
+
+<a name="line525">525: </a>    <font color="#B22222">/* Mark all rows affect by these columns */</font>
+<a name="line526">526: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(rowhit,m);
+<a name="line527">527: </a>    bs2     = bs*bs;
+<a name="line528">528: </a>    nrows_i = 0;
+<a name="line529">529: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nctot; j++) { <font color="#B22222">/* loop over columns*/</font>
+<a name="line530">530: </a>      <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_LOCAL</a>) {
+<a name="line531">531: </a>        col = ltog[cols[j]];
+<a name="line532">532: </a>      } <font color="#4169E1">else</font> {
+<a name="line533">533: </a>        col = cols[j];
+<a name="line534">534: </a>      }
+<a name="line535">535: </a>      <font color="#4169E1">if</font> (col &gt;= cstart &amp;&amp; col &lt; cend) { <font color="#B22222">/* column is in A, diagonal block of mat */</font>
+<a name="line536">536: </a>        tmp      = A_ci[col-cstart];
+<a name="line537">537: </a>        row      = A_cj + tmp;
+<a name="line538">538: </a>        nrows    = A_ci[col-cstart+1] - tmp;
+<a name="line539">539: </a>        nrows_i += nrows;
+
+<a name="line541">541: </a>        <font color="#B22222">/* loop over columns of A marking them in rowhit */</font>
+<a name="line542">542: </a>        <font color="#4169E1">for</font> (k=0; k&lt;nrows; k++) {
+<a name="line543">543: </a>          <font color="#B22222">/* set valaddrhit for part A */</font>
+<a name="line544">544: </a>          spidx            = bs2*spidxA[tmp + k];
+<a name="line545">545: </a>          valaddrhit[*row] = &amp;A_val[spidx];
+<a name="line546">546: </a>          rowhit[*row++]   = col - cstart + 1; <font color="#B22222">/* local column index */</font>
+<a name="line547">547: </a>        }
+<a name="line548">548: </a>      } <font color="#4169E1">else</font> { <font color="#B22222">/* column is in B, off-diagonal block of mat */</font>
+<a name="line549">549: </a><font color="#A020F0">#if defined(PETSC_USE_CTABLE)</font>
+<a name="line550">550: </a>        PetscTableFind(colmap,col+1,&amp;colb);
+<a name="line551">551: </a>        colb--;
+<a name="line552">552: </a><font color="#A020F0">#else</font>
+<a name="line553">553: </a>        colb = colmap[col] - 1; <font color="#B22222">/* local column index */</font>
+<a name="line554">554: </a><font color="#A020F0">#endif</font>
+<a name="line555">555: </a>        <font color="#4169E1">if</font> (colb == -1) {
+<a name="line556">556: </a>          nrows = 0;
+<a name="line557">557: </a>        } <font color="#4169E1">else</font> {
+<a name="line558">558: </a>          colb  = colb/bs;
+<a name="line559">559: </a>          tmp   = B_ci[colb];
+<a name="line560">560: </a>          row   = B_cj + tmp;
+<a name="line561">561: </a>          nrows = B_ci[colb+1] - tmp;
+<a name="line562">562: </a>        }
+<a name="line563">563: </a>        nrows_i += nrows;
+<a name="line564">564: </a>        <font color="#B22222">/* loop over columns of B marking them in rowhit */</font>
+<a name="line565">565: </a>        <font color="#4169E1">for</font> (k=0; k&lt;nrows; k++) {
+<a name="line566">566: </a>          <font color="#B22222">/* set valaddrhit for part B */</font>
+<a name="line567">567: </a>          spidx            = bs2*spidxB[tmp + k];
+<a name="line568">568: </a>          valaddrhit[*row] = &amp;B_val[spidx];
+<a name="line569">569: </a>          rowhit[*row++]   = colb + 1 + cend - cstart; <font color="#B22222">/* local column index */</font>
+<a name="line570">570: </a>        }
+<a name="line571">571: </a>      }
+<a name="line572">572: </a>    }
+<a name="line573">573: </a>    c-&gt;nrows[i] = nrows_i;
+
+<a name="line575">575: </a>    <font color="#4169E1">if</font> (c-&gt;htype[0] == 'd') {
+<a name="line576">576: </a>      <font color="#4169E1">for</font> (j=0; j&lt;m; j++) {
+<a name="line577">577: </a>        <font color="#4169E1">if</font> (rowhit[j]) {
+<a name="line578">578: </a>          Jentry[nz].row     = j;              <font color="#B22222">/* local row index */</font>
+<a name="line579">579: </a>          Jentry[nz].col     = rowhit[j] - 1;  <font color="#B22222">/* local column index */</font>
+<a name="line580">580: </a>          Jentry[nz].valaddr = valaddrhit[j];  <font color="#B22222">/* address of mat value for this entry */</font>
+<a name="line581">581: </a>          nz++;
+<a name="line582">582: </a>        }
+<a name="line583">583: </a>      }
+<a name="line584">584: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* c-&gt;htype == 'wp' */</font>
+<a name="line585">585: </a>      <font color="#4169E1">for</font> (j=0; j&lt;m; j++) {
+<a name="line586">586: </a>        <font color="#4169E1">if</font> (rowhit[j]) {
+<a name="line587">587: </a>          Jentry2[nz].row     = j;              <font color="#B22222">/* local row index */</font>
+<a name="line588">588: </a>          Jentry2[nz].valaddr = valaddrhit[j];  <font color="#B22222">/* address of mat value for this entry */</font>
+<a name="line589">589: </a>          nz++;
+<a name="line590">590: </a>        }
+<a name="line591">591: </a>      }
+<a name="line592">592: </a>    }
+<a name="line593">593: </a>    <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a>) {
+<a name="line594">594: </a>      <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(cols);
+<a name="line595">595: </a>    }
+<a name="line596">596: </a>  }
+<a name="line597">597: </a>  <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_GLOBAL</a>) {
+<a name="line598">598: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(ncolsonproc,disp);
+<a name="line599">599: </a>  }
+
+<a name="line601">601: </a>  <font color="#4169E1">if</font> (bcols &gt; 1) { <font color="#B22222">/* reorder Jentry for faster <a href="../../../../../docs/manualpages/MatFD/MatFDColoringApply.html#MatFDColoringApply">MatFDColoringApply</a>() */</font>
+<a name="line602">602: </a>    MatFDColoringSetUpBlocked_AIJ_Private(mat,c,nz);
+<a name="line603">603: </a>  }
+
+<a name="line605">605: </a>  <font color="#4169E1">if</font> (isBAIJ) {
+<a name="line606">606: </a>    MatRestoreColumnIJ_SeqBAIJ_Color(A,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;A_ci,&amp;A_cj,&amp;spidxA,NULL);
+<a name="line607">607: </a>    MatRestoreColumnIJ_SeqBAIJ_Color(B,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;B_ci,&amp;B_cj,&amp;spidxB,NULL);
+<a name="line608">608: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(bs*mat-&gt;rmap-&gt;n,&amp;c-&gt;dy);
+<a name="line609">609: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isSELL) {
+<a name="line610">610: </a>    MatRestoreColumnIJ_SeqSELL_Color(A,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;A_ci,&amp;A_cj,&amp;spidxA,NULL);
+<a name="line611">611: </a>    MatRestoreColumnIJ_SeqSELL_Color(B,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;B_ci,&amp;B_cj,&amp;spidxB,NULL);
+<a name="line612">612: </a>  } <font color="#4169E1">else</font> {
+<a name="line613">613: </a>    MatRestoreColumnIJ_SeqAIJ_Color(A,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;A_ci,&amp;A_cj,&amp;spidxA,NULL);
+<a name="line614">614: </a>    MatRestoreColumnIJ_SeqAIJ_Color(B,0,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;ncols,&amp;B_ci,&amp;B_cj,&amp;spidxB,NULL);
+<a name="line615">615: </a>  }
+
+<a name="line617">617: </a>  <a href="../../../../../docs/manualpages/IS/ISColoringRestoreIS.html#ISColoringRestoreIS">ISColoringRestoreIS</a>(iscoloring,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>,&amp;c-&gt;isa);
+<a name="line618">618: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(rowhit,valaddrhit);
+
+<a name="line620">620: </a>  <font color="#4169E1">if</font> (ctype == <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_LOCAL</a>) {
+<a name="line621">621: </a>    <a href="../../../../../docs/manualpages/IS/ISLocalToGlobalMappingRestoreIndices.html#ISLocalToGlobalMappingRestoreIndices">ISLocalToGlobalMappingRestoreIndices</a>(map,&amp;ltog);
+<a name="line622">622: </a>  }
+<a name="line623">623: </a>  PetscInfo3(c,<font color="#666666">"ncolors %D, brows %D and bcols %D are used.\n"</font>,c-&gt;ncolors,c-&gt;brows,c-&gt;bcols);
+<a name="line624">624: </a>  <font color="#4169E1">return</font>(0);
+<a name="line625">625: </a>}
+
+<a name="line627">627: </a><strong><font color="#4169E1"><a name="MatFDColoringCreate_MPIXAIJ"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatFDColoringCreate_MPIXAIJ(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> mat,<a href="../../../../../docs/manualpages/IS/ISColoring.html#ISColoring">ISColoring</a> iscoloring,<a href="../../../../../docs/manualpages/Mat/MatFDColoring.html#MatFDColoring">MatFDColoring</a> c)</font></strong>
+<a name="line628">628: </a>{
+<a name="line630">630: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       bs,nis=iscoloring-&gt;n,m=mat-&gt;rmap-&gt;n;
+<a name="line631">631: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      isBAIJ,isSELL;
+
+<a name="line634">634: </a>  <font color="#B22222">/* set default brows and bcols for speedup inserting the dense matrix into sparse Jacobian;</font>
+<a name="line635">635: </a><font color="#B22222">   bcols is chosen s.t. dy-array takes 50% of memory space as mat */</font>
+<a name="line636">636: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetBlockSize.html#MatGetBlockSize">MatGetBlockSize</a>(mat,&amp;bs);
+<a name="line637">637: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectBaseTypeCompare.html#PetscObjectBaseTypeCompare">PetscObjectBaseTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat,<a href="../../../../../docs/manualpages/Mat/MATMPIBAIJ.html#MATMPIBAIJ">MATMPIBAIJ</a>,&amp;isBAIJ);
+<a name="line638">638: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat,<a href="../../../../../docs/manualpages/Mat/MATMPISELL.html#MATMPISELL">MATMPISELL</a>,&amp;isSELL);
+<a name="line639">639: </a>  <font color="#4169E1">if</font> (isBAIJ || m == 0) {
+<a name="line640">640: </a>    c-&gt;brows = m;
+<a name="line641">641: </a>    c-&gt;bcols = 1;
+<a name="line642">642: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isSELL) {
+<a name="line643">643: </a>    <font color="#B22222">/* bcols is chosen s.t. dy-array takes 50% of local memory space as mat */</font>
+<a name="line644">644: </a>    Mat_MPISELL *sell=(Mat_MPISELL*)mat-&gt;data;
+<a name="line645">645: </a>    Mat_SeqSELL *spA,*spB;
+<a name="line646">646: </a>    <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>        A,B;
+<a name="line647">647: </a>    <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   nz,brows,bcols;
+<a name="line648">648: </a>    <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>  mem;
+
+<a name="line650">650: </a>    bs    = 1; <font color="#B22222">/* only bs=1 is supported for MPISELL matrix */</font>
+
+<a name="line652">652: </a>    A = sell-&gt;A;  spA = (Mat_SeqSELL*)A-&gt;data;
+<a name="line653">653: </a>    B = sell-&gt;B;  spB = (Mat_SeqSELL*)B-&gt;data;
+<a name="line654">654: </a>    nz = spA-&gt;nz + spB-&gt;nz; <font color="#B22222">/* total local nonzero entries of mat */</font>
+<a name="line655">655: </a>    mem = nz*(<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) + <font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)) + 3*m*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>);
+<a name="line656">656: </a>    bcols = (<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)(0.5*mem /(m*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)));
+<a name="line657">657: </a>    brows = 1000/bcols;
+<a name="line658">658: </a>    <font color="#4169E1">if</font> (bcols &gt; nis) bcols = nis;
+<a name="line659">659: </a>    <font color="#4169E1">if</font> (brows == 0 || brows &gt; m) brows = m;
+<a name="line660">660: </a>    c-&gt;brows = brows;
+<a name="line661">661: </a>    c-&gt;bcols = bcols;
+<a name="line662">662: </a>  } <font color="#4169E1">else</font> { <font color="#B22222">/* mpiaij matrix */</font>
+<a name="line663">663: </a>    <font color="#B22222">/* bcols is chosen s.t. dy-array takes 50% of local memory space as mat */</font>
+<a name="line664">664: </a>    Mat_MPIAIJ *aij=(Mat_MPIAIJ*)mat-&gt;data;
+<a name="line665">665: </a>    Mat_SeqAIJ *spA,*spB;
+<a name="line666">666: </a>    <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>        A,B;
+<a name="line667">667: </a>    <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   nz,brows,bcols;
+<a name="line668">668: </a>    <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>  mem;
+
+<a name="line670">670: </a>    bs    = 1; <font color="#B22222">/* only bs=1 is supported for MPIAIJ matrix */</font>
+
+<a name="line672">672: </a>    A = aij-&gt;A;  spA = (Mat_SeqAIJ*)A-&gt;data;
+<a name="line673">673: </a>    B = aij-&gt;B;  spB = (Mat_SeqAIJ*)B-&gt;data;
+<a name="line674">674: </a>    nz = spA-&gt;nz + spB-&gt;nz; <font color="#B22222">/* total local nonzero entries of mat */</font>
+<a name="line675">675: </a>    mem = nz*(<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) + <font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)) + 3*m*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>);
+<a name="line676">676: </a>    bcols = (<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)(0.5*mem /(m*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)));
+<a name="line677">677: </a>    brows = 1000/bcols;
+<a name="line678">678: </a>    <font color="#4169E1">if</font> (bcols &gt; nis) bcols = nis;
+<a name="line679">679: </a>    <font color="#4169E1">if</font> (brows == 0 || brows &gt; m) brows = m;
+<a name="line680">680: </a>    c-&gt;brows = brows;
+<a name="line681">681: </a>    c-&gt;bcols = bcols;
+<a name="line682">682: </a>  }
+
+<a name="line684">684: </a>  c-&gt;M       = mat-&gt;rmap-&gt;N/bs;         <font color="#B22222">/* set the global rows and columns and local rows */</font>
+<a name="line685">685: </a>  c-&gt;N       = mat-&gt;cmap-&gt;N/bs;
+<a name="line686">686: </a>  c-&gt;m       = mat-&gt;rmap-&gt;n/bs;
+<a name="line687">687: </a>  c-&gt;rstart  = mat-&gt;rmap-&gt;rstart/bs;
+<a name="line688">688: </a>  c-&gt;ncolors = nis;
+<a name="line689">689: </a>  <font color="#4169E1">return</font>(0);
+<a name="line690">690: </a>}
+
+<a name="line692">692: </a><font color="#B22222">/*@C</font>
+
+<a name="line694">694: </a><font color="#B22222">    <a href="../../../../../docs/manualpages/Mat/MatFDColoringSetValues.html#MatFDColoringSetValues">MatFDColoringSetValues</a> - takes a matrix in compressed color format and enters the matrix into a PETSc <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a></font>
+
+<a name="line696">696: </a><font color="#B22222">   Collective on J</font>
+
+<a name="line698">698: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line699">699: </a><font color="#B22222">+    J - the sparse matrix</font>
+<a name="line700">700: </a><font color="#B22222">.    coloring - created with <a href="../../../../../docs/manualpages/MatFD/MatFDColoringCreate.html#MatFDColoringCreate">MatFDColoringCreate</a>() and a local coloring</font>
+<a name="line701">701: </a><font color="#B22222">-    y - column major storage of matrix values with one color of values per column, the number of rows of y should match</font>
+<a name="line702">702: </a><font color="#B22222">         the number of local rows of J and the number of columns is the number of colors.</font>
+
+<a name="line704">704: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line706">706: </a><font color="#B22222">   Notes: the matrix in compressed color format may come from an AD code</font>
+
+<a name="line708">708: </a><font color="#B22222">   The code will be slightly faster if <a href="../../../../../docs/manualpages/MatFD/MatFDColoringSetBlockSize.html#MatFDColoringSetBlockSize">MatFDColoringSetBlockSize</a>(coloring,<a href="../../../../../docs/manualpages/Sys/PETSC_DEFAULT.html#PETSC_DEFAULT">PETSC_DEFAULT</a>,nc); is called immediately after creating the coloring</font>
+
+<a name="line710">710: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/MatFD/MatFDColoringCreate.html#MatFDColoringCreate">MatFDColoringCreate</a>(), <a href="../../../../../docs/manualpages/IS/ISColoring.html#ISColoring">ISColoring</a>, <a href="../../../../../docs/manualpages/IS/ISColoringCreate.html#ISColoringCreate">ISColoringCreate</a>(), <a href="../../../../../docs/manualpages/IS/ISColoringSetType.html#ISColoringSetType">ISColoringSetType</a>(), <a href="../../../../../docs/manualpages/IS/ISColoringType.html#ISColoringType">IS_COLORING_LOCAL</a>, <a href="../../../../../docs/manualpages/MatFD/MatFDColoringSetBlockSize.html#MatFDColoringSetBlockSize">MatFDColoringSetBlockSize</a>()</font>
+
+<a name="line712">712: </a><font color="#B22222">@*/</font>
+<a name="line713">713: </a><strong><font color="#4169E1"><a name="MatFDColoringSetValues"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../../docs/manualpages/Mat/MatFDColoringSetValues.html#MatFDColoringSetValues">MatFDColoringSetValues</a>(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> J,<a href="../../../../../docs/manualpages/Mat/MatFDColoring.html#MatFDColoring">MatFDColoring</a> coloring,const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *y)</font></strong>
+<a name="line714">714: </a>{
+<a name="line715">715: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line716">716: </a>  MatEntry2         *Jentry2;
+<a name="line717">717: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          row,i,nrows_k,l,ncolors,nz = 0,bcols,nbcols = 0;
+<a name="line718">718: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *nrows;
+<a name="line719">719: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         eq;
+
+<a name="line724">724: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectCompareId.html#PetscObjectCompareId">PetscObjectCompareId</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)J,coloring-&gt;matid,&amp;eq);
+<a name="line725">725: </a>  <font color="#4169E1">if</font> (!eq) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)J),PETSC_ERR_ARG_WRONG,<font color="#666666">"Matrix used with <a href="../../../../../docs/manualpages/Mat/MatFDColoringSetValues.html#MatFDColoringSetValues">MatFDColoringSetValues</a>() must be that used with <a href="../../../../../docs/manualpages/MatFD/MatFDColoringCreate.html#MatFDColoringCreate">MatFDColoringCreate</a>()"</font>);
+<a name="line726">726: </a>  Jentry2 = coloring-&gt;matentry2;
+<a name="line727">727: </a>  nrows   = coloring-&gt;nrows;
+<a name="line728">728: </a>  ncolors = coloring-&gt;ncolors;
+<a name="line729">729: </a>  bcols   = coloring-&gt;bcols;
+
+<a name="line731">731: </a>  <font color="#4169E1">for</font> (i=0; i&lt;ncolors; i+=bcols) {
+<a name="line732">732: </a>    nrows_k = nrows[nbcols++];
+<a name="line733">733: </a>    <font color="#4169E1">for</font> (l=0; l&lt;nrows_k; l++) {
+<a name="line734">734: </a>      row                      = Jentry2[nz].row;   <font color="#B22222">/* local row index */</font>
+<a name="line735">735: </a>      *(Jentry2[nz++].valaddr) = y[row];
+<a name="line736">736: </a>    }
+<a name="line737">737: </a>    y += bcols*coloring-&gt;m;
+<a name="line738">738: </a>  }
+<a name="line739">739: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(J,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line740">740: </a>  <a href="../../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(J,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line741">741: </a>  <font color="#4169E1">return</font>(0);
+<a name="line742">742: </a>}
+</pre>
+</body>
+
+</html>

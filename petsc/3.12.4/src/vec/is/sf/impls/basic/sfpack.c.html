@@ -1,0 +1,937 @@
+<center><a href="sfpack.c">Actual source code: sfpack.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/vec/is/sf/impls/basic/sfpack.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:37:54+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/vec/is/sf/impls/basic/sfpack.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a> #include <A href="../../../../../../include/../src/vec/is/sf/impls/basic/sfpack.h.html">&lt;../src/vec/is/sf/impls/basic/sfpack.h&gt;</A>
+<a name="line3">  3: </a> #include <A href="../../../../../../include/../src/vec/is/sf/impls/basic/sfbasic.h.html">&lt;../src/vec/is/sf/impls/basic/sfbasic.h&gt;</A>
+
+<a name="line5">  5: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line6">  6: </a><font color="#A020F0">#include &lt;cuda_runtime.h&gt;</font>
+<a name="line7">  7: </a><font color="#A020F0">#endif</font>
+<a name="line8">  8: </a><font color="#B22222">/*</font>
+<a name="line9">  9: </a><font color="#B22222"> * <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Reduce_local.html#MPI_Reduce_local">MPI_Reduce_local</a> is not really useful because it can't handle sparse data and it vectorizes "in the wrong direction",</font>
+<a name="line10"> 10: </a><font color="#B22222"> * therefore we pack data types manually. This file defines packing routines for the standard data types.</font>
+<a name="line11"> 11: </a><font color="#B22222"> */</font>
+
+<a name="line13"> 13: </a><strong><font color="#228B22">#define CPPJoin2(a,b)         a ##_## b</font></strong>
+<a name="line14"> 14: </a><strong><font color="#228B22">#define CPPJoin3(a,b,c)       a ##_## b ##_## c</font></strong>
+<a name="line15"> 15: </a><strong><font color="#228B22">#define CPPJoin4_(a,b,c,d)    a##b##_##c##_##d</font></strong>
+<a name="line16"> 16: </a><strong><font color="#228B22">#define CPPJoin4(a,b,c,d)     CPPJoin4_(a##_,b,c,d)</font></strong>
+
+<a name="line18"> 18: </a><strong><font color="#228B22">#define EXECUTE(statement)    statement </font><font color="#B22222">/* no braces since the statement might declare a variable; braces impose an unwanted scope */</font><font color="#228B22"></font></strong>
+<a name="line19"> 19: </a><strong><font color="#228B22">#define IGNORE(statement)     do {} while(0)</font></strong>
+
+<a name="line21"> 21: </a><strong><font color="#228B22">#define BINARY_OP(r,s,op,t)   do {(r) = (s) op (t);  } while(0)      </font><font color="#B22222">/* binary ops in the middle such as +, *, &amp;&amp; etc. */</font><font color="#228B22"></font></strong>
+<a name="line22"> 22: </a><strong><font color="#228B22">#define FUNCTION_OP(r,s,op,t) do {(r) = op((s),(t)); } while(0)      </font><font color="#B22222">/* ops like a function, such as <a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>, <a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a> */</font><font color="#228B22"></font></strong>
+<a name="line23"> 23: </a><strong><font color="#228B22">#define LXOR_OP(r,s,op,t)     do {(r) = (!(s)) != (!(t));} while(0)  </font><font color="#B22222">/* logical exclusive OR */</font><font color="#228B22"></font></strong>
+<a name="line24"> 24: </a><strong><font color="#228B22">#define PAIRTYPE_OP(r,s,op,t) do {(r).a = (s).a op (t).a; (r).b = (s).b op (t).b;} while(0)</font></strong>
+
+<a name="line26"> 26: </a><strong><font color="#228B22">#define PairType(Type1,Type2) Type1##_##Type2 </font><font color="#B22222">/* typename for struct {Type1 a; Type2 b;} */</font><font color="#228B22"></font></strong>
+
+<a name="line28"> 28: </a><font color="#B22222">/* DEF_PackFunc - macro defining a Pack routine</font>
+
+<a name="line30"> 30: </a><font color="#B22222">   Arguments of the macro:</font>
+<a name="line31"> 31: </a><font color="#B22222">   +Type      Type of the basic data in an entry, i.e., int, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>, <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> etc. It is not the type of an entry.</font>
+<a name="line32"> 32: </a><font color="#B22222">   .BS        Block size for vectorization. It is a factor of bs.</font>
+<a name="line33"> 33: </a><font color="#B22222">   -EQ        (bs == BS) ? 1 : 0. EQ is a compile-time const to help compiler optimizations. See below.</font>
+
+<a name="line35"> 35: </a><font color="#B22222">   Arguments of the Pack routine:</font>
+<a name="line36"> 36: </a><font color="#B22222">   +count     Number of indices in idx[]</font>
+<a name="line37"> 37: </a><font color="#B22222">   .idx       Indices of entries to packed. NULL means contiguous indices, that is [0,count)</font>
+<a name="line38"> 38: </a><font color="#B22222">   .link      Provide a context for the current call, such as link-&gt;bs, number of basic types in an entry. Ex. if unit is MPI_2INT, then bs=2 and the basic type is int.</font>
+<a name="line39"> 39: </a><font color="#B22222">   .opt       Pack optimization plans. NULL means no plan at all.</font>
+<a name="line40"> 40: </a><font color="#B22222">   .unpacked  Address of the unpacked data. The entries will be packed are unpacked[idx[i]],for i in [0,count)</font>
+<a name="line41"> 41: </a><font color="#B22222">   -packed    Address of the packed data for each rank</font>
+<a name="line42"> 42: </a><font color="#B22222"> */</font>
+<a name="line43"> 43: </a><strong><font color="#228B22">#define DEF_PackFunc(Type,BS,EQ) \</font></strong>
+<a name="line44"> 44: </a><strong><font color="#228B22">  static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> CPPJoin4(Pack,Type,BS,EQ)(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> count,const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *idx,PetscSFPack link,PetscSFPackOpt opt,const void *unpacked,void *packed) \</font></strong>
+<a name="line45"> 45: </a><strong><font color="#228B22">  {                                                                                                          \</font></strong>
+<a name="line47"> 47: </a><strong><font color="#228B22">    const Type     *u = (const Type*)unpacked,*u2;                                                           \</font></strong>
+<a name="line48"> 48: </a><strong><font color="#228B22">    Type           *p = (Type*)packed,*p2;                                                                   \</font></strong>
+<a name="line49"> 49: </a><strong><font color="#228B22">    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,k,l,r,step,bs=link-&gt;bs;                                                               \</font></strong>
+<a name="line50"> 50: </a><strong><font color="#228B22">    const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *idx2,M = (EQ) ? 1 : bs/BS; </font><font color="#B22222">/* If EQ, then M=1 enables compiler's const-propagation */</font><font color="#228B22">    \</font></strong>
+<a name="line51"> 51: </a><strong><font color="#228B22">    const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> MBS = M*BS; </font><font color="#B22222">/* MBS=bs. We turn MBS into a compile time const when EQ=1. */</font><font color="#228B22">                \</font></strong>
+<a name="line53"> 53: </a><strong><font color="#228B22">    if (!idx) {<a href="../../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(p,u,MBS*count);}  </font><font color="#B22222">/* Indices are contiguous */</font><font color="#228B22">             \</font></strong>
+<a name="line54"> 54: </a><strong><font color="#228B22">    else if (!opt) { </font><font color="#B22222">/* No optimizations available */</font><font color="#228B22">                                                        \</font></strong>
+<a name="line55"> 55: </a><strong><font color="#228B22">      for (i=0; i&lt;count; i++)                                                                                \</font></strong>
+<a name="line56"> 56: </a><strong><font color="#228B22">        for (j=0; j&lt;M; j++)     </font><font color="#B22222">/* Decent compilers should eliminate this loop when M = const 1 */</font><font color="#228B22">           \</font></strong>
+<a name="line57"> 57: </a><strong><font color="#228B22">          for (k=0; k&lt;BS; k++)  </font><font color="#B22222">/* Compiler either unrolls (BS=1) or vectorizes (BS=2,4,8,etc) this loop */</font><font color="#228B22">  \</font></strong>
+<a name="line58"> 58: </a><strong><font color="#228B22">            p[i*MBS+j*BS+k] = u[idx[i]*MBS+j*BS+k];                                                          \</font></strong>
+<a name="line59"> 59: </a><strong><font color="#228B22">    } else {                                                                                                 \</font></strong>
+<a name="line60"> 60: </a><strong><font color="#228B22">      for (r=0; r&lt;opt-&gt;n; r++) {                                                                             \</font></strong>
+<a name="line61"> 61: </a><strong><font color="#228B22">        p2  = p + opt-&gt;offset[r]*MBS;                                                                        \</font></strong>
+<a name="line62"> 62: </a><strong><font color="#228B22">        if (opt-&gt;type[r] == PETSCSF_PACKOPT_NONE) {                                                          \</font></strong>
+<a name="line63"> 63: </a><strong><font color="#228B22">          idx2 = idx + opt-&gt;offset[r];                                                                       \</font></strong>
+<a name="line64"> 64: </a><strong><font color="#228B22">          for (i=0; i&lt;opt-&gt;offset[r+1]-opt-&gt;offset[r]; i++)                                                  \</font></strong>
+<a name="line65"> 65: </a><strong><font color="#228B22">            for (j=0; j&lt;M; j++)                                                                              \</font></strong>
+<a name="line66"> 66: </a><strong><font color="#228B22">              for (k=0; k&lt;BS; k++)                                                                           \</font></strong>
+<a name="line67"> 67: </a><strong><font color="#228B22">                p2[i*MBS+j*BS+k] = u[idx2[i]*MBS+j*BS+k];                                                    \</font></strong>
+<a name="line68"> 68: </a><strong><font color="#228B22">        } else if (opt-&gt;type[r] == PETSCSF_PACKOPT_MULTICOPY) {                                              \</font></strong>
+<a name="line69"> 69: </a><strong><font color="#228B22">          for (i=opt-&gt;copy_offset[r]; i&lt;opt-&gt;copy_offset[r+1]; i++) {                                        \</font></strong>
+<a name="line70"> 70: </a><strong><font color="#228B22">            u2   = u + idx[opt-&gt;copy_start[i]]*MBS;                                                          \</font></strong>
+<a name="line71"> 71: </a><strong><font color="#228B22">            l    = opt-&gt;copy_length[i]*MBS; </font><font color="#B22222">/* length in basic type such as MPI_INT */</font><font color="#228B22">                       \</font></strong>
+<a name="line72"> 72: </a><strong><font color="#228B22">            <a href="../../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(p2,u2,l);                                                     \</font></strong>
+<a name="line73"> 73: </a><strong><font color="#228B22">            p2  += l;                                                                                        \</font></strong>
+<a name="line74"> 74: </a><strong><font color="#228B22">          }                                                                                                  \</font></strong>
+<a name="line75"> 75: </a><strong><font color="#228B22">        } else if (opt-&gt;type[r] == PETSCSF_PACKOPT_STRIDE) {                                                 \</font></strong>
+<a name="line76"> 76: </a><strong><font color="#228B22">          u2   = u + idx[opt-&gt;offset[r]]*MBS;                                                                \</font></strong>
+<a name="line77"> 77: </a><strong><font color="#228B22">          step = opt-&gt;stride_step[r];                                                                        \</font></strong>
+<a name="line78"> 78: </a><strong><font color="#228B22">          for (i=0; i&lt;opt-&gt;stride_n[r]; i++)                                                                 \</font></strong>
+<a name="line79"> 79: </a><strong><font color="#228B22">            for (j=0; j&lt;MBS; j++) p2[i*MBS+j] = u2[i*step*MBS+j];                                            \</font></strong>
+<a name="line80"> 80: </a><strong><font color="#228B22">        } else <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_PLIB,</font><font color="#666666">"Unknown SFPack optimzation type %D"</font><font color="#228B22">,opt-&gt;type[r]);   \</font></strong>
+<a name="line81"> 81: </a><strong><font color="#228B22">      }                                                                                                      \</font></strong>
+<a name="line82"> 82: </a><strong><font color="#228B22">    }                                                                                                        \</font></strong>
+<a name="line83"> 83: </a><strong><font color="#228B22">    return(0);                                                                                  \</font></strong>
+<a name="line84"> 84: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line86"> 86: </a><font color="#B22222">/* DEF_Action - macro defining a Unpack(Fetch)AndInsert routine</font>
+
+<a name="line88"> 88: </a><font color="#B22222">   Arguments:</font>
+<a name="line89"> 89: </a><font color="#B22222">  +action     Unpack or Fetch</font>
+<a name="line90"> 90: </a><font color="#B22222">  .Type       Type of the data</font>
+<a name="line91"> 91: </a><font color="#B22222">  .BS         Block size for vectorization</font>
+<a name="line92"> 92: </a><font color="#B22222">  .EQ        (bs == BS) ? 1 : 0. EQ is a compile-time const.</font>
+<a name="line93"> 93: </a><font color="#B22222">  .FILTER     Macro defining what to do with a statement, either EXECUTE or IGNORE</font>
+<a name="line94"> 94: </a><font color="#B22222">  .CType      Type with or without the const qualifier, i.e., const Type or Type</font>
+<a name="line95"> 95: </a><font color="#B22222">  .Cvoid      void with or without the const qualifier, i.e., const void or void</font>
+
+<a name="line97"> 97: </a><font color="#B22222">  Notes:</font>
+<a name="line98"> 98: </a><font color="#B22222">   This macro is not combined with DEF_ActionAndOp because we want to use memcpy in this macro.</font>
+<a name="line99"> 99: </a><font color="#B22222">   The two arguments CType and Cvoid are used (instead of one constness argument), because we want to</font>
+<a name="line100">100: </a><font color="#B22222">   get rid of compilation warning "empty macro arguments are undefined in ISO C90". With one constness argument,</font>
+<a name="line101">101: </a><font color="#B22222">   sometimes we input 'const', sometimes we have to input empty.</font>
+
+<a name="line103">103: </a><font color="#B22222">   If action is Fetch, we may do Malloc/Free in the routine. It is costly but the expectation is that this case is really rare.</font>
+<a name="line104">104: </a><font color="#B22222"> */</font>
+<a name="line105">105: </a><strong><font color="#228B22">#define DEF_Action(action,Type,BS,EQ,FILTER,CType,Cvoid)               \</font></strong>
+<a name="line106">106: </a><strong><font color="#228B22">  static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> CPPJoin4(action##AndInsert,Type,BS,EQ)(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> count,const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *idx,PetscSFPack link,PetscSFPackOpt opt,void *unpacked,Cvoid *packed) \</font></strong>
+<a name="line107">107: </a><strong><font color="#228B22">  {                                                                                                          \</font></strong>
+<a name="line109">109: </a><strong><font color="#228B22">    Type           *u = (Type*)unpacked,*u2;                                                                 \</font></strong>
+<a name="line110">110: </a><strong><font color="#228B22">    CType          *p = (CType*)packed,*p2;                                                                  \</font></strong>
+<a name="line111">111: </a><strong><font color="#228B22">    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,k,l,r,step,bs=link-&gt;bs;                                                               \</font></strong>
+<a name="line112">112: </a><strong><font color="#228B22">    const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *idx2,M = (EQ) ? 1 : bs/BS; </font><font color="#B22222">/* If EQ, then M=1 enables compiler's const-propagation */</font><font color="#228B22">    \</font></strong>
+<a name="line113">113: </a><strong><font color="#228B22">    const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> MBS = M*BS; </font><font color="#B22222">/* MBS=bs. We turn MBS into a compile time const when EQ=1. */</font><font color="#228B22">                \</font></strong>
+<a name="line115">115: </a><strong><font color="#228B22">    if (!idx) {                                                                                              \</font></strong>
+<a name="line116">116: </a><strong><font color="#228B22">      FILTER(Type *v);                                                                                       \</font></strong>
+<a name="line117">117: </a><strong><font color="#228B22">      FILTER(<a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(count*MBS,&amp;v);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr));                                               \</font></strong>
+<a name="line118">118: </a><strong><font color="#228B22">      FILTER(<a href="../../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(v,u,count*MBS);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr));                                             \</font></strong>
+<a name="line119">119: </a><strong><font color="#228B22">             <a href="../../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(u,p,count*MBS);                                              \</font></strong>
+<a name="line120">120: </a><strong><font color="#228B22">      FILTER(<a href="../../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(p,v,count*MBS);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr));                                             \</font></strong>
+<a name="line121">121: </a><strong><font color="#228B22">      FILTER(<a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(v);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr));                                                             \</font></strong>
+<a name="line122">122: </a><strong><font color="#228B22">    } else if (!opt) { </font><font color="#B22222">/* No optimizations available */</font><font color="#228B22">                                                      \</font></strong>
+<a name="line123">123: </a><strong><font color="#228B22">      for (i=0; i&lt;count; i++)                                                                                \</font></strong>
+<a name="line124">124: </a><strong><font color="#228B22">        for (j=0; j&lt;M; j++)                                                                                  \</font></strong>
+<a name="line125">125: </a><strong><font color="#228B22">          for (k=0; k&lt;BS; k++) {                                                                             \</font></strong>
+<a name="line126">126: </a><strong><font color="#228B22">            FILTER(Type t                = u[idx[i]*MBS+j*BS+k]);                                            \</font></strong>
+<a name="line127">127: </a><strong><font color="#228B22">                   u[idx[i]*MBS+j*BS+k]  = p[i*MBS+j*BS+k];                                                  \</font></strong>
+<a name="line128">128: </a><strong><font color="#228B22">            FILTER(p[i*MBS+j*BS+k]       = t);                                                               \</font></strong>
+<a name="line129">129: </a><strong><font color="#228B22">          }                                                                                                  \</font></strong>
+<a name="line130">130: </a><strong><font color="#228B22">    } else {                                                                                                 \</font></strong>
+<a name="line131">131: </a><strong><font color="#228B22">      for (r=0; r&lt;opt-&gt;n; r++) {                                                                             \</font></strong>
+<a name="line132">132: </a><strong><font color="#228B22">        p2 = p + opt-&gt;offset[r]*MBS;                                                                         \</font></strong>
+<a name="line133">133: </a><strong><font color="#228B22">        if (opt-&gt;type[r] == PETSCSF_PACKOPT_NONE) {                                                          \</font></strong>
+<a name="line134">134: </a><strong><font color="#228B22">          idx2 = idx + opt-&gt;offset[r];                                                                       \</font></strong>
+<a name="line135">135: </a><strong><font color="#228B22">          for (i=0; i&lt;opt-&gt;offset[r+1]-opt-&gt;offset[r]; i++)                                                  \</font></strong>
+<a name="line136">136: </a><strong><font color="#228B22">            for (j=0; j&lt;M; j++)                                                                              \</font></strong>
+<a name="line137">137: </a><strong><font color="#228B22">              for (k=0; k&lt;BS; k++) {                                                                         \</font></strong>
+<a name="line138">138: </a><strong><font color="#228B22">                FILTER(Type t                = u[idx2[i]*MBS+j*BS+k]);                                       \</font></strong>
+<a name="line139">139: </a><strong><font color="#228B22">                       u[idx2[i]*MBS+j*BS+k] = p2[i*MBS+j*BS+k];                                             \</font></strong>
+<a name="line140">140: </a><strong><font color="#228B22">                FILTER(p2[i*MBS+j*BS+k]      = t);                                                           \</font></strong>
+<a name="line141">141: </a><strong><font color="#228B22">              }                                                                                              \</font></strong>
+<a name="line142">142: </a><strong><font color="#228B22">        } else if (opt-&gt;type[r] == PETSCSF_PACKOPT_MULTICOPY) {                                              \</font></strong>
+<a name="line143">143: </a><strong><font color="#228B22">          FILTER(Type *v);                                                                                   \</font></strong>
+<a name="line144">144: </a><strong><font color="#228B22">          FILTER(<a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>((opt-&gt;offset[r+1]-opt-&gt;offset[r])*MBS,&amp;v);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr)); </font><font color="#B22222">/* max buf */</font><font color="#228B22"> \</font></strong>
+<a name="line145">145: </a><strong><font color="#228B22">          for (i=opt-&gt;copy_offset[r]; i&lt;opt-&gt;copy_offset[r+1]; i++) { </font><font color="#B22222">/* i-th piece */</font><font color="#228B22">                       \</font></strong>
+<a name="line146">146: </a><strong><font color="#228B22">            u2 = u + idx[opt-&gt;copy_start[i]]*MBS;                                                            \</font></strong>
+<a name="line147">147: </a><strong><font color="#228B22">            l  = opt-&gt;copy_length[i]*MBS;                                                                    \</font></strong>
+<a name="line148">148: </a><strong><font color="#228B22">            FILTER(<a href="../../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(v,u2,l);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr));                                              \</font></strong>
+<a name="line149">149: </a><strong><font color="#228B22">                   <a href="../../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(u2,p2,l);                                              \</font></strong>
+<a name="line150">150: </a><strong><font color="#228B22">            FILTER(<a href="../../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(p2,v,l);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr));                                              \</font></strong>
+<a name="line151">151: </a><strong><font color="#228B22">            p2 += l;                                                                                         \</font></strong>
+<a name="line152">152: </a><strong><font color="#228B22">          }                                                                                                  \</font></strong>
+<a name="line153">153: </a><strong><font color="#228B22">          FILTER(<a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(v);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr));                                                         \</font></strong>
+<a name="line154">154: </a><strong><font color="#228B22">        } else if (opt-&gt;type[r] == PETSCSF_PACKOPT_STRIDE) {                                                 \</font></strong>
+<a name="line155">155: </a><strong><font color="#228B22">          u2   = u + idx[opt-&gt;offset[r]]*MBS;                                                                \</font></strong>
+<a name="line156">156: </a><strong><font color="#228B22">          step = opt-&gt;stride_step[r];                                                                        \</font></strong>
+<a name="line157">157: </a><strong><font color="#228B22">          for (i=0; i&lt;opt-&gt;stride_n[r]; i++)                                                                 \</font></strong>
+<a name="line158">158: </a><strong><font color="#228B22">            for (j=0; j&lt;M; j++)                                                                              \</font></strong>
+<a name="line159">159: </a><strong><font color="#228B22">              for (k=0; k&lt;BS; k++) {                                                                         \</font></strong>
+<a name="line160">160: </a><strong><font color="#228B22">                FILTER(Type t                = u2[i*step*MBS+j*BS+k]);                                       \</font></strong>
+<a name="line161">161: </a><strong><font color="#228B22">                       u2[i*step*MBS+j*BS+k] = p2[i*MBS+j*BS+k];                                             \</font></strong>
+<a name="line162">162: </a><strong><font color="#228B22">                FILTER(p2[i*MBS+j*BS+k]      = t);                                                           \</font></strong>
+<a name="line163">163: </a><strong><font color="#228B22">              }                                                                                              \</font></strong>
+<a name="line164">164: </a><strong><font color="#228B22">        } else <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_PLIB,</font><font color="#666666">"Unknown SFPack optimzation type %D"</font><font color="#228B22">,opt-&gt;type[r]);   \</font></strong>
+<a name="line165">165: </a><strong><font color="#228B22">      }                                                                                                      \</font></strong>
+<a name="line166">166: </a><strong><font color="#228B22">    }                                                                                                        \</font></strong>
+<a name="line167">167: </a><strong><font color="#228B22">    return(0);                                                                                  \</font></strong>
+<a name="line168">168: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line170">170: </a><font color="#B22222">/* DEF_ActionAndOp - macro defining a Unpack(Fetch)AndOp routine. Op can not be Insert, Maxloc or Minloc</font>
+
+<a name="line172">172: </a><font color="#B22222">   Arguments:</font>
+<a name="line173">173: </a><font color="#B22222">  +action     Unpack or Fetch</font>
+<a name="line174">174: </a><font color="#B22222">  .opname     Name of the Op, such as Add, Mult, LAND, etc.</font>
+<a name="line175">175: </a><font color="#B22222">  .Type       Type of the data</font>
+<a name="line176">176: </a><font color="#B22222">  .BS         Block size for vectorization</font>
+<a name="line177">177: </a><font color="#B22222">  .EQ         (bs == BS) ? 1 : 0. EQ is a compile-time const.</font>
+<a name="line178">178: </a><font color="#B22222">  .op         Operator for the op, such as +, *, &amp;&amp;, ||, <a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>, <a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>, etc.</font>
+<a name="line179">179: </a><font color="#B22222">  .APPLY      Macro defining application of the op. Could be BINARY_OP, FUNCTION_OP, LXOR_OP or PAIRTYPE_OP</font>
+<a name="line180">180: </a><font color="#B22222">  .FILTER     Macro defining what to do with a statement, either EXECUTE or IGNORE</font>
+<a name="line181">181: </a><font color="#B22222">  .CType      Type with or without the const qualifier, i.e., const Type or Type</font>
+<a name="line182">182: </a><font color="#B22222">  -Cvoid      void with or without the const qualifier, i.e., const void or void</font>
+<a name="line183">183: </a><font color="#B22222"> */</font>
+<a name="line184">184: </a><strong><font color="#228B22">#define DEF_ActionAndOp(action,opname,Type,BS,EQ,op,APPLY,FILTER,CType,Cvoid) \</font></strong>
+<a name="line185">185: </a><strong><font color="#228B22">  static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> CPPJoin4(action##And##opname,Type,BS,EQ)(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> count,const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *idx,PetscSFPack link,PetscSFPackOpt opt,void *unpacked,Cvoid *packed) \</font></strong>
+<a name="line186">186: </a><strong><font color="#228B22">  {                                                                                                          \</font></strong>
+<a name="line187">187: </a><strong><font color="#228B22">    Type           *u = (Type*)unpacked,*u2,t;                                                               \</font></strong>
+<a name="line188">188: </a><strong><font color="#228B22">    CType          *p = (CType*)packed,*p2;                                                                  \</font></strong>
+<a name="line189">189: </a><strong><font color="#228B22">    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,k,l,r,step,bs=link-&gt;bs;                                                               \</font></strong>
+<a name="line190">190: </a><strong><font color="#228B22">    const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *idx2,M = (EQ) ? 1 : bs/BS; </font><font color="#B22222">/* If EQ, then M=1 enables compiler's const-propagation */</font><font color="#228B22">    \</font></strong>
+<a name="line191">191: </a><strong><font color="#228B22">    const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> MBS = M*BS; </font><font color="#B22222">/* MBS=bs. We turn MBS into a compile time const when EQ=1. */</font><font color="#228B22">                \</font></strong>
+<a name="line193">193: </a><strong><font color="#228B22">    if (!idx) {                                                                                              \</font></strong>
+<a name="line194">194: </a><strong><font color="#228B22">      for (i=0; i&lt;count; i++)                                                                                \</font></strong>
+<a name="line195">195: </a><strong><font color="#228B22">        for (j=0; j&lt;M; j++)                                                                                  \</font></strong>
+<a name="line196">196: </a><strong><font color="#228B22">          for (k=0; k&lt;BS; k++) {                                                                             \</font></strong>
+<a name="line197">197: </a><strong><font color="#228B22">            t    = u[i*MBS+j*BS+k];                                                                          \</font></strong>
+<a name="line198">198: </a><strong><font color="#228B22">            APPLY (u[i*MBS+j*BS+k],t,op,p[i*MBS+j*BS+k]);                                                    \</font></strong>
+<a name="line199">199: </a><strong><font color="#228B22">            FILTER(p[i*MBS+j*BS+k] = t);                                                                     \</font></strong>
+<a name="line200">200: </a><strong><font color="#228B22">          }                                                                                                  \</font></strong>
+<a name="line201">201: </a><strong><font color="#228B22">    } else if (!opt) { </font><font color="#B22222">/* No optimizations available */</font><font color="#228B22">                                                      \</font></strong>
+<a name="line202">202: </a><strong><font color="#228B22">      for (i=0; i&lt;count; i++)                                                                                \</font></strong>
+<a name="line203">203: </a><strong><font color="#228B22">        for (j=0; j&lt;M; j++)                                                                                  \</font></strong>
+<a name="line204">204: </a><strong><font color="#228B22">          for (k=0; k&lt;BS; k++) {                                                                             \</font></strong>
+<a name="line205">205: </a><strong><font color="#228B22">              t    = u[idx[i]*MBS+j*BS+k];                                                                   \</font></strong>
+<a name="line206">206: </a><strong><font color="#228B22">              APPLY (u[idx[i]*MBS+j*BS+k],t,op,p[i*MBS+j*BS+k]);                                             \</font></strong>
+<a name="line207">207: </a><strong><font color="#228B22">              FILTER(p[i*MBS+j*BS+k] = t);                                                                   \</font></strong>
+<a name="line208">208: </a><strong><font color="#228B22">          }                                                                                                  \</font></strong>
+<a name="line209">209: </a><strong><font color="#228B22">    } else {                                                                                                 \</font></strong>
+<a name="line210">210: </a><strong><font color="#228B22">      for (r=0; r&lt;opt-&gt;n; r++) {                                                                             \</font></strong>
+<a name="line211">211: </a><strong><font color="#228B22">        p2 = p + opt-&gt;offset[r]*MBS;                                                                         \</font></strong>
+<a name="line212">212: </a><strong><font color="#228B22">        if (opt-&gt;type[r] == PETSCSF_PACKOPT_NONE) {                                                          \</font></strong>
+<a name="line213">213: </a><strong><font color="#228B22">          idx2 = idx + opt-&gt;offset[r];                                                                       \</font></strong>
+<a name="line214">214: </a><strong><font color="#228B22">          for (i=0; i&lt;opt-&gt;offset[r+1]-opt-&gt;offset[r]; i++)                                                  \</font></strong>
+<a name="line215">215: </a><strong><font color="#228B22">            for (j=0; j&lt;M; j++)                                                                              \</font></strong>
+<a name="line216">216: </a><strong><font color="#228B22">              for (k=0; k&lt;BS; k++) {                                                                         \</font></strong>
+<a name="line217">217: </a><strong><font color="#228B22">                t    = u[idx2[i]*MBS+j*BS+k];                                                                \</font></strong>
+<a name="line218">218: </a><strong><font color="#228B22">                APPLY (u[idx2[i]*MBS+j*BS+k],t,op,p2[i*MBS+j*BS+k]);                                         \</font></strong>
+<a name="line219">219: </a><strong><font color="#228B22">                FILTER(p2[i*MBS+j*BS+k] = t);                                                                \</font></strong>
+<a name="line220">220: </a><strong><font color="#228B22">              }                                                                                              \</font></strong>
+<a name="line221">221: </a><strong><font color="#228B22">        } else if (opt-&gt;type[r] == PETSCSF_PACKOPT_MULTICOPY) {                                              \</font></strong>
+<a name="line222">222: </a><strong><font color="#228B22">          for (i=opt-&gt;copy_offset[r]; i&lt;opt-&gt;copy_offset[r+1]; i++) { </font><font color="#B22222">/* i-th piece */</font><font color="#228B22">                       \</font></strong>
+<a name="line223">223: </a><strong><font color="#228B22">            u2 = u + idx[opt-&gt;copy_start[i]]*MBS;                                                            \</font></strong>
+<a name="line224">224: </a><strong><font color="#228B22">            l  = opt-&gt;copy_length[i]*MBS;                                                                    \</font></strong>
+<a name="line225">225: </a><strong><font color="#228B22">            for (j=0; j&lt;l; j++) {                                                                            \</font></strong>
+<a name="line226">226: </a><strong><font color="#228B22">              t    = u2[j];                                                                                  \</font></strong>
+<a name="line227">227: </a><strong><font color="#228B22">              APPLY (u2[j],t,op,p2[j]);                                                                      \</font></strong>
+<a name="line228">228: </a><strong><font color="#228B22">              FILTER(p2[j] = t);                                                                             \</font></strong>
+<a name="line229">229: </a><strong><font color="#228B22">            }                                                                                                \</font></strong>
+<a name="line230">230: </a><strong><font color="#228B22">            p2 += l;                                                                                         \</font></strong>
+<a name="line231">231: </a><strong><font color="#228B22">          }                                                                                                  \</font></strong>
+<a name="line232">232: </a><strong><font color="#228B22">        } else if (opt-&gt;type[r] == PETSCSF_PACKOPT_STRIDE) {                                                 \</font></strong>
+<a name="line233">233: </a><strong><font color="#228B22">          u2   = u + idx[opt-&gt;offset[r]]*MBS;                                                                \</font></strong>
+<a name="line234">234: </a><strong><font color="#228B22">          step = opt-&gt;stride_step[r];                                                                        \</font></strong>
+<a name="line235">235: </a><strong><font color="#228B22">          for (i=0; i&lt;opt-&gt;stride_n[r]; i++)                                                                 \</font></strong>
+<a name="line236">236: </a><strong><font color="#228B22">            for (j=0; j&lt;M; j++)                                                                              \</font></strong>
+<a name="line237">237: </a><strong><font color="#228B22">              for (k=0; k&lt;BS; k++) {                                                                         \</font></strong>
+<a name="line238">238: </a><strong><font color="#228B22">                t    = u2[i*step*MBS+j*BS+k];                                                                \</font></strong>
+<a name="line239">239: </a><strong><font color="#228B22">                APPLY (u2[i*step*MBS+j*BS+k],t,op,p2[i*MBS+j*BS+k]);                                         \</font></strong>
+<a name="line240">240: </a><strong><font color="#228B22">                FILTER(p2[i*MBS+j*BS+k] = t);                                                                \</font></strong>
+<a name="line241">241: </a><strong><font color="#228B22">              }                                                                                              \</font></strong>
+<a name="line242">242: </a><strong><font color="#228B22">        } else <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_PLIB,</font><font color="#666666">"Unknown SFPack optimzation type %D"</font><font color="#228B22">,opt-&gt;type[r]);   \</font></strong>
+<a name="line243">243: </a><strong><font color="#228B22">      }                                                                                                      \</font></strong>
+<a name="line244">244: </a><strong><font color="#228B22">    }                                                                                                        \</font></strong>
+<a name="line245">245: </a><strong><font color="#228B22">    return(0);                                                                                  \</font></strong>
+<a name="line246">246: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line248">248: </a><font color="#B22222">/* DEF_ActionAndXloc - macro defining a Unpack(Fetch)AndMaxloc(Minloc) routine</font>
+
+<a name="line250">250: </a><font color="#B22222">   Arguments:</font>
+<a name="line251">251: </a><font color="#B22222">  +Action     Unpack or Fetch</font>
+<a name="line252">252: </a><font color="#B22222">  .locname    Max or Min</font>
+<a name="line253">253: </a><font color="#B22222">  .type1      Type of the first data in a pair type</font>
+<a name="line254">254: </a><font color="#B22222">  .type2      Type of the second data in a pair type, usually <a href="../../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a> for MPI ranks.</font>
+<a name="line255">255: </a><font color="#B22222">  .op         &gt; or &lt;</font>
+<a name="line256">256: </a><font color="#B22222">  .FILTER     Macro defining what to do with a statement, either EXECUTE or IGNORE</font>
+<a name="line257">257: </a><font color="#B22222">  .CType      Type with or without the const qualifier, i.e., const PairType(Type1,Type2) or PairType(Type1,Type2)</font>
+<a name="line258">258: </a><font color="#B22222">  -Cvoid      void with or without the const qualifier, i.e., const void or void</font>
+<a name="line259">259: </a><font color="#B22222"> */</font>
+<a name="line260">260: </a><strong><font color="#228B22">#define DEF_ActionAndXloc(action,locname,Type1,Type2,op,FILTER,CType,Cvoid) \</font></strong>
+<a name="line261">261: </a><strong><font color="#228B22">  static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> CPPJoin4(action##And##locname##loc,PairType(Type1,Type2),1,1)(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> count,const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *idx,PetscSFPack link,PetscSFPackOpt opt,void *unpacked,Cvoid *packed) { \</font></strong>
+<a name="line262">262: </a><strong><font color="#228B22">    PairType(Type1,Type2) *u = (PairType(Type1,Type2)*)unpacked;                                             \</font></strong>
+<a name="line263">263: </a><strong><font color="#228B22">    CType                 *p = (CType*)packed;                                                               \</font></strong>
+<a name="line264">264: </a><strong><font color="#228B22">    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>              i,j;                                                                               \</font></strong>
+<a name="line265">265: </a><strong><font color="#228B22">    for (i=0; i&lt;count; i++) {                                                                                \</font></strong>
+<a name="line266">266: </a><strong><font color="#228B22">      FILTER(PairType(Type1,Type2) v);                                                                       \</font></strong>
+<a name="line267">267: </a><strong><font color="#228B22">      j = idx? idx[i] : i;                                                                                   \</font></strong>
+<a name="line268">268: </a><strong><font color="#228B22">      FILTER(v = u[j]);                                                                                      \</font></strong>
+<a name="line269">269: </a><strong><font color="#228B22">      if (p[i].a op u[j].a) {                                                                                \</font></strong>
+<a name="line270">270: </a><strong><font color="#228B22">        u[j] = p[i];                                                                                         \</font></strong>
+<a name="line271">271: </a><strong><font color="#228B22">      } else if (p[i].a == u[j].a) {                                                                         \</font></strong>
+<a name="line272">272: </a><strong><font color="#228B22">        u[j].b = <a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(u[j].b,p[i].b); </font><font color="#B22222">/* Minimal rank. Ref MPI MAXLOC */</font><font color="#228B22">                                 \</font></strong>
+<a name="line273">273: </a><strong><font color="#228B22">      }                                                                                                      \</font></strong>
+<a name="line274">274: </a><strong><font color="#228B22">      FILTER(p[i] = v);                                                                                      \</font></strong>
+<a name="line275">275: </a><strong><font color="#228B22">    }                                                                                                        \</font></strong>
+<a name="line276">276: </a><strong><font color="#228B22">    return(0);                                                                                  \</font></strong>
+<a name="line277">277: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line279">279: </a><font color="#B22222">/* Pack, Unpack/Fetch ops */</font>
+<a name="line280">280: </a><strong><font color="#228B22">#define DEF_Pack(Type,BS,EQ)                                                                   \</font></strong>
+<a name="line281">281: </a><strong><font color="#228B22">  DEF_PackFunc(Type,BS,EQ)                                                                     \</font></strong>
+<a name="line282">282: </a><strong><font color="#228B22">  DEF_Action(Unpack,Type,BS,EQ,IGNORE,const Type,const void)                                   \</font></strong>
+<a name="line283">283: </a><strong><font color="#228B22">  DEF_Action(Fetch, Type,BS,EQ,EXECUTE,Type,void)                                              \</font></strong>
+<a name="line284">284: </a><strong><font color="#228B22">  static void CPPJoin4(PackInit_Pack,Type,BS,EQ)(PetscSFPack link) {                           \</font></strong>
+<a name="line285">285: </a><strong><font color="#228B22">    link-&gt;h_Pack            = CPPJoin4(Pack,           Type,BS,EQ);                            \</font></strong>
+<a name="line286">286: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndInsert = CPPJoin4(UnpackAndInsert,Type,BS,EQ);                            \</font></strong>
+<a name="line287">287: </a><strong><font color="#228B22">    link-&gt;h_FetchAndInsert  = CPPJoin4(FetchAndInsert, Type,BS,EQ);                            \</font></strong>
+<a name="line288">288: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line290">290: </a><font color="#B22222">/* Add, Mult ops */</font>
+<a name="line291">291: </a><strong><font color="#228B22">#define DEF_Add(Type,BS,EQ)                                                                    \</font></strong>
+<a name="line292">292: </a><strong><font color="#228B22">  DEF_ActionAndOp(Unpack,Add, Type,BS,EQ,+,BINARY_OP,IGNORE,const Type,const void)             \</font></strong>
+<a name="line293">293: </a><strong><font color="#228B22">  DEF_ActionAndOp(Unpack,Mult,Type,BS,EQ,*,BINARY_OP,IGNORE,const Type,const void)             \</font></strong>
+<a name="line294">294: </a><strong><font color="#228B22">  DEF_ActionAndOp(Fetch, Add, Type,BS,EQ,+,BINARY_OP,EXECUTE,Type,void)                        \</font></strong>
+<a name="line295">295: </a><strong><font color="#228B22">  DEF_ActionAndOp(Fetch, Mult,Type,BS,EQ,*,BINARY_OP,EXECUTE,Type,void)                        \</font></strong>
+<a name="line296">296: </a><strong><font color="#228B22">  static void CPPJoin4(PackInit_Add,Type,BS,EQ)(PetscSFPack link) {                            \</font></strong>
+<a name="line297">297: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndAdd    = CPPJoin4(UnpackAndAdd,   Type,BS,EQ);                            \</font></strong>
+<a name="line298">298: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndMult   = CPPJoin4(UnpackAndMult,  Type,BS,EQ);                            \</font></strong>
+<a name="line299">299: </a><strong><font color="#228B22">    link-&gt;h_FetchAndAdd     = CPPJoin4(FetchAndAdd,    Type,BS,EQ);                            \</font></strong>
+<a name="line300">300: </a><strong><font color="#228B22">    link-&gt;h_FetchAndMult    = CPPJoin4(FetchAndMult,   Type,BS,EQ);                            \</font></strong>
+<a name="line301">301: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line303">303: </a><font color="#B22222">/* Max, Min ops */</font>
+<a name="line304">304: </a><strong><font color="#228B22">#define DEF_Cmp(Type,BS,EQ)                                                                    \</font></strong>
+<a name="line305">305: </a><strong><font color="#228B22">  DEF_ActionAndOp(Unpack,Max,Type,BS,EQ,<a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>,FUNCTION_OP,IGNORE,const Type,const void)     \</font></strong>
+<a name="line306">306: </a><strong><font color="#228B22">  DEF_ActionAndOp(Unpack,Min,Type,BS,EQ,<a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>,FUNCTION_OP,IGNORE,const Type,const void)     \</font></strong>
+<a name="line307">307: </a><strong><font color="#228B22">  DEF_ActionAndOp(Fetch, Max,Type,BS,EQ,<a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>,FUNCTION_OP,EXECUTE,Type,void)                \</font></strong>
+<a name="line308">308: </a><strong><font color="#228B22">  DEF_ActionAndOp(Fetch, Min,Type,BS,EQ,<a href="../../../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>,FUNCTION_OP,EXECUTE,Type,void)                \</font></strong>
+<a name="line309">309: </a><strong><font color="#228B22">  static void CPPJoin4(PackInit_Compare,Type,BS,EQ)(PetscSFPack link) {                        \</font></strong>
+<a name="line310">310: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndMax    = CPPJoin4(UnpackAndMax,   Type,BS,EQ);                            \</font></strong>
+<a name="line311">311: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndMin    = CPPJoin4(UnpackAndMin,   Type,BS,EQ);                            \</font></strong>
+<a name="line312">312: </a><strong><font color="#228B22">    link-&gt;h_FetchAndMax     = CPPJoin4(FetchAndMax ,   Type,BS,EQ);                            \</font></strong>
+<a name="line313">313: </a><strong><font color="#228B22">    link-&gt;h_FetchAndMin     = CPPJoin4(FetchAndMin ,   Type,BS,EQ);                            \</font></strong>
+<a name="line314">314: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line316">316: </a><font color="#B22222">/* Logical ops.</font>
+<a name="line317">317: </a><font color="#B22222">  The operator in LXOR_OP should be empty but is &amp;. It is not used. Put here to avoid</font>
+<a name="line318">318: </a><font color="#B22222">  the compilation warning "empty macro arguments are undefined in ISO C90"</font>
+<a name="line319">319: </a><font color="#B22222"> */</font>
+<a name="line320">320: </a><strong><font color="#228B22">#define DEF_Log(Type,BS,EQ)                                                                    \</font></strong>
+<a name="line321">321: </a><strong><font color="#228B22">  DEF_ActionAndOp(Unpack,LAND,Type,BS,EQ,&amp;&amp;,BINARY_OP,IGNORE,const Type,const void)            \</font></strong>
+<a name="line322">322: </a><strong><font color="#228B22">  DEF_ActionAndOp(Unpack,LOR, Type,BS,EQ,||,BINARY_OP,IGNORE,const Type,const void)            \</font></strong>
+<a name="line323">323: </a><strong><font color="#228B22">  DEF_ActionAndOp(Unpack,LXOR,Type,BS,EQ,&amp;, LXOR_OP,  IGNORE,const Type,const void)            \</font></strong>
+<a name="line324">324: </a><strong><font color="#228B22">  DEF_ActionAndOp(Fetch, LAND,Type,BS,EQ,&amp;&amp;,BINARY_OP,EXECUTE,Type,void)                       \</font></strong>
+<a name="line325">325: </a><strong><font color="#228B22">  DEF_ActionAndOp(Fetch, LOR, Type,BS,EQ,||,BINARY_OP,EXECUTE,Type,void)                       \</font></strong>
+<a name="line326">326: </a><strong><font color="#228B22">  DEF_ActionAndOp(Fetch, LXOR,Type,BS,EQ,&amp;, LXOR_OP,  EXECUTE,Type,void)                       \</font></strong>
+<a name="line327">327: </a><strong><font color="#228B22">  static void CPPJoin4(PackInit_Logical,Type,BS,EQ)(PetscSFPack link) {                        \</font></strong>
+<a name="line328">328: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndLAND   = CPPJoin4(UnpackAndLAND,Type,BS,EQ);                              \</font></strong>
+<a name="line329">329: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndLOR    = CPPJoin4(UnpackAndLOR, Type,BS,EQ);                              \</font></strong>
+<a name="line330">330: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndLXOR   = CPPJoin4(UnpackAndLXOR,Type,BS,EQ);                              \</font></strong>
+<a name="line331">331: </a><strong><font color="#228B22">    link-&gt;h_FetchAndLAND    = CPPJoin4(FetchAndLAND, Type,BS,EQ);                              \</font></strong>
+<a name="line332">332: </a><strong><font color="#228B22">    link-&gt;h_FetchAndLOR     = CPPJoin4(FetchAndLOR,  Type,BS,EQ);                              \</font></strong>
+<a name="line333">333: </a><strong><font color="#228B22">    link-&gt;h_FetchAndLXOR    = CPPJoin4(FetchAndLXOR, Type,BS,EQ);                              \</font></strong>
+<a name="line334">334: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line336">336: </a><font color="#B22222">/* Bitwise ops */</font>
+<a name="line337">337: </a><strong><font color="#228B22">#define DEF_Bit(Type,BS,EQ)                                                                    \</font></strong>
+<a name="line338">338: </a><strong><font color="#228B22">  DEF_ActionAndOp(Unpack,BAND,Type,BS,EQ,&amp;,BINARY_OP,IGNORE,const Type,const void)             \</font></strong>
+<a name="line339">339: </a><strong><font color="#228B22">  DEF_ActionAndOp(Unpack,BOR, Type,BS,EQ,|,BINARY_OP,IGNORE,const Type,const void)             \</font></strong>
+<a name="line340">340: </a><strong><font color="#228B22">  DEF_ActionAndOp(Unpack,BXOR,Type,BS,EQ,^,BINARY_OP,IGNORE,const Type,const void)             \</font></strong>
+<a name="line341">341: </a><strong><font color="#228B22">  DEF_ActionAndOp(Fetch, BAND,Type,BS,EQ,&amp;,BINARY_OP,EXECUTE,Type,void)                        \</font></strong>
+<a name="line342">342: </a><strong><font color="#228B22">  DEF_ActionAndOp(Fetch, BOR, Type,BS,EQ,|,BINARY_OP,EXECUTE,Type,void)                        \</font></strong>
+<a name="line343">343: </a><strong><font color="#228B22">  DEF_ActionAndOp(Fetch, BXOR,Type,BS,EQ,^,BINARY_OP,EXECUTE,Type,void)                        \</font></strong>
+<a name="line344">344: </a><strong><font color="#228B22">  static void CPPJoin4(PackInit_Bitwise,Type,BS,EQ)(PetscSFPack link) {                        \</font></strong>
+<a name="line345">345: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndBAND   = CPPJoin4(UnpackAndBAND,Type,BS,EQ);                              \</font></strong>
+<a name="line346">346: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndBOR    = CPPJoin4(UnpackAndBOR, Type,BS,EQ);                              \</font></strong>
+<a name="line347">347: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndBXOR   = CPPJoin4(UnpackAndBXOR,Type,BS,EQ);                              \</font></strong>
+<a name="line348">348: </a><strong><font color="#228B22">    link-&gt;h_FetchAndBAND    = CPPJoin4(FetchAndBAND, Type,BS,EQ);                              \</font></strong>
+<a name="line349">349: </a><strong><font color="#228B22">    link-&gt;h_FetchAndBOR     = CPPJoin4(FetchAndBOR,  Type,BS,EQ);                              \</font></strong>
+<a name="line350">350: </a><strong><font color="#228B22">    link-&gt;h_FetchAndBXOR    = CPPJoin4(FetchAndBXOR, Type,BS,EQ);                              \</font></strong>
+<a name="line351">351: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line353">353: </a><font color="#B22222">/* Maxloc, Minloc */</font>
+<a name="line354">354: </a><strong><font color="#228B22">#define DEF_Xloc(Type1,Type2)                                                                  \</font></strong>
+<a name="line355">355: </a><strong><font color="#228B22">  DEF_ActionAndXloc(Unpack,Max,Type1,Type2,&gt;,IGNORE,const PairType(Type1,Type2),const void)    \</font></strong>
+<a name="line356">356: </a><strong><font color="#228B22">  DEF_ActionAndXloc(Unpack,Min,Type1,Type2,&lt;,IGNORE,const PairType(Type1,Type2),const void)    \</font></strong>
+<a name="line357">357: </a><strong><font color="#228B22">  DEF_ActionAndXloc(Fetch, Max,Type1,Type2,&gt;,EXECUTE,PairType(Type1,Type2),void)               \</font></strong>
+<a name="line358">358: </a><strong><font color="#228B22">  DEF_ActionAndXloc(Fetch, Min,Type1,Type2,&lt;,EXECUTE,PairType(Type1,Type2),void)               \</font></strong>
+<a name="line359">359: </a><strong><font color="#228B22">  static void CPPJoin3(PackInit_Xloc,Type1,Type2)(PetscSFPack link) {                          \</font></strong>
+<a name="line360">360: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndMaxloc = CPPJoin4(UnpackAndMaxloc,PairType(Type1,Type2),1,1);             \</font></strong>
+<a name="line361">361: </a><strong><font color="#228B22">    link-&gt;h_UnpackAndMinloc = CPPJoin4(UnpackAndMinloc,PairType(Type1,Type2),1,1);             \</font></strong>
+<a name="line362">362: </a><strong><font color="#228B22">    link-&gt;h_FetchAndMaxloc  = CPPJoin4(FetchAndMaxloc, PairType(Type1,Type2),1,1);             \</font></strong>
+<a name="line363">363: </a><strong><font color="#228B22">    link-&gt;h_FetchAndMinloc  = CPPJoin4(FetchAndMinloc, PairType(Type1,Type2),1,1);             \</font></strong>
+<a name="line364">364: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line366">366: </a><strong><font color="#228B22">#define DEF_IntegerType(Type,BS,EQ)                                                            \</font></strong>
+<a name="line367">367: </a><strong><font color="#228B22">  DEF_Pack(Type,BS,EQ)                                                                         \</font></strong>
+<a name="line368">368: </a><strong><font color="#228B22">  DEF_Add(Type,BS,EQ)                                                                          \</font></strong>
+<a name="line369">369: </a><strong><font color="#228B22">  DEF_Cmp(Type,BS,EQ)                                                                          \</font></strong>
+<a name="line370">370: </a><strong><font color="#228B22">  DEF_Log(Type,BS,EQ)                                                                          \</font></strong>
+<a name="line371">371: </a><strong><font color="#228B22">  DEF_Bit(Type,BS,EQ)                                                                          \</font></strong>
+<a name="line372">372: </a><strong><font color="#228B22">  static void CPPJoin4(PackInit_IntegerType,Type,BS,EQ)(PetscSFPack link) {                    \</font></strong>
+<a name="line373">373: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Pack,Type,BS,EQ)(link);                                                  \</font></strong>
+<a name="line374">374: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Add,Type,BS,EQ)(link);                                                   \</font></strong>
+<a name="line375">375: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Compare,Type,BS,EQ)(link);                                               \</font></strong>
+<a name="line376">376: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Logical,Type,BS,EQ)(link);                                               \</font></strong>
+<a name="line377">377: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Bitwise,Type,BS,EQ)(link);                                               \</font></strong>
+<a name="line378">378: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line380">380: </a><strong><font color="#228B22">#define DEF_RealType(Type,BS,EQ)                                                               \</font></strong>
+<a name="line381">381: </a><strong><font color="#228B22">  DEF_Pack(Type,BS,EQ)                                                                         \</font></strong>
+<a name="line382">382: </a><strong><font color="#228B22">  DEF_Add(Type,BS,EQ)                                                                          \</font></strong>
+<a name="line383">383: </a><strong><font color="#228B22">  DEF_Cmp(Type,BS,EQ)                                                                          \</font></strong>
+<a name="line384">384: </a><strong><font color="#228B22">  static void CPPJoin4(PackInit_RealType,Type,BS,EQ)(PetscSFPack link) {                       \</font></strong>
+<a name="line385">385: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Pack,Type,BS,EQ)(link);                                                  \</font></strong>
+<a name="line386">386: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Add,Type,BS,EQ)(link);                                                   \</font></strong>
+<a name="line387">387: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Compare,Type,BS,EQ)(link);                                               \</font></strong>
+<a name="line388">388: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line390">390: </a><font color="#A020F0">#if defined(PETSC_HAVE_COMPLEX)</font>
+<a name="line391">391: </a><strong><font color="#228B22">#define DEF_ComplexType(Type,BS,EQ)                                                            \</font></strong>
+<a name="line392">392: </a><strong><font color="#228B22">  DEF_Pack(Type,BS,EQ)                                                                         \</font></strong>
+<a name="line393">393: </a><strong><font color="#228B22">  DEF_Add(Type,BS,EQ)                                                                          \</font></strong>
+<a name="line394">394: </a><strong><font color="#228B22">  static void CPPJoin4(PackInit_ComplexType,Type,BS,EQ)(PetscSFPack link) {                    \</font></strong>
+<a name="line395">395: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Pack,Type,BS,EQ)(link);                                                  \</font></strong>
+<a name="line396">396: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Add,Type,BS,EQ)(link);                                                   \</font></strong>
+<a name="line397">397: </a><strong><font color="#228B22">  }</font></strong>
+<a name="line398">398: </a><font color="#A020F0">#endif</font>
+
+<a name="line400">400: </a><strong><font color="#228B22">#define DEF_DumbType(Type,BS,EQ)                                                               \</font></strong>
+<a name="line401">401: </a><strong><font color="#228B22">  DEF_Pack(Type,BS,EQ)                                                                         \</font></strong>
+<a name="line402">402: </a><strong><font color="#228B22">  static void CPPJoin4(PackInit_DumbType,Type,BS,EQ)(PetscSFPack link) {                       \</font></strong>
+<a name="line403">403: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Pack,Type,BS,EQ)(link);                                                  \</font></strong>
+<a name="line404">404: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line406">406: </a><font color="#B22222">/* Maxloc, Minloc */</font>
+<a name="line407">407: </a><strong><font color="#228B22">#define DEF_PairType(Type1,Type2)                                                              \</font></strong>
+<a name="line408">408: </a><strong><font color="#228B22">  typedef struct {Type1 a; Type2 b;} PairType(Type1,Type2);                                    \</font></strong>
+<a name="line409">409: </a><strong><font color="#228B22">  DEF_Pack(PairType(Type1,Type2),1,1)                                                          \</font></strong>
+<a name="line410">410: </a><strong><font color="#228B22">  DEF_Xloc(Type1,Type2)                                                                        \</font></strong>
+<a name="line411">411: </a><strong><font color="#228B22">  static void CPPJoin3(PackInit_PairType,Type1,Type2)(PetscSFPack link) {                      \</font></strong>
+<a name="line412">412: </a><strong><font color="#228B22">    CPPJoin4(PackInit_Pack,PairType(Type1,Type2),1,1)(link);                                   \</font></strong>
+<a name="line413">413: </a><strong><font color="#228B22">    CPPJoin3(PackInit_Xloc,Type1,Type2)(link);                                                 \</font></strong>
+<a name="line414">414: </a><strong><font color="#228B22">  }</font></strong>
+
+<a name="line416">416: </a>DEF_IntegerType(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,1,1) <font color="#B22222">/* unit = 1 <a href="../../../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>  */</font>
+<a name="line417">417: </a>DEF_IntegerType(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,2,1) <font color="#B22222">/* unit = 2 MPIU_INTs */</font>
+<a name="line418">418: </a>DEF_IntegerType(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,4,1) <font color="#B22222">/* unit = 4 MPIU_INTs */</font>
+<a name="line419">419: </a>DEF_IntegerType(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,8,1) <font color="#B22222">/* unit = 8 MPIU_INTs */</font>
+<a name="line420">420: </a>DEF_IntegerType(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,1,0) <font color="#B22222">/* unit = 1*n MPIU_INTs, n&gt;1 */</font>
+<a name="line421">421: </a>DEF_IntegerType(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,2,0) <font color="#B22222">/* unit = 2*n MPIU_INTs, n&gt;1 */</font>
+<a name="line422">422: </a>DEF_IntegerType(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,4,0) <font color="#B22222">/* unit = 4*n MPIU_INTs, n&gt;1 */</font>
+<a name="line423">423: </a>DEF_IntegerType(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,8,0) <font color="#B22222">/* unit = 8*n MPIU_INTs, n&gt;1. Routines with bigger BS are tried first. */</font>
+
+<a name="line425">425: </a><font color="#A020F0">#if defined(PETSC_USE_64BIT_INDICES) </font><font color="#B22222">/* Do not need (though it is OK) to generate redundant functions if <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> is int */</font><font color="#A020F0"></font>
+<a name="line426">426: </a>DEF_IntegerType(int,1,1)
+<a name="line427">427: </a>DEF_IntegerType(int,2,1)
+<a name="line428">428: </a>DEF_IntegerType(int,4,1)
+<a name="line429">429: </a>DEF_IntegerType(int,8,1)
+<a name="line430">430: </a>DEF_IntegerType(int,1,0)
+<a name="line431">431: </a>DEF_IntegerType(int,2,0)
+<a name="line432">432: </a>DEF_IntegerType(int,4,0)
+<a name="line433">433: </a>DEF_IntegerType(int,8,0)
+<a name="line434">434: </a><font color="#A020F0">#endif</font>
+
+<a name="line436">436: </a><font color="#B22222">/* The typedefs are used to get a typename without space that CPPJoin can handle */</font>
+<a name="line437">437: </a><font color="#4169E1">typedef signed char SignedChar;</font>
+<a name="line438">438: </a>DEF_IntegerType(SignedChar,1,1)
+<a name="line439">439: </a>DEF_IntegerType(SignedChar,2,1)
+<a name="line440">440: </a>DEF_IntegerType(SignedChar,4,1)
+<a name="line441">441: </a>DEF_IntegerType(SignedChar,8,1)
+<a name="line442">442: </a>DEF_IntegerType(SignedChar,1,0)
+<a name="line443">443: </a>DEF_IntegerType(SignedChar,2,0)
+<a name="line444">444: </a>DEF_IntegerType(SignedChar,4,0)
+<a name="line445">445: </a>DEF_IntegerType(SignedChar,8,0)
+
+<a name="line447">447: </a><font color="#4169E1">typedef unsigned char UnsignedChar;</font>
+<a name="line448">448: </a>DEF_IntegerType(UnsignedChar,1,1)
+<a name="line449">449: </a>DEF_IntegerType(UnsignedChar,2,1)
+<a name="line450">450: </a>DEF_IntegerType(UnsignedChar,4,1)
+<a name="line451">451: </a>DEF_IntegerType(UnsignedChar,8,1)
+<a name="line452">452: </a>DEF_IntegerType(UnsignedChar,1,0)
+<a name="line453">453: </a>DEF_IntegerType(UnsignedChar,2,0)
+<a name="line454">454: </a>DEF_IntegerType(UnsignedChar,4,0)
+<a name="line455">455: </a>DEF_IntegerType(UnsignedChar,8,0)
+
+<a name="line457">457: </a>DEF_RealType(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,1,1)
+<a name="line458">458: </a>DEF_RealType(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,2,1)
+<a name="line459">459: </a>DEF_RealType(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,4,1)
+<a name="line460">460: </a>DEF_RealType(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,8,1)
+<a name="line461">461: </a>DEF_RealType(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,1,0)
+<a name="line462">462: </a>DEF_RealType(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,2,0)
+<a name="line463">463: </a>DEF_RealType(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,4,0)
+<a name="line464">464: </a>DEF_RealType(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>,8,0)
+
+<a name="line466">466: </a><font color="#A020F0">#if defined(PETSC_HAVE_COMPLEX)</font>
+<a name="line467">467: </a>DEF_ComplexType(<a href="../../../../../../docs/manualpages/Sys/PetscComplex.html#PetscComplex">PetscComplex</a>,1,1)
+<a name="line468">468: </a>DEF_ComplexType(<a href="../../../../../../docs/manualpages/Sys/PetscComplex.html#PetscComplex">PetscComplex</a>,2,1)
+<a name="line469">469: </a>DEF_ComplexType(<a href="../../../../../../docs/manualpages/Sys/PetscComplex.html#PetscComplex">PetscComplex</a>,4,1)
+<a name="line470">470: </a>DEF_ComplexType(<a href="../../../../../../docs/manualpages/Sys/PetscComplex.html#PetscComplex">PetscComplex</a>,8,1)
+<a name="line471">471: </a>DEF_ComplexType(<a href="../../../../../../docs/manualpages/Sys/PetscComplex.html#PetscComplex">PetscComplex</a>,1,0)
+<a name="line472">472: </a>DEF_ComplexType(<a href="../../../../../../docs/manualpages/Sys/PetscComplex.html#PetscComplex">PetscComplex</a>,2,0)
+<a name="line473">473: </a>DEF_ComplexType(<a href="../../../../../../docs/manualpages/Sys/PetscComplex.html#PetscComplex">PetscComplex</a>,4,0)
+<a name="line474">474: </a>DEF_ComplexType(<a href="../../../../../../docs/manualpages/Sys/PetscComplex.html#PetscComplex">PetscComplex</a>,8,0)
+<a name="line475">475: </a><font color="#A020F0">#endif</font>
+
+<a name="line477">477: </a><strong><font color="#4169E1"><a name="EF_PairType"></a>DEF_PairType(int,int)</font></strong>
+<a name="line478">478: </a><strong><font color="#4169E1">DEF_PairType(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)</font></strong>
+
+<a name="line480">480: </a><font color="#B22222">/* If we don't know the basic type, we treat it as a stream of chars or ints */</font>
+<a name="line481">481: </a>DEF_DumbType(char,1,1)
+<a name="line482">482: </a>DEF_DumbType(char,2,1)
+<a name="line483">483: </a>DEF_DumbType(char,4,1)
+<a name="line484">484: </a>DEF_DumbType(char,1,0)
+<a name="line485">485: </a>DEF_DumbType(char,2,0)
+<a name="line486">486: </a>DEF_DumbType(char,4,0)
+
+<a name="line488">488: </a><font color="#4169E1">typedef int DumbInt;</font> <font color="#B22222">/* To have a different name than 'int' used above. The name is used to make routine names. */</font>
+<a name="line489">489: </a>DEF_DumbType(DumbInt,1,1)
+<a name="line490">490: </a>DEF_DumbType(DumbInt,2,1)
+<a name="line491">491: </a>DEF_DumbType(DumbInt,4,1)
+<a name="line492">492: </a>DEF_DumbType(DumbInt,8,1)
+<a name="line493">493: </a>DEF_DumbType(DumbInt,1,0)
+<a name="line494">494: </a>DEF_DumbType(DumbInt,2,0)
+<a name="line495">495: </a>DEF_DumbType(DumbInt,4,0)
+<a name="line496">496: </a>DEF_DumbType(DumbInt,8,0)
+
+<a name="line498">498: </a><font color="#A020F0">#if !defined(PETSC_HAVE_MPI_TYPE_DUP)</font>
+<a name="line499">499: </a><strong><font color="#4169E1"><a name="MPI_Type_dup"></a>PETSC_STATIC_INLINE int <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_dup.html#MPI_Type_dup">MPI_Type_dup</a>(MPI_Datatype datatype,MPI_Datatype *newtype)</font></strong>
+<a name="line500">500: </a>{
+<a name="line501">501: </a>  int ierr;
+<a name="line502">502: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_contiguous.html#MPI_Type_contiguous">MPI_Type_contiguous</a>(1,datatype,newtype); <font color="#4169E1">if</font> (ierr) <font color="#4169E1">return</font> ierr;
+<a name="line503">503: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_commit.html#MPI_Type_commit">MPI_Type_commit</a>(newtype); <font color="#4169E1">if</font> (ierr) <font color="#4169E1">return</font> ierr;
+<a name="line504">504: </a>  <font color="#4169E1">return</font> MPI_SUCCESS;
+<a name="line505">505: </a>}
+<a name="line506">506: </a><font color="#A020F0">#endif</font>
+
+<a name="line508">508: </a><strong><font color="#4169E1"><a name="PetscSFPackGetInUse"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscSFPackGetInUse(<a href="../../../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a> sf,MPI_Datatype unit,const void *rkey,const void *lkey,<a href="../../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PetscCopyMode</a> cmode,PetscSFPack *mylink)</font></strong>
+<a name="line509">509: </a>{
+<a name="line510">510: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line511">511: </a>  PetscSFPack       link,*p;
+<a name="line512">512: </a>  PetscSF_Basic     *bas=(PetscSF_Basic*)sf-&gt;data;
+
+<a name="line515">515: </a>  <font color="#B22222">/* Look for types in cache */</font>
+<a name="line516">516: </a>  <font color="#4169E1">for</font> (p=&amp;bas-&gt;inuse; (link=*p); p=&amp;link-&gt;next) {
+<a name="line517">517: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> match;
+<a name="line518">518: </a>    MPIPetsc_Type_compare(unit,link-&gt;unit,&amp;match);
+<a name="line519">519: </a>    <font color="#4169E1">if</font> (match &amp;&amp; (rkey == link-&gt;rkey) &amp;&amp; (lkey == link-&gt;lkey)) {
+<a name="line520">520: </a>      <font color="#4169E1">switch</font> (cmode) {
+<a name="line521">521: </a>      <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>: *p = link-&gt;next; <font color="#4169E1">break</font>; <font color="#B22222">/* Remove from inuse list */</font>
+<a name="line522">522: </a>      <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_USE_POINTER</a>: <font color="#4169E1">break</font>;
+<a name="line523">523: </a><strong><font color="#FF0000">      default:</font></strong> <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_INCOMP,<font color="#666666">"invalid cmode"</font>);
+<a name="line524">524: </a>      }
+<a name="line525">525: </a>      *mylink = link;
+<a name="line526">526: </a>      <font color="#4169E1">return</font>(0);
+<a name="line527">527: </a>    }
+<a name="line528">528: </a>  }
+<a name="line529">529: </a>  <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Could not find pack"</font>);
+<a name="line530">530: </a>  <font color="#4169E1">return</font>(0);
+<a name="line531">531: </a>}
+
+<a name="line533">533: </a><strong><font color="#4169E1"><a name="PetscSFPackReclaim"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscSFPackReclaim(<a href="../../../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a> sf,PetscSFPack *link)</font></strong>
+<a name="line534">534: </a>{
+<a name="line535">535: </a>  PetscSF_Basic     *bas=(PetscSF_Basic*)sf-&gt;data;
+
+<a name="line538">538: </a>  (*link)-&gt;rkey = NULL;
+<a name="line539">539: </a>  (*link)-&gt;lkey = NULL;
+<a name="line540">540: </a>  (*link)-&gt;next = bas-&gt;avail;
+<a name="line541">541: </a>  bas-&gt;avail    = *link;
+<a name="line542">542: </a>  *link         = NULL;
+<a name="line543">543: </a>  <font color="#4169E1">return</font>(0);
+<a name="line544">544: </a>}
+
+<a name="line546">546: </a><font color="#B22222">/* Destroy all links, i.e., PetscSFPacks in the linked list, usually named 'avail' */</font>
+<a name="line547">547: </a><strong><font color="#4169E1"><a name="PetscSFPackDestroyAvailable"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscSFPackDestroyAvailable(PetscSFPack *avail)</font></strong>
+<a name="line548">548: </a>{
+<a name="line549">549: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line550">550: </a>  PetscSFPack       link=*avail,next;
+<a name="line551">551: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i;
+
+<a name="line554">554: </a>  <font color="#4169E1">for</font> (; link; link=next) {
+<a name="line555">555: </a>    next = link-&gt;next;
+<a name="line556">556: </a>    <font color="#4169E1">if</font> (!link-&gt;isbuiltin) {<a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_free.html#MPI_Type_free">MPI_Type_free</a>(&amp;link-&gt;unit);}
+<a name="line557">557: </a>    <font color="#4169E1">for</font> (i=0; i&lt;(link-&gt;nrootreqs+link-&gt;nleafreqs)*4; i++) { <font color="#B22222">/* Persistent reqs must be freed. */</font>
+<a name="line558">558: </a>      <font color="#4169E1">if</font> (link-&gt;reqs[i] != MPI_REQUEST_NULL) {<a href="http://www.mpich.org/static/docs/latest/www3/MPI_Request_free.html#MPI_Request_free">MPI_Request_free</a>(&amp;link-&gt;reqs[i]);}
+<a name="line559">559: </a>    }
+<a name="line560">560: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(link-&gt;reqs);
+<a name="line561">561: </a>    PetscFreeWithMemType(PETSC_MEMTYPE_HOST,link-&gt;rootbuf[PETSC_MEMTYPE_HOST]);
+<a name="line562">562: </a>    PetscFreeWithMemType(PETSC_MEMTYPE_HOST,link-&gt;leafbuf[PETSC_MEMTYPE_HOST]);
+<a name="line563">563: </a>    PetscFreeWithMemType(PETSC_MEMTYPE_HOST,link-&gt;selfbuf[PETSC_MEMTYPE_HOST]);
+
+<a name="line565">565: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line566">566: </a>    PetscFreeWithMemType(PETSC_MEMTYPE_DEVICE,link-&gt;rootbuf[PETSC_MEMTYPE_DEVICE]);
+<a name="line567">567: </a>    PetscFreeWithMemType(PETSC_MEMTYPE_DEVICE,link-&gt;leafbuf[PETSC_MEMTYPE_DEVICE]);
+<a name="line568">568: </a>    PetscFreeWithMemType(PETSC_MEMTYPE_DEVICE,link-&gt;selfbuf[PETSC_MEMTYPE_DEVICE]);
+<a name="line569">569: </a>    <font color="#4169E1">if</font> (link-&gt;stream) {cudaError_t err =  cudaStreamDestroy(link-&gt;stream);CHKERRCUDA(err); link-&gt;stream = NULL;}
+<a name="line570">570: </a><font color="#A020F0">#endif</font>
+<a name="line571">571: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(link);
+<a name="line572">572: </a>  }
+<a name="line573">573: </a>  *avail = NULL;
+<a name="line574">574: </a>  <font color="#4169E1">return</font>(0);
+<a name="line575">575: </a>}
+
+<a name="line577">577: </a><font color="#B22222">/* Error out on unsupported overlapped communications */</font>
+<a name="line578">578: </a><strong><font color="#4169E1"><a name="PetscSFPackSetErrorOnUnsupportedOverlap"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscSFPackSetErrorOnUnsupportedOverlap(<a href="../../../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a> sf,MPI_Datatype unit,const void *rkey,const void *lkey)</font></strong>
+<a name="line579">579: </a>{
+<a name="line580">580: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line581">581: </a>  PetscSFPack       link,*p;
+<a name="line582">582: </a>  PetscSF_Basic     *bas=(PetscSF_Basic*)sf-&gt;data;
+<a name="line583">583: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         match;
+
+<a name="line586">586: </a>  <font color="#B22222">/* Look up links in use and error out if there is a match. When both rootdata and leafdata are NULL, ignore</font>
+<a name="line587">587: </a><font color="#B22222">     the potential overlapping since this process does not participate in communication. Overlapping is harmless.</font>
+<a name="line588">588: </a><font color="#B22222">  */</font>
+<a name="line589">589: </a>  <font color="#4169E1">if</font> (rkey || lkey) {
+<a name="line590">590: </a>    <font color="#4169E1">for</font> (p=&amp;bas-&gt;inuse; (link=*p); p=&amp;link-&gt;next) {
+<a name="line591">591: </a>      MPIPetsc_Type_compare(unit,link-&gt;unit,&amp;match);
+<a name="line592">592: </a>      <font color="#4169E1">if</font> (match &amp;&amp; (rkey == link-&gt;rkey) &amp;&amp; (lkey == link-&gt;lkey)) <a href="../../../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"No support for overlapped <a href="../../../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a> communications with the same SF, rootdata(%p), leafdata(%p) and data type. You can undo the overlap to avoid the error."</font>,rkey,lkey);
+<a name="line593">593: </a>    }
+<a name="line594">594: </a>  }
+<a name="line595">595: </a>  <font color="#4169E1">return</font>(0);
+<a name="line596">596: </a>}
+
+<a name="line598">598: </a><strong><font color="#4169E1"><a name="PetscSFPackSetUp_Host"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscSFPackSetUp_Host(<a href="../../../../../../docs/manualpages/PetscSF/PetscSF.html#PetscSF">PetscSF</a> sf,PetscSFPack link,MPI_Datatype unit)</font></strong>
+<a name="line599">599: </a>{
+<a name="line601">601: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       nSignedChar=0,nUnsignedChar=0,nInt=0,nPetscInt=0,nPetscReal=0;
+<a name="line602">602: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      is2Int,is2PetscInt;
+<a name="line603">603: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    ni,na,nd,combiner;
+<a name="line604">604: </a><font color="#A020F0">#if defined(PETSC_HAVE_COMPLEX)</font>
+<a name="line605">605: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       nPetscComplex=0;
+<a name="line606">606: </a><font color="#A020F0">#endif</font>
+
+<a name="line609">609: </a>  MPIPetsc_Type_compare_contig(unit,MPI_SIGNED_CHAR,  &amp;nSignedChar);
+<a name="line610">610: </a>  MPIPetsc_Type_compare_contig(unit,MPI_UNSIGNED_CHAR,&amp;nUnsignedChar);
+<a name="line611">611: </a>  <font color="#B22222">/* MPI_CHAR is treated below as a dumb type that does not support reduction according to MPI standard */</font>
+<a name="line612">612: </a>  MPIPetsc_Type_compare_contig(unit,MPI_INT,  &amp;nInt);
+<a name="line613">613: </a>  MPIPetsc_Type_compare_contig(unit,<a href="../../../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>, &amp;nPetscInt);
+<a name="line614">614: </a>  MPIPetsc_Type_compare_contig(unit,<a href="../../../../../../docs/manualpages/Sys/MPIU_REAL.html#MPIU_REAL">MPIU_REAL</a>,&amp;nPetscReal);
+<a name="line615">615: </a><font color="#A020F0">#if defined(PETSC_HAVE_COMPLEX)</font>
+<a name="line616">616: </a>  MPIPetsc_Type_compare_contig(unit,<a href="../../../../../../docs/manualpages/Sys/MPIU_COMPLEX.html#MPIU_COMPLEX">MPIU_COMPLEX</a>,&amp;nPetscComplex);
+<a name="line617">617: </a><font color="#A020F0">#endif</font>
+<a name="line618">618: </a>  MPIPetsc_Type_compare(unit,MPI_2INT,&amp;is2Int);
+<a name="line619">619: </a>  MPIPetsc_Type_compare(unit,MPIU_2INT,&amp;is2PetscInt);
+<a name="line620">620: </a>  <font color="#B22222">/* TODO: shaell we also handle Fortran MPI_2REAL? */</font>
+<a name="line621">621: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_get_envelope.html#MPI_Type_get_envelope">MPI_Type_get_envelope</a>(unit,&amp;ni,&amp;na,&amp;nd,&amp;combiner);
+<a name="line622">622: </a>  link-&gt;isbuiltin = (combiner == MPI_COMBINER_NAMED) ? <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line623">623: </a>  link-&gt;bs = 1; <font color="#B22222">/* default */</font>
+
+<a name="line625">625: </a>  <font color="#4169E1">if</font> (is2Int) {
+<a name="line626">626: </a>    PackInit_PairType_int_int(link);
+<a name="line627">627: </a>    link-&gt;bs        = 1;
+<a name="line628">628: </a>    link-&gt;unitbytes = 2*<font color="#4169E1">sizeof</font>(int);
+<a name="line629">629: </a>    link-&gt;basicunit = MPI_2INT;
+<a name="line630">630: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (is2PetscInt) { <font color="#B22222">/* TODO: when is2PetscInt and nPetscInt=2, we don't know which path to take. The two paths support different ops. */</font>
+<a name="line631">631: </a>    PackInit_PairType_PetscInt_PetscInt(link);
+<a name="line632">632: </a>    link-&gt;bs        = 1;
+<a name="line633">633: </a>    link-&gt;unitbytes = 2*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>);
+<a name="line634">634: </a>    link-&gt;basicunit = MPIU_2INT;
+<a name="line635">635: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscReal) {
+<a name="line636">636: </a>    <font color="#4169E1">if</font>      (nPetscReal == 8) PackInit_RealType_PetscReal_8_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscReal%8 == 0) PackInit_RealType_PetscReal_8_0(link);
+<a name="line637">637: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscReal == 4) PackInit_RealType_PetscReal_4_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscReal%4 == 0) PackInit_RealType_PetscReal_4_0(link);
+<a name="line638">638: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscReal == 2) PackInit_RealType_PetscReal_2_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscReal%2 == 0) PackInit_RealType_PetscReal_2_0(link);
+<a name="line639">639: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscReal == 1) PackInit_RealType_PetscReal_1_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscReal%1 == 0) PackInit_RealType_PetscReal_1_0(link);
+<a name="line640">640: </a>    link-&gt;bs        = nPetscReal;
+<a name="line641">641: </a>    link-&gt;unitbytes = nPetscReal*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>);
+<a name="line642">642: </a>    link-&gt;basicunit = <a href="../../../../../../docs/manualpages/Sys/MPIU_REAL.html#MPIU_REAL">MPIU_REAL</a>;
+<a name="line643">643: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscInt) {
+<a name="line644">644: </a>    <font color="#4169E1">if</font>      (nPetscInt == 8) PackInit_IntegerType_PetscInt_8_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscInt%8 == 0) PackInit_IntegerType_PetscInt_8_0(link);
+<a name="line645">645: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscInt == 4) PackInit_IntegerType_PetscInt_4_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscInt%4 == 0) PackInit_IntegerType_PetscInt_4_0(link);
+<a name="line646">646: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscInt == 2) PackInit_IntegerType_PetscInt_2_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscInt%2 == 0) PackInit_IntegerType_PetscInt_2_0(link);
+<a name="line647">647: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscInt == 1) PackInit_IntegerType_PetscInt_1_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscInt%1 == 0) PackInit_IntegerType_PetscInt_1_0(link);
+<a name="line648">648: </a>    link-&gt;bs        = nPetscInt;
+<a name="line649">649: </a>    link-&gt;unitbytes = nPetscInt*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>);
+<a name="line650">650: </a>    link-&gt;basicunit = <a href="../../../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>;
+<a name="line651">651: </a><font color="#A020F0">#if defined(PETSC_USE_64BIT_INDICES)</font>
+<a name="line652">652: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt) {
+<a name="line653">653: </a>    <font color="#4169E1">if</font>      (nInt == 8) PackInit_IntegerType_int_8_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt%8 == 0) PackInit_IntegerType_int_8_0(link);
+<a name="line654">654: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt == 4) PackInit_IntegerType_int_4_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt%4 == 0) PackInit_IntegerType_int_4_0(link);
+<a name="line655">655: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt == 2) PackInit_IntegerType_int_2_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt%2 == 0) PackInit_IntegerType_int_2_0(link);
+<a name="line656">656: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt == 1) PackInit_IntegerType_int_1_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt%1 == 0) PackInit_IntegerType_int_1_0(link);
+<a name="line657">657: </a>    link-&gt;bs        = nInt;
+<a name="line658">658: </a>    link-&gt;unitbytes = nInt*<font color="#4169E1">sizeof</font>(int);
+<a name="line659">659: </a>    link-&gt;basicunit = MPI_INT;
+<a name="line660">660: </a><font color="#A020F0">#endif</font>
+<a name="line661">661: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nSignedChar) {
+<a name="line662">662: </a>    <font color="#4169E1">if</font>      (nSignedChar == 8) PackInit_IntegerType_SignedChar_8_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nSignedChar%8 == 0) PackInit_IntegerType_SignedChar_8_0(link);
+<a name="line663">663: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nSignedChar == 4) PackInit_IntegerType_SignedChar_4_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nSignedChar%4 == 0) PackInit_IntegerType_SignedChar_4_0(link);
+<a name="line664">664: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nSignedChar == 2) PackInit_IntegerType_SignedChar_2_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nSignedChar%2 == 0) PackInit_IntegerType_SignedChar_2_0(link);
+<a name="line665">665: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nSignedChar == 1) PackInit_IntegerType_SignedChar_1_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nSignedChar%1 == 0) PackInit_IntegerType_SignedChar_1_0(link);
+<a name="line666">666: </a>    link-&gt;bs        = nSignedChar;
+<a name="line667">667: </a>    link-&gt;unitbytes = nSignedChar*<font color="#4169E1">sizeof</font>(SignedChar);
+<a name="line668">668: </a>    link-&gt;basicunit = MPI_SIGNED_CHAR;
+<a name="line669">669: </a>  }  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nUnsignedChar) {
+<a name="line670">670: </a>    <font color="#4169E1">if</font>      (nUnsignedChar == 8) PackInit_IntegerType_UnsignedChar_8_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nUnsignedChar%8 == 0) PackInit_IntegerType_UnsignedChar_8_0(link);
+<a name="line671">671: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nUnsignedChar == 4) PackInit_IntegerType_UnsignedChar_4_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nUnsignedChar%4 == 0) PackInit_IntegerType_UnsignedChar_4_0(link);
+<a name="line672">672: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nUnsignedChar == 2) PackInit_IntegerType_UnsignedChar_2_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nUnsignedChar%2 == 0) PackInit_IntegerType_UnsignedChar_2_0(link);
+<a name="line673">673: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nUnsignedChar == 1) PackInit_IntegerType_UnsignedChar_1_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nUnsignedChar%1 == 0) PackInit_IntegerType_UnsignedChar_1_0(link);
+<a name="line674">674: </a>    link-&gt;bs        = nUnsignedChar;
+<a name="line675">675: </a>    link-&gt;unitbytes = nUnsignedChar*<font color="#4169E1">sizeof</font>(UnsignedChar);
+<a name="line676">676: </a>    link-&gt;basicunit = MPI_UNSIGNED_CHAR;
+<a name="line677">677: </a><font color="#A020F0">#if defined(PETSC_HAVE_COMPLEX)</font>
+<a name="line678">678: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscComplex) {
+<a name="line679">679: </a>    <font color="#4169E1">if</font>      (nPetscComplex == 8) PackInit_ComplexType_PetscComplex_8_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscComplex%8 == 0) PackInit_ComplexType_PetscComplex_8_0(link);
+<a name="line680">680: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscComplex == 4) PackInit_ComplexType_PetscComplex_4_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscComplex%4 == 0) PackInit_ComplexType_PetscComplex_4_0(link);
+<a name="line681">681: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscComplex == 2) PackInit_ComplexType_PetscComplex_2_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscComplex%2 == 0) PackInit_ComplexType_PetscComplex_2_0(link);
+<a name="line682">682: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscComplex == 1) PackInit_ComplexType_PetscComplex_1_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nPetscComplex%1 == 0) PackInit_ComplexType_PetscComplex_1_0(link);
+<a name="line683">683: </a>    link-&gt;bs        = nPetscComplex;
+<a name="line684">684: </a>    link-&gt;unitbytes = nPetscComplex*<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscComplex.html#PetscComplex">PetscComplex</a>);
+<a name="line685">685: </a>    link-&gt;basicunit = <a href="../../../../../../docs/manualpages/Sys/MPIU_COMPLEX.html#MPIU_COMPLEX">MPIU_COMPLEX</a>;
+<a name="line686">686: </a><font color="#A020F0">#endif</font>
+<a name="line687">687: </a>  } <font color="#4169E1">else</font> {
+<a name="line688">688: </a>    MPI_Aint lb,nbyte;
+<a name="line689">689: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_get_extent.html#MPI_Type_get_extent">MPI_Type_get_extent</a>(unit,&amp;lb,&amp;nbyte);
+<a name="line690">690: </a>    <font color="#4169E1">if</font> (lb != 0) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Datatype with nonzero lower bound %ld\n"</font>,(long)lb);
+<a name="line691">691: </a>    <font color="#4169E1">if</font> (nbyte % <font color="#4169E1">sizeof</font>(int)) { <font color="#B22222">/* If the type size is not multiple of int */</font>
+<a name="line692">692: </a>      <font color="#4169E1">if</font>      (nbyte == 4) PackInit_DumbType_char_4_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nbyte%4 == 0) PackInit_DumbType_char_4_0(link);
+<a name="line693">693: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nbyte == 2) PackInit_DumbType_char_2_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nbyte%2 == 0) PackInit_DumbType_char_2_0(link);
+<a name="line694">694: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nbyte == 1) PackInit_DumbType_char_1_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nbyte%1 == 0) PackInit_DumbType_char_1_0(link);
+<a name="line695">695: </a>      link-&gt;bs        = nbyte;
+<a name="line696">696: </a>      link-&gt;unitbytes = nbyte;
+<a name="line697">697: </a>      link-&gt;basicunit = MPI_BYTE;
+<a name="line698">698: </a>    } <font color="#4169E1">else</font> {
+<a name="line699">699: </a>      nInt = nbyte / <font color="#4169E1">sizeof</font>(int);
+<a name="line700">700: </a>      <font color="#4169E1">if</font>      (nInt == 8) PackInit_DumbType_DumbInt_8_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt%8 == 0) PackInit_DumbType_DumbInt_8_0(link);
+<a name="line701">701: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt == 4) PackInit_DumbType_DumbInt_4_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt%4 == 0) PackInit_DumbType_DumbInt_4_0(link);
+<a name="line702">702: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt == 2) PackInit_DumbType_DumbInt_2_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt%2 == 0) PackInit_DumbType_DumbInt_2_0(link);
+<a name="line703">703: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt == 1) PackInit_DumbType_DumbInt_1_1(link); <font color="#4169E1">else</font> <font color="#4169E1">if</font> (nInt%1 == 0) PackInit_DumbType_DumbInt_1_0(link);
+<a name="line704">704: </a>      link-&gt;bs        = nInt;
+<a name="line705">705: </a>      link-&gt;unitbytes = nbyte;
+<a name="line706">706: </a>      link-&gt;basicunit = MPI_INT;
+<a name="line707">707: </a>    }
+<a name="line708">708: </a>  }
+
+<a name="line710">710: </a>  <font color="#4169E1">if</font> (link-&gt;isbuiltin) link-&gt;unit = unit; <font color="#B22222">/* builtin datatypes are common. Make it fast */</font>
+<a name="line711">711: </a>  <font color="#4169E1">else</font> {<a href="http://www.mpich.org/static/docs/latest/www3/MPI_Type_dup.html#MPI_Type_dup">MPI_Type_dup</a>(unit,&amp;link-&gt;unit);}
+<a name="line712">712: </a>  <font color="#4169E1">return</font>(0);
+<a name="line713">713: </a>}
+
+<a name="line715">715: </a><strong><font color="#4169E1"><a name="PetscSFPackGetUnpackAndOp"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscSFPackGetUnpackAndOp(PetscSFPack link,PetscMemType mtype,MPI_Op op,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> atomic,<a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> (**UnpackAndOp)(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*,PetscSFPack,PetscSFPackOpt,void*,const void*))</font></strong>
+<a name="line716">716: </a>{
+<a name="line718">718: </a>  *UnpackAndOp = NULL;
+<a name="line719">719: </a>  <font color="#4169E1">if</font> (mtype == PETSC_MEMTYPE_HOST) {
+<a name="line720">720: </a>    <font color="#4169E1">if</font>      (op == MPIU_REPLACE)              *UnpackAndOp = link-&gt;h_UnpackAndInsert;
+<a name="line721">721: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_SUM || op == MPIU_SUM) *UnpackAndOp = link-&gt;h_UnpackAndAdd;
+<a name="line722">722: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_PROD)                  *UnpackAndOp = link-&gt;h_UnpackAndMult;
+<a name="line723">723: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAX || op == MPIU_MAX) *UnpackAndOp = link-&gt;h_UnpackAndMax;
+<a name="line724">724: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MIN || op == MPIU_MIN) *UnpackAndOp = link-&gt;h_UnpackAndMin;
+<a name="line725">725: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LAND)                  *UnpackAndOp = link-&gt;h_UnpackAndLAND;
+<a name="line726">726: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BAND)                  *UnpackAndOp = link-&gt;h_UnpackAndBAND;
+<a name="line727">727: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LOR)                   *UnpackAndOp = link-&gt;h_UnpackAndLOR;
+<a name="line728">728: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BOR)                   *UnpackAndOp = link-&gt;h_UnpackAndBOR;
+<a name="line729">729: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LXOR)                  *UnpackAndOp = link-&gt;h_UnpackAndLXOR;
+<a name="line730">730: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BXOR)                  *UnpackAndOp = link-&gt;h_UnpackAndBXOR;
+<a name="line731">731: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAXLOC)                *UnpackAndOp = link-&gt;h_UnpackAndMaxloc;
+<a name="line732">732: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MINLOC)                *UnpackAndOp = link-&gt;h_UnpackAndMinloc;
+<a name="line733">733: </a>  }
+<a name="line734">734: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line735">735: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (mtype == PETSC_MEMTYPE_DEVICE &amp;&amp; !atomic) {
+<a name="line736">736: </a>    <font color="#4169E1">if</font>      (op == MPIU_REPLACE)              *UnpackAndOp = link-&gt;d_UnpackAndInsert;
+<a name="line737">737: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_SUM || op == MPIU_SUM) *UnpackAndOp = link-&gt;d_UnpackAndAdd;
+<a name="line738">738: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_PROD)                  *UnpackAndOp = link-&gt;d_UnpackAndMult;
+<a name="line739">739: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAX || op == MPIU_MAX) *UnpackAndOp = link-&gt;d_UnpackAndMax;
+<a name="line740">740: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MIN || op == MPIU_MIN) *UnpackAndOp = link-&gt;d_UnpackAndMin;
+<a name="line741">741: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LAND)                  *UnpackAndOp = link-&gt;d_UnpackAndLAND;
+<a name="line742">742: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BAND)                  *UnpackAndOp = link-&gt;d_UnpackAndBAND;
+<a name="line743">743: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LOR)                   *UnpackAndOp = link-&gt;d_UnpackAndLOR;
+<a name="line744">744: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BOR)                   *UnpackAndOp = link-&gt;d_UnpackAndBOR;
+<a name="line745">745: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LXOR)                  *UnpackAndOp = link-&gt;d_UnpackAndLXOR;
+<a name="line746">746: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BXOR)                  *UnpackAndOp = link-&gt;d_UnpackAndBXOR;
+<a name="line747">747: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAXLOC)                *UnpackAndOp = link-&gt;d_UnpackAndMaxloc;
+<a name="line748">748: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MINLOC)                *UnpackAndOp = link-&gt;d_UnpackAndMinloc;
+<a name="line749">749: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (mtype == PETSC_MEMTYPE_DEVICE &amp;&amp; atomic) {
+<a name="line750">750: </a>    <font color="#4169E1">if</font>      (op == MPIU_REPLACE)              *UnpackAndOp = link-&gt;da_UnpackAndInsert;
+<a name="line751">751: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_SUM || op == MPIU_SUM) *UnpackAndOp = link-&gt;da_UnpackAndAdd;
+<a name="line752">752: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_PROD)                  *UnpackAndOp = link-&gt;da_UnpackAndMult;
+<a name="line753">753: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAX || op == MPIU_MAX) *UnpackAndOp = link-&gt;da_UnpackAndMax;
+<a name="line754">754: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MIN || op == MPIU_MIN) *UnpackAndOp = link-&gt;da_UnpackAndMin;
+<a name="line755">755: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LAND)                  *UnpackAndOp = link-&gt;da_UnpackAndLAND;
+<a name="line756">756: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BAND)                  *UnpackAndOp = link-&gt;da_UnpackAndBAND;
+<a name="line757">757: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LOR)                   *UnpackAndOp = link-&gt;da_UnpackAndLOR;
+<a name="line758">758: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BOR)                   *UnpackAndOp = link-&gt;da_UnpackAndBOR;
+<a name="line759">759: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LXOR)                  *UnpackAndOp = link-&gt;da_UnpackAndLXOR;
+<a name="line760">760: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BXOR)                  *UnpackAndOp = link-&gt;da_UnpackAndBXOR;
+<a name="line761">761: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAXLOC)                *UnpackAndOp = link-&gt;da_UnpackAndMaxloc;
+<a name="line762">762: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MINLOC)                *UnpackAndOp = link-&gt;da_UnpackAndMinloc;
+<a name="line763">763: </a>  }
+<a name="line764">764: </a><font color="#A020F0">#endif</font>
+<a name="line765">765: </a>  <font color="#4169E1">else</font> <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONG,<font color="#666666">"Wrong PetscMemType %D"</font>,mtype);
+
+<a name="line767">767: </a>  <font color="#4169E1">return</font>(0);
+<a name="line768">768: </a>}
+
+<a name="line770">770: </a><strong><font color="#4169E1"><a name="PetscSFPackGetFetchAndOp"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscSFPackGetFetchAndOp(PetscSFPack link,PetscMemType mtype,MPI_Op op,<a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> atomic,<a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> (**FetchAndOp)(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*,PetscSFPack,PetscSFPackOpt,void*,void*))</font></strong>
+<a name="line771">771: </a>{
+<a name="line773">773: </a>  *FetchAndOp = NULL;
+<a name="line774">774: </a>  <font color="#4169E1">if</font> (mtype == PETSC_MEMTYPE_HOST) {
+<a name="line775">775: </a>    <font color="#4169E1">if</font> (op == MPIU_REPLACE)                   *FetchAndOp = link-&gt;h_FetchAndInsert;
+<a name="line776">776: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_SUM || op == MPIU_SUM) *FetchAndOp = link-&gt;h_FetchAndAdd;
+<a name="line777">777: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAX || op == MPIU_MAX) *FetchAndOp = link-&gt;h_FetchAndMax;
+<a name="line778">778: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MIN || op == MPIU_MIN) *FetchAndOp = link-&gt;h_FetchAndMin;
+<a name="line779">779: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAXLOC)                *FetchAndOp = link-&gt;h_FetchAndMaxloc;
+<a name="line780">780: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MINLOC)                *FetchAndOp = link-&gt;h_FetchAndMinloc;
+<a name="line781">781: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_PROD)                  *FetchAndOp = link-&gt;h_FetchAndMult;
+<a name="line782">782: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LAND)                  *FetchAndOp = link-&gt;h_FetchAndLAND;
+<a name="line783">783: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BAND)                  *FetchAndOp = link-&gt;h_FetchAndBAND;
+<a name="line784">784: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LOR)                   *FetchAndOp = link-&gt;h_FetchAndLOR;
+<a name="line785">785: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BOR)                   *FetchAndOp = link-&gt;h_FetchAndBOR;
+<a name="line786">786: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LXOR)                  *FetchAndOp = link-&gt;h_FetchAndLXOR;
+<a name="line787">787: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BXOR)                  *FetchAndOp = link-&gt;h_FetchAndBXOR;
+<a name="line788">788: </a>    <font color="#4169E1">else</font> <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"No support for MPI_Op"</font>);
+<a name="line789">789: </a>  }
+<a name="line790">790: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line791">791: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (mtype == PETSC_MEMTYPE_DEVICE &amp;&amp; !atomic) {
+<a name="line792">792: </a>    <font color="#4169E1">if</font> (op == MPIU_REPLACE)                   *FetchAndOp = link-&gt;d_FetchAndInsert;
+<a name="line793">793: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_SUM || op == MPIU_SUM) *FetchAndOp = link-&gt;d_FetchAndAdd;
+<a name="line794">794: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAX || op == MPIU_MAX) *FetchAndOp = link-&gt;d_FetchAndMax;
+<a name="line795">795: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MIN || op == MPIU_MIN) *FetchAndOp = link-&gt;d_FetchAndMin;
+<a name="line796">796: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAXLOC)                *FetchAndOp = link-&gt;d_FetchAndMaxloc;
+<a name="line797">797: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MINLOC)                *FetchAndOp = link-&gt;d_FetchAndMinloc;
+<a name="line798">798: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_PROD)                  *FetchAndOp = link-&gt;d_FetchAndMult;
+<a name="line799">799: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LAND)                  *FetchAndOp = link-&gt;d_FetchAndLAND;
+<a name="line800">800: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BAND)                  *FetchAndOp = link-&gt;d_FetchAndBAND;
+<a name="line801">801: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LOR)                   *FetchAndOp = link-&gt;d_FetchAndLOR;
+<a name="line802">802: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BOR)                   *FetchAndOp = link-&gt;d_FetchAndBOR;
+<a name="line803">803: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LXOR)                  *FetchAndOp = link-&gt;d_FetchAndLXOR;
+<a name="line804">804: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BXOR)                  *FetchAndOp = link-&gt;d_FetchAndBXOR;
+<a name="line805">805: </a>    <font color="#4169E1">else</font> <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"No support for MPI_Op"</font>);
+<a name="line806">806: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (mtype == PETSC_MEMTYPE_DEVICE &amp;&amp; atomic) {
+<a name="line807">807: </a>    <font color="#4169E1">if</font> (op == MPIU_REPLACE)                   *FetchAndOp = link-&gt;da_FetchAndInsert;
+<a name="line808">808: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_SUM || op == MPIU_SUM) *FetchAndOp = link-&gt;da_FetchAndAdd;
+<a name="line809">809: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAX || op == MPIU_MAX) *FetchAndOp = link-&gt;da_FetchAndMax;
+<a name="line810">810: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MIN || op == MPIU_MIN) *FetchAndOp = link-&gt;da_FetchAndMin;
+<a name="line811">811: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MAXLOC)                *FetchAndOp = link-&gt;da_FetchAndMaxloc;
+<a name="line812">812: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_MINLOC)                *FetchAndOp = link-&gt;da_FetchAndMinloc;
+<a name="line813">813: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_PROD)                  *FetchAndOp = link-&gt;da_FetchAndMult;
+<a name="line814">814: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LAND)                  *FetchAndOp = link-&gt;da_FetchAndLAND;
+<a name="line815">815: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BAND)                  *FetchAndOp = link-&gt;da_FetchAndBAND;
+<a name="line816">816: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LOR)                   *FetchAndOp = link-&gt;da_FetchAndLOR;
+<a name="line817">817: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BOR)                   *FetchAndOp = link-&gt;da_FetchAndBOR;
+<a name="line818">818: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_LXOR)                  *FetchAndOp = link-&gt;da_FetchAndLXOR;
+<a name="line819">819: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == MPI_BXOR)                  *FetchAndOp = link-&gt;da_FetchAndBXOR;
+<a name="line820">820: </a>    <font color="#4169E1">else</font> <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"No support for MPI_Op"</font>);
+<a name="line821">821: </a>  }
+<a name="line822">822: </a><font color="#A020F0">#endif</font>
+<a name="line823">823: </a>  <font color="#4169E1">else</font> <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONG,<font color="#666666">"Wrong PetscMemType %D"</font>,mtype);
+<a name="line824">824: </a>  <font color="#4169E1">return</font>(0);
+<a name="line825">825: </a>}
+
+<a name="line827">827: </a><font color="#B22222">/*</font>
+<a name="line828">828: </a><font color="#B22222">  Create pack/unpack optimization plans based on indice patterns available</font>
+
+<a name="line830">830: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line831">831: </a><font color="#B22222">  +  n       - Number of target ranks</font>
+<a name="line832">832: </a><font color="#B22222">  .  offset  - [n+1] For the i-th rank, its associated indices are idx[offset[i], offset[i+1]). offset[0] needs not to be 0.</font>
+<a name="line833">833: </a><font color="#B22222">  -  idx     - [*]   Array storing indices</font>
+
+<a name="line835">835: </a><font color="#B22222">   Output Parameters:</font>
+<a name="line836">836: </a><font color="#B22222">  +  opt    - Optimization plans. Maybe NULL if no optimization can be built.</font>
+<a name="line837">837: </a><font color="#B22222">*/</font>
+<a name="line838">838: </a><strong><font color="#4169E1"><a name="PetscSFPackOptCreate"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscSFPackOptCreate(<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n,const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *offset,const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *idx,PetscSFPackOpt *out)</font></strong>
+<a name="line839">839: </a>{
+<a name="line841">841: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j,k,n_copies,tot_copies=0,step;
+<a name="line842">842: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      strided,optimized=<a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line843">843: </a>  PetscSFPackOpt opt;
+
+<a name="line846">846: </a>  <font color="#4169E1">if</font> (!n) {
+<a name="line847">847: </a>    *out = NULL;
+<a name="line848">848: </a>    <font color="#4169E1">return</font>(0);
+<a name="line849">849: </a>  }
+
+<a name="line851">851: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(1,&amp;opt);
+<a name="line852">852: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscCalloc3.html#PetscCalloc3">PetscCalloc3</a>(n,&amp;opt-&gt;type,n+1,&amp;opt-&gt;offset,n+1,&amp;opt-&gt;copy_offset);
+<a name="line853">853: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(opt-&gt;offset,offset,n+1);
+<a name="line854">854: </a>  <font color="#4169E1">if</font> (offset[0]) {<font color="#4169E1">for</font> (i=0; i&lt;n+1; i++) opt-&gt;offset[i] -= offset[0];} <font color="#B22222">/* Zero-base offset[]. Note the packing routine is Pack(count, idx[], ...*/</font>
+
+<a name="line856">856: </a>  opt-&gt;n = n;
+
+<a name="line858">858: </a>  <font color="#B22222">/* Check if the indices are piece-wise contiguous (if yes, we can optimize a packing with mulitple memcpy's ) */</font>
+<a name="line859">859: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) { <font color="#B22222">/* for each target processor */</font>
+<a name="line860">860: </a>    <font color="#B22222">/* Scan indices to count n_copies -- the number of contiguous pieces for i-th target */</font>
+<a name="line861">861: </a>    n_copies = 1;
+<a name="line862">862: </a>    <font color="#4169E1">for</font> (j=offset[i]; j&lt;offset[i+1]-1; j++) {
+<a name="line863">863: </a>      <font color="#4169E1">if</font> (idx[j]+1 != idx[j+1]) n_copies++;
+<a name="line864">864: </a>    }
+<a name="line865">865: </a>    <font color="#B22222">/* If the average length (in no. of indices) of contiguous pieces is long enough, say &gt;=32,</font>
+<a name="line866">866: </a><font color="#B22222">       then it is worth using memcpy for this target. 32 is an arbitrarily chosen number.</font>
+<a name="line867">867: </a><font color="#B22222">     */</font>
+<a name="line868">868: </a>    <font color="#4169E1">if</font> ((offset[i+1]-offset[i])/n_copies &gt;= 32) {
+<a name="line869">869: </a>      opt-&gt;type[i] = PETSCSF_PACKOPT_MULTICOPY;
+<a name="line870">870: </a>      optimized    = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line871">871: </a>      tot_copies  += n_copies;
+<a name="line872">872: </a>    }
+<a name="line873">873: </a>  }
+
+<a name="line875">875: </a>  <font color="#B22222">/* Setup memcpy plan for each contiguous piece */</font>
+<a name="line876">876: </a>  k    = 0; <font color="#B22222">/* k-th copy */</font>
+<a name="line877">877: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(tot_copies,&amp;opt-&gt;copy_start,tot_copies,&amp;opt-&gt;copy_length,n,&amp;opt-&gt;stride_step,n,&amp;opt-&gt;stride_n);
+<a name="line878">878: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) { <font color="#B22222">/* for each target processor */</font>
+<a name="line879">879: </a>    <font color="#4169E1">if</font> (opt-&gt;type[i] == PETSCSF_PACKOPT_MULTICOPY) {
+<a name="line880">880: </a>      n_copies           = 1;
+<a name="line881">881: </a>      opt-&gt;copy_start[k] = offset[i] - offset[0];
+<a name="line882">882: </a>      <font color="#4169E1">for</font> (j=offset[i]; j&lt;offset[i+1]-1; j++) {
+<a name="line883">883: </a>        <font color="#4169E1">if</font> (idx[j]+1 != idx[j+1]) { <font color="#B22222">/* meet end of a copy (and next copy must exist) */</font>
+<a name="line884">884: </a>          n_copies++;
+<a name="line885">885: </a>          opt-&gt;copy_start[k+1] = j-offset[0]+1;
+<a name="line886">886: </a>          opt-&gt;copy_length[k]  = opt-&gt;copy_start[k+1] - opt-&gt;copy_start[k];
+<a name="line887">887: </a>          k++;
+<a name="line888">888: </a>        }
+<a name="line889">889: </a>      }
+<a name="line890">890: </a>      <font color="#B22222">/* Set copy length of the last copy for this target */</font>
+<a name="line891">891: </a>      opt-&gt;copy_length[k] = j-offset[0]+1 - opt-&gt;copy_start[k];
+<a name="line892">892: </a>      k++;
+<a name="line893">893: </a>    }
+<a name="line894">894: </a>    <font color="#B22222">/* Set offset for next target. When opt-&gt;type[i]=PETSCSF_PACKOPT_NONE, copy_offsets[i]=copy_offsets[i+1] */</font>
+<a name="line895">895: </a>    opt-&gt;copy_offset[i+1] = k;
+<a name="line896">896: </a>  }
+
+<a name="line898">898: </a>  <font color="#B22222">/* Last chance! If the indices do not have long contiguous pieces, are they strided? */</font>
+<a name="line899">899: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) { <font color="#B22222">/* for each remote */</font>
+<a name="line900">900: </a>    <font color="#4169E1">if</font> (opt-&gt;type[i]==PETSCSF_PACKOPT_NONE &amp;&amp; (offset[i+1] - offset[i]) &gt;= 16) { <font color="#B22222">/* few indices (&lt;16) are not worth striding */</font>
+<a name="line901">901: </a>      strided = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line902">902: </a>      step    = idx[offset[i]+1] - idx[offset[i]];
+<a name="line903">903: </a>      <font color="#4169E1">for</font> (j=offset[i]; j&lt;offset[i+1]-1; j++) {
+<a name="line904">904: </a>        <font color="#4169E1">if</font> (idx[j]+step != idx[j+1]) { strided = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>; <font color="#4169E1">break</font>; }
+<a name="line905">905: </a>      }
+<a name="line906">906: </a>      <font color="#4169E1">if</font> (strided) {
+<a name="line907">907: </a>        opt-&gt;type[i]         = PETSCSF_PACKOPT_STRIDE;
+<a name="line908">908: </a>        opt-&gt;stride_step[i]  = step;
+<a name="line909">909: </a>        opt-&gt;stride_n[i]     = offset[i+1] - offset[i];
+<a name="line910">910: </a>        optimized            = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line911">911: </a>      }
+<a name="line912">912: </a>    }
+<a name="line913">913: </a>  }
+<a name="line914">914: </a>  <font color="#B22222">/* If no rank gets optimized, free arrays to save memory */</font>
+<a name="line915">915: </a>  <font color="#4169E1">if</font> (!optimized) {
+<a name="line916">916: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(opt-&gt;type,opt-&gt;offset,opt-&gt;copy_offset);
+<a name="line917">917: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(opt-&gt;copy_start,opt-&gt;copy_length,opt-&gt;stride_step,opt-&gt;stride_n);
+<a name="line918">918: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(opt);
+<a name="line919">919: </a>    *out = NULL;
+<a name="line920">920: </a>  } <font color="#4169E1">else</font> *out = opt;
+<a name="line921">921: </a>  <font color="#4169E1">return</font>(0);
+<a name="line922">922: </a>}
+
+<a name="line924">924: </a><strong><font color="#4169E1"><a name="PetscSFPackOptDestroy"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscSFPackOptDestroy(PetscSFPackOpt *out)</font></strong>
+<a name="line925">925: </a>{
+<a name="line927">927: </a>  PetscSFPackOpt opt = *out;
+
+<a name="line930">930: </a>  <font color="#4169E1">if</font> (opt) {
+<a name="line931">931: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(opt-&gt;type,opt-&gt;offset,opt-&gt;copy_offset);
+<a name="line932">932: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(opt-&gt;copy_start,opt-&gt;copy_length,opt-&gt;stride_step,opt-&gt;stride_n);
+<a name="line933">933: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(opt);
+<a name="line934">934: </a>    *out = NULL;
+<a name="line935">935: </a>  }
+<a name="line936">936: </a>  <font color="#4169E1">return</font>(0);
+<a name="line937">937: </a>}
+</pre>
+</body>
+
+</html>

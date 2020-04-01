@@ -1,0 +1,1144 @@
+<center><a href="mkl_pardiso.c">Actual source code: mkl_pardiso.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/mat/impls/aij/seq/mkl_pardiso/mkl_pardiso.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:44:09+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/mat/impls/aij/seq/mkl_pardiso/mkl_pardiso.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><font color="#A020F0">#include &lt;../src/mat/impls/aij/seq/aij.h&gt;        </font><font color="#B22222">/*I "petscmat.h" I*/</font><font color="#A020F0"></font>
+<a name="line2">  2: </a><font color="#A020F0">#include &lt;../src/mat/impls/sbaij/seq/sbaij.h&gt;</font>
+<a name="line3">  3: </a><font color="#A020F0">#include &lt;../src/mat/impls/dense/seq/dense.h&gt;</font>
+
+<a name="line5">  5: </a><font color="#A020F0">#if defined(PETSC_HAVE_MKL_INTEL_ILP64)</font>
+<a name="line6">  6: </a><strong><font color="#228B22">#define MKL_ILP64</font></strong>
+<a name="line7">  7: </a><font color="#A020F0">#endif</font>
+<a name="line8">  8: </a><font color="#A020F0">#include &lt;mkl_pardiso.h&gt;</font>
+
+<a name="line10"> 10: </a><strong><font color="#4169E1">PETSC_EXTERN void PetscSetMKL_PARDISOThreads(int)</font></strong>;
+
+<a name="line12"> 12: </a><font color="#B22222">/*</font>
+<a name="line13"> 13: </a><font color="#B22222"> *  Possible mkl_pardiso phases that controls the execution of the solver.</font>
+<a name="line14"> 14: </a><font color="#B22222"> *  For more information check mkl_pardiso manual.</font>
+<a name="line15"> 15: </a><font color="#B22222"> */</font>
+<a name="line16"> 16: </a><strong><font color="#228B22">#define JOB_ANALYSIS 11</font></strong>
+<a name="line17"> 17: </a><strong><font color="#228B22">#define JOB_ANALYSIS_NUMERICAL_FACTORIZATION 12</font></strong>
+<a name="line18"> 18: </a><strong><font color="#228B22">#define JOB_ANALYSIS_NUMERICAL_FACTORIZATION_SOLVE_ITERATIVE_REFINEMENT 13</font></strong>
+<a name="line19"> 19: </a><strong><font color="#228B22">#define JOB_NUMERICAL_FACTORIZATION 22</font></strong>
+<a name="line20"> 20: </a><strong><font color="#228B22">#define JOB_NUMERICAL_FACTORIZATION_SOLVE_ITERATIVE_REFINEMENT 23</font></strong>
+<a name="line21"> 21: </a><strong><font color="#228B22">#define JOB_SOLVE_ITERATIVE_REFINEMENT 33</font></strong>
+<a name="line22"> 22: </a><strong><font color="#228B22">#define JOB_SOLVE_FORWARD_SUBSTITUTION 331</font></strong>
+<a name="line23"> 23: </a><strong><font color="#228B22">#define JOB_SOLVE_DIAGONAL_SUBSTITUTION 332</font></strong>
+<a name="line24"> 24: </a><strong><font color="#228B22">#define JOB_SOLVE_BACKWARD_SUBSTITUTION 333</font></strong>
+<a name="line25"> 25: </a><strong><font color="#228B22">#define JOB_RELEASE_OF_LU_MEMORY 0</font></strong>
+<a name="line26"> 26: </a><strong><font color="#228B22">#define JOB_RELEASE_OF_ALL_MEMORY -1</font></strong>
+
+<a name="line28"> 28: </a><strong><font color="#228B22">#define IPARM_SIZE 64</font></strong>
+
+<a name="line30"> 30: </a><font color="#A020F0">#if defined(PETSC_USE_64BIT_INDICES)</font>
+<a name="line31"> 31: </a><font color="#A020F0"> #if defined(PETSC_HAVE_MKL_INTEL_ILP64)</font>
+<a name="line32"> 32: </a><strong><font color="#228B22">  #define INT_TYPE long long int</font></strong>
+<a name="line33"> 33: </a><strong><font color="#228B22">  #define MKL_PARDISO pardiso</font></strong>
+<a name="line34"> 34: </a><strong><font color="#228B22">  #define MKL_PARDISO_INIT pardisoinit</font></strong>
+<a name="line35"> 35: </a><font color="#A020F0"> #else</font>
+<a name="line36"> 36: </a>  <font color="#B22222">/* this is the case where the MKL BLAS/LAPACK are 32 bit integers but the 64 bit integer version of</font>
+<a name="line37"> 37: </a><font color="#B22222">     of Pardiso code is used; hence the need for the 64 below*/</font>
+<a name="line38"> 38: </a><strong><font color="#228B22">  #define INT_TYPE long long int</font></strong>
+<a name="line39"> 39: </a><strong><font color="#228B22">  #define MKL_PARDISO pardiso_64</font></strong>
+<a name="line40"> 40: </a><strong><font color="#228B22">  #define MKL_PARDISO_INIT pardiso_64init</font></strong>
+<a name="line41"> 41: </a><strong><font color="#4169E1"><a name="pardiso_64init"></a>void pardiso_64init(void *pt, INT_TYPE *mtype, INT_TYPE iparm [])</font></strong>
+<a name="line42"> 42: </a>{
+<a name="line43"> 43: </a>  int iparm_copy[IPARM_SIZE], mtype_copy, i;
+
+<a name="line45"> 45: </a>  mtype_copy = *mtype;
+<a name="line46"> 46: </a>  pardisoinit(pt, &amp;mtype_copy, iparm_copy);
+<a name="line47"> 47: </a>  <font color="#4169E1">for</font> (i=0; i&lt;IPARM_SIZE; i++) iparm[i] = iparm_copy[i];
+<a name="line48"> 48: </a>}
+<a name="line49"> 49: </a><font color="#A020F0"> #endif</font>
+<a name="line50"> 50: </a><font color="#A020F0">#else</font>
+<a name="line51"> 51: </a><strong><font color="#228B22"> #define INT_TYPE int</font></strong>
+<a name="line52"> 52: </a><strong><font color="#228B22"> #define MKL_PARDISO pardiso</font></strong>
+<a name="line53"> 53: </a><strong><font color="#228B22"> #define MKL_PARDISO_INIT pardisoinit</font></strong>
+<a name="line54"> 54: </a><font color="#A020F0">#endif</font>
+
+
+<a name="line57"> 57: </a><font color="#B22222">/*</font>
+<a name="line58"> 58: </a><font color="#B22222"> *  Internal data structure.</font>
+<a name="line59"> 59: </a><font color="#B22222"> *  For more information check mkl_pardiso manual.</font>
+<a name="line60"> 60: </a><font color="#B22222"> */</font>
+<a name="line61"> 61: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+
+<a name="line63"> 63: </a>  <font color="#B22222">/* Configuration vector*/</font>
+<a name="line64"> 64: </a>  INT_TYPE     iparm[IPARM_SIZE];
+
+<a name="line66"> 66: </a>  <font color="#B22222">/*</font>
+<a name="line67"> 67: </a><font color="#B22222">   * Internal mkl_pardiso memory location.</font>
+<a name="line68"> 68: </a><font color="#B22222">   * After the first call to mkl_pardiso do not modify pt, as that could cause a serious memory leak.</font>
+<a name="line69"> 69: </a><font color="#B22222">   */</font>
+<a name="line70"> 70: </a>  void         *pt[IPARM_SIZE];
+
+<a name="line72"> 72: </a>  <font color="#B22222">/* Basic mkl_pardiso info*/</font>
+<a name="line73"> 73: </a>  INT_TYPE     phase, maxfct, mnum, mtype, n, nrhs, msglvl, err;
+
+<a name="line75"> 75: </a>  <font color="#B22222">/* Matrix structure*/</font>
+<a name="line76"> 76: </a>  void         *a;
+<a name="line77"> 77: </a>  INT_TYPE     *ia, *ja;
+
+<a name="line79"> 79: </a>  <font color="#B22222">/* Number of non-zero elements*/</font>
+<a name="line80"> 80: </a>  INT_TYPE     nz;
+
+<a name="line82"> 82: </a>  <font color="#B22222">/* Row permutaton vector*/</font>
+<a name="line83"> 83: </a>  INT_TYPE     *perm;
+
+<a name="line85"> 85: </a>  <font color="#B22222">/* Define if matrix preserves sparse structure.*/</font>
+<a name="line86"> 86: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatStructure.html#MatStructure">MatStructure</a> matstruc;
+
+<a name="line88"> 88: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>    needsym;
+<a name="line89"> 89: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>    freeaij;
+
+<a name="line91"> 91: </a>  <font color="#B22222">/* Schur complement */</font>
+<a name="line92"> 92: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>  *schur;
+<a name="line93"> 93: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     schur_size;
+<a name="line94"> 94: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     *schur_idxs;
+<a name="line95"> 95: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>  *schur_work;
+<a name="line96"> 96: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a> schur_work_size;
+<a name="line97"> 97: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>    solve_interior;
+
+<a name="line99"> 99: </a>  <font color="#B22222">/* True if mkl_pardiso function have been used.*/</font>
+<a name="line100">100: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> CleanUp;
+
+<a name="line102">102: </a>  <font color="#B22222">/* Conversion to a format suitable for MKL */</font>
+<a name="line103">103: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> (*Convert)(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>, <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>, <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MatReuse</a>, <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>*, INT_TYPE*, INT_TYPE**, INT_TYPE**, <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>**);
+<a name="line104">104: </a>} Mat_MKL_PARDISO;
+
+<a name="line106">106: </a><strong><font color="#4169E1"><a name="MatMKLPardiso_Convert_seqsbaij"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatMKLPardiso_Convert_seqsbaij(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> sym,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MatReuse</a> reuse,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *free,INT_TYPE *nnz,INT_TYPE **r,INT_TYPE **c,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> **v)</font></strong>
+<a name="line107">107: </a>{
+<a name="line108">108: </a>  Mat_SeqSBAIJ   *aa = (Mat_SeqSBAIJ*)A-&gt;data;
+<a name="line109">109: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       bs  = A-&gt;rmap-&gt;bs,i;
+
+<a name="line113">113: </a>  <font color="#4169E1">if</font> (!sym) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),PETSC_ERR_PLIB,<font color="#666666">"This should not happen"</font>);
+<a name="line114">114: </a>  *v      = aa-&gt;a;
+<a name="line115">115: </a>  <font color="#4169E1">if</font> (bs == 1) { <font color="#B22222">/* already in the correct format */</font>
+<a name="line116">116: </a>    <font color="#B22222">/* though <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> and INT_TYPE are of the same size since they are defined differently the Intel compiler requires a cast */</font>
+<a name="line117">117: </a>    *r    = (INT_TYPE*)aa-&gt;i;
+<a name="line118">118: </a>    *c    = (INT_TYPE*)aa-&gt;j;
+<a name="line119">119: </a>    *nnz  = (INT_TYPE)aa-&gt;nz;
+<a name="line120">120: </a>    *free = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line121">121: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (reuse == <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>) {
+<a name="line122">122: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> m = A-&gt;rmap-&gt;n,nz = aa-&gt;nz;
+<a name="line123">123: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *row,*col;
+<a name="line124">124: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(m+1,&amp;row,nz,&amp;col);
+<a name="line125">125: </a>    <font color="#4169E1">for</font> (i=0; i&lt;m+1; i++) {
+<a name="line126">126: </a>      row[i] = aa-&gt;i[i]+1;
+<a name="line127">127: </a>    }
+<a name="line128">128: </a>    <font color="#4169E1">for</font> (i=0; i&lt;nz; i++) {
+<a name="line129">129: </a>      col[i] = aa-&gt;j[i]+1;
+<a name="line130">130: </a>    }
+<a name="line131">131: </a>    *r    = (INT_TYPE*)row;
+<a name="line132">132: </a>    *c    = (INT_TYPE*)col;
+<a name="line133">133: </a>    *nnz  = (INT_TYPE)nz;
+<a name="line134">134: </a>    *free = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line135">135: </a>  }
+<a name="line136">136: </a>  <font color="#4169E1">return</font>(0);
+<a name="line137">137: </a>}
+
+<a name="line139">139: </a><strong><font color="#4169E1"><a name="MatMKLPardiso_Convert_seqbaij"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatMKLPardiso_Convert_seqbaij(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> sym,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MatReuse</a> reuse,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *free,INT_TYPE *nnz,INT_TYPE **r,INT_TYPE **c,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> **v)</font></strong>
+<a name="line140">140: </a>{
+<a name="line141">141: </a>  Mat_SeqBAIJ    *aa = (Mat_SeqBAIJ*)A-&gt;data;
+<a name="line142">142: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       bs  = A-&gt;rmap-&gt;bs,i;
+
+<a name="line146">146: </a>  <font color="#4169E1">if</font> (!sym) {
+<a name="line147">147: </a>    *v      = aa-&gt;a;
+<a name="line148">148: </a>    <font color="#4169E1">if</font> (bs == 1) { <font color="#B22222">/* already in the correct format */</font>
+<a name="line149">149: </a>      <font color="#B22222">/* though <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> and INT_TYPE are of the same size since they are defined differently the Intel compiler requires a cast */</font>
+<a name="line150">150: </a>      *r    = (INT_TYPE*)aa-&gt;i;
+<a name="line151">151: </a>      *c    = (INT_TYPE*)aa-&gt;j;
+<a name="line152">152: </a>      *nnz  = (INT_TYPE)aa-&gt;nz;
+<a name="line153">153: </a>      *free = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line154">154: </a>      <font color="#4169E1">return</font>(0);
+<a name="line155">155: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (reuse == <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>) {
+<a name="line156">156: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> m = A-&gt;rmap-&gt;n,nz = aa-&gt;nz;
+<a name="line157">157: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *row,*col;
+<a name="line158">158: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(m+1,&amp;row,nz,&amp;col);
+<a name="line159">159: </a>      <font color="#4169E1">for</font> (i=0; i&lt;m+1; i++) {
+<a name="line160">160: </a>        row[i] = aa-&gt;i[i]+1;
+<a name="line161">161: </a>      }
+<a name="line162">162: </a>      <font color="#4169E1">for</font> (i=0; i&lt;nz; i++) {
+<a name="line163">163: </a>        col[i] = aa-&gt;j[i]+1;
+<a name="line164">164: </a>      }
+<a name="line165">165: </a>      *r    = (INT_TYPE*)row;
+<a name="line166">166: </a>      *c    = (INT_TYPE*)col;
+<a name="line167">167: </a>      *nnz  = (INT_TYPE)nz;
+<a name="line168">168: </a>    }
+<a name="line169">169: </a>    *free = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line170">170: </a>  } <font color="#4169E1">else</font> {
+<a name="line171">171: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),PETSC_ERR_PLIB,<font color="#666666">"This should not happen"</font>);
+<a name="line172">172: </a>  }
+<a name="line173">173: </a>  <font color="#4169E1">return</font>(0);
+<a name="line174">174: </a>}
+
+<a name="line176">176: </a><strong><font color="#4169E1"><a name="MatMKLPardiso_Convert_seqaij"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatMKLPardiso_Convert_seqaij(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> sym,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MatReuse</a> reuse,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *free,INT_TYPE *nnz,INT_TYPE **r,INT_TYPE **c,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> **v)</font></strong>
+<a name="line177">177: </a>{
+<a name="line178">178: </a>  Mat_SeqAIJ     *aa = (Mat_SeqAIJ*)A-&gt;data;
+<a name="line179">179: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *aav;
+
+<a name="line183">183: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatSeqAIJGetArrayRead.html#MatSeqAIJGetArrayRead">MatSeqAIJGetArrayRead</a>(A,(const <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>**)&amp;aav);
+<a name="line184">184: </a>  <font color="#4169E1">if</font> (!sym) { <font color="#B22222">/* already in the correct format */</font>
+<a name="line185">185: </a>    *v    = aav;
+<a name="line186">186: </a>    *r    = (INT_TYPE*)aa-&gt;i;
+<a name="line187">187: </a>    *c    = (INT_TYPE*)aa-&gt;j;
+<a name="line188">188: </a>    *nnz  = (INT_TYPE)aa-&gt;nz;
+<a name="line189">189: </a>    *free = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line190">190: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (reuse == <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>) { <font color="#B22222">/* need to get the triangular part */</font>
+<a name="line191">191: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *vals,*vv;
+<a name="line192">192: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *row,*col,*jj;
+<a name="line193">193: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    m = A-&gt;rmap-&gt;n,nz,i;
+
+<a name="line195">195: </a>    nz = 0;
+<a name="line196">196: </a>    <font color="#4169E1">for</font> (i=0; i&lt;m; i++) nz += aa-&gt;i[i+1] - aa-&gt;diag[i];
+<a name="line197">197: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(m+1,&amp;row,nz,&amp;col);
+<a name="line198">198: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nz,&amp;vals);
+<a name="line199">199: </a>    jj = col;
+<a name="line200">200: </a>    vv = vals;
+
+<a name="line202">202: </a>    row[0] = 0;
+<a name="line203">203: </a>    <font color="#4169E1">for</font> (i=0; i&lt;m; i++) {
+<a name="line204">204: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *aj = aa-&gt;j + aa-&gt;diag[i];
+<a name="line205">205: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *av = aav + aa-&gt;diag[i];
+<a name="line206">206: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    rl  = aa-&gt;i[i+1] - aa-&gt;diag[i],j;
+
+<a name="line208">208: </a>      <font color="#4169E1">for</font> (j=0; j&lt;rl; j++) {
+<a name="line209">209: </a>        *jj = *aj; jj++; aj++;
+<a name="line210">210: </a>        *vv = *av; vv++; av++;
+<a name="line211">211: </a>      }
+<a name="line212">212: </a>      row[i+1] = row[i] + rl;
+<a name="line213">213: </a>    }
+<a name="line214">214: </a>    *v    = vals;
+<a name="line215">215: </a>    *r    = (INT_TYPE*)row;
+<a name="line216">216: </a>    *c    = (INT_TYPE*)col;
+<a name="line217">217: </a>    *nnz  = (INT_TYPE)nz;
+<a name="line218">218: </a>    *free = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line219">219: </a>  } <font color="#4169E1">else</font> {
+<a name="line220">220: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *vv;
+<a name="line221">221: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    m = A-&gt;rmap-&gt;n,i;
+
+<a name="line223">223: </a>    vv = *v;
+<a name="line224">224: </a>    <font color="#4169E1">for</font> (i=0; i&lt;m; i++) {
+<a name="line225">225: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *av = aav + aa-&gt;diag[i];
+<a name="line226">226: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    rl  = aa-&gt;i[i+1] - aa-&gt;diag[i],j;
+<a name="line227">227: </a>      <font color="#4169E1">for</font> (j=0; j&lt;rl; j++) {
+<a name="line228">228: </a>        *vv = *av; vv++; av++;
+<a name="line229">229: </a>      }
+<a name="line230">230: </a>    }
+<a name="line231">231: </a>    *free = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line232">232: </a>  }
+<a name="line233">233: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatSeqAIJRestoreArrayRead.html#MatSeqAIJRestoreArrayRead">MatSeqAIJRestoreArrayRead</a>(A,(const <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>**)&amp;aav);
+<a name="line234">234: </a>  <font color="#4169E1">return</font>(0);
+<a name="line235">235: </a>}
+
+
+<a name="line238">238: </a><strong><font color="#4169E1"><a name="MatMKLPardisoSolveSchur_Private"></a>static <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatMKLPardisoSolveSchur_Private(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> F, <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *B, <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *X)</font></strong>
+<a name="line239">239: </a>{
+<a name="line240">240: </a>  Mat_MKL_PARDISO      *mpardiso = (Mat_MKL_PARDISO*)F-&gt;data;
+<a name="line241">241: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>                  S,Xmat,Bmat;
+<a name="line242">242: </a>  MatFactorSchurStatus schurstatus;
+<a name="line243">243: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>       ierr;
+
+<a name="line246">246: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorFactorizeSchurComplement.html#MatFactorFactorizeSchurComplement">MatFactorFactorizeSchurComplement</a>(F);
+<a name="line247">247: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorGetSchurComplement.html#MatFactorGetSchurComplement">MatFactorGetSchurComplement</a>(F,&amp;S,&amp;schurstatus);
+<a name="line248">248: </a>  <font color="#4169E1">if</font> (X == B &amp;&amp; schurstatus == MAT_FACTOR_SCHUR_INVERTED) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"X and B cannot point to the same address"</font>);
+<a name="line249">249: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatCreateSeqDense.html#MatCreateSeqDense">MatCreateSeqDense</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,mpardiso-&gt;schur_size,mpardiso-&gt;nrhs,B,&amp;Bmat);
+<a name="line250">250: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatCreateSeqDense.html#MatCreateSeqDense">MatCreateSeqDense</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,mpardiso-&gt;schur_size,mpardiso-&gt;nrhs,X,&amp;Xmat);
+<a name="line251">251: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(Bmat,((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)S)-&gt;type_name);
+<a name="line252">252: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(Xmat,((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)S)-&gt;type_name);
+<a name="line253">253: </a><font color="#A020F0">#if defined(PETSC_HAVE_VIENNACL) || defined(PETSC_HAVE_CUDA)</font>
+<a name="line254">254: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatPinToCPU.html#MatPinToCPU">MatPinToCPU</a>(Xmat,S-&gt;pinnedtocpu);
+<a name="line255">255: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatPinToCPU.html#MatPinToCPU">MatPinToCPU</a>(Bmat,S-&gt;pinnedtocpu);
+<a name="line256">256: </a><font color="#A020F0">#endif</font>
+
+<a name="line258">258: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line259">259: </a>  <font color="#4169E1">if</font> (mpardiso-&gt;iparm[12-1] == 1) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)F),PETSC_ERR_SUP,<font color="#666666">"Hermitian solve not implemented yet"</font>);
+<a name="line260">260: </a><font color="#A020F0">#endif</font>
+
+<a name="line262">262: </a>  <font color="#4169E1">switch</font> (schurstatus) {
+<a name="line263">263: </a>  <font color="#4169E1">case</font> MAT_FACTOR_SCHUR_FACTORED:
+<a name="line264">264: </a>    <font color="#4169E1">if</font> (!mpardiso-&gt;iparm[12-1]) {
+<a name="line265">265: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatMatSolve.html#MatMatSolve">MatMatSolve</a>(S,Bmat,Xmat);
+<a name="line266">266: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* transpose solve */</font>
+<a name="line267">267: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatMatSolveTranspose.html#MatMatSolveTranspose">MatMatSolveTranspose</a>(S,Bmat,Xmat);
+<a name="line268">268: </a>    }
+<a name="line269">269: </a>    <font color="#4169E1">break</font>;
+<a name="line270">270: </a>  <font color="#4169E1">case</font> MAT_FACTOR_SCHUR_INVERTED:
+<a name="line271">271: </a>    <font color="#4169E1">if</font> (!mpardiso-&gt;iparm[12-1]) {
+<a name="line272">272: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatMatMult.html#MatMatMult">MatMatMult</a>(S,Bmat,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_REUSE_MATRIX</a>,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_DEFAULT.html#PETSC_DEFAULT">PETSC_DEFAULT</a>,&amp;Xmat);
+<a name="line273">273: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* transpose solve */</font>
+<a name="line274">274: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatTransposeMatMult.html#MatTransposeMatMult">MatTransposeMatMult</a>(S,Bmat,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_REUSE_MATRIX</a>,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_DEFAULT.html#PETSC_DEFAULT">PETSC_DEFAULT</a>,&amp;Xmat);
+<a name="line275">275: </a>    }
+<a name="line276">276: </a>    <font color="#4169E1">break</font>;
+<a name="line277">277: </a><strong><font color="#FF0000">  default:</font></strong>
+<a name="line278">278: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)F),PETSC_ERR_SUP,<font color="#666666">"Unhandled MatFactorSchurStatus %D"</font>,F-&gt;schur_status);
+<a name="line279">279: </a>    <font color="#4169E1">break</font>;
+<a name="line280">280: </a>  }
+<a name="line281">281: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorRestoreSchurComplement.html#MatFactorRestoreSchurComplement">MatFactorRestoreSchurComplement</a>(F,&amp;S,schurstatus);
+<a name="line282">282: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;Bmat);
+<a name="line283">283: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;Xmat);
+<a name="line284">284: </a>  <font color="#4169E1">return</font>(0);
+<a name="line285">285: </a>}
+
+<a name="line287">287: </a><strong><font color="#4169E1"><a name="MatFactorSetSchurIS_MKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatFactorSetSchurIS_MKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> F, <a href="../../../../.._pardiso/../docs/manualpages/IS/IS.html#IS">IS</a> is)</font></strong>
+<a name="line288">288: </a>{
+<a name="line289">289: </a>  Mat_MKL_PARDISO   *mpardiso = (Mat_MKL_PARDISO*)F-&gt;data;
+<a name="line290">290: </a>  const <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *arr;
+<a name="line291">291: </a>  const <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *idxs;
+<a name="line292">292: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          size,i;
+<a name="line293">293: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>       csize;
+<a name="line294">294: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         sorted;
+<a name="line295">295: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+<a name="line298">298: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)F),&amp;csize);
+<a name="line299">299: </a>  <font color="#4169E1">if</font> (csize &gt; 1) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"MKL_PARDISO parallel Schur complements not yet supported from PETSc"</font>);
+<a name="line300">300: </a>  <a href="../../../../.._pardiso/../docs/manualpages/IS/ISSorted.html#ISSorted">ISSorted</a>(is,&amp;sorted);
+<a name="line301">301: </a>  <font color="#4169E1">if</font> (!sorted) {
+<a name="line302">302: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"<a href="../../../../.._pardiso/../docs/manualpages/IS/IS.html#IS">IS</a> for MKL_PARDISO Schur complements needs to be sorted"</font>);
+<a name="line303">303: </a>  }
+<a name="line304">304: </a>  <a href="../../../../.._pardiso/../docs/manualpages/IS/ISGetLocalSize.html#ISGetLocalSize">ISGetLocalSize</a>(is,&amp;size);
+<a name="line305">305: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(mpardiso-&gt;schur_work);
+<a name="line306">306: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(mpardiso-&gt;n,2*size),&amp;mpardiso-&gt;schur_work_size);
+<a name="line307">307: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(mpardiso-&gt;schur_work_size,&amp;mpardiso-&gt;schur_work);
+<a name="line308">308: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;F-&gt;schur);
+<a name="line309">309: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatCreateSeqDense.html#MatCreateSeqDense">MatCreateSeqDense</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,size,size,NULL,&amp;F-&gt;schur);
+<a name="line310">310: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatDenseGetArrayRead.html#MatDenseGetArrayRead">MatDenseGetArrayRead</a>(F-&gt;schur,&amp;arr);
+<a name="line311">311: </a>  mpardiso-&gt;schur      = (<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>*)arr;
+<a name="line312">312: </a>  mpardiso-&gt;schur_size = size;
+<a name="line313">313: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatDenseRestoreArrayRead.html#MatDenseRestoreArrayRead">MatDenseRestoreArrayRead</a>(F-&gt;schur,&amp;arr);
+<a name="line314">314: </a>  <font color="#4169E1">if</font> (mpardiso-&gt;mtype == 2) {
+<a name="line315">315: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatSetOption.html#MatSetOption">MatSetOption</a>(F-&gt;schur,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatOption.html#MatOption">MAT_SPD</a>,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line316">316: </a>  }
+
+<a name="line318">318: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(mpardiso-&gt;schur_idxs);
+<a name="line319">319: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(size,&amp;mpardiso-&gt;schur_idxs);
+<a name="line320">320: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscArrayzero.html#PetscArrayzero">PetscArrayzero</a>(mpardiso-&gt;perm,mpardiso-&gt;n);
+<a name="line321">321: </a>  <a href="../../../../.._pardiso/../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(is,&amp;idxs);
+<a name="line322">322: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(mpardiso-&gt;schur_idxs,idxs,size);
+<a name="line323">323: </a>  <font color="#4169E1">for</font> (i=0;i&lt;size;i++) mpardiso-&gt;perm[idxs[i]] = 1;
+<a name="line324">324: </a>  <a href="../../../../.._pardiso/../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(is,&amp;idxs);
+<a name="line325">325: </a>  <font color="#4169E1">if</font> (size) { <font color="#B22222">/* turn on Schur switch if the set of indices is not empty */</font>
+<a name="line326">326: </a>    mpardiso-&gt;iparm[36-1] = 2;
+<a name="line327">327: </a>  }
+<a name="line328">328: </a>  <font color="#4169E1">return</font>(0);
+<a name="line329">329: </a>}
+
+<a name="line331">331: </a><strong><font color="#4169E1"><a name="MatDestroy_MKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatDestroy_MKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A)</font></strong>
+<a name="line332">332: </a>{
+<a name="line333">333: </a>  Mat_MKL_PARDISO *mat_mkl_pardiso=(Mat_MKL_PARDISO*)A-&gt;data;
+<a name="line334">334: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line337">337: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;CleanUp) {
+<a name="line338">338: </a>    mat_mkl_pardiso-&gt;phase = JOB_RELEASE_OF_ALL_MEMORY;
+
+<a name="line340">340: </a>    MKL_PARDISO (mat_mkl_pardiso-&gt;pt,
+<a name="line341">341: </a>      &amp;mat_mkl_pardiso-&gt;maxfct,
+<a name="line342">342: </a>      &amp;mat_mkl_pardiso-&gt;mnum,
+<a name="line343">343: </a>      &amp;mat_mkl_pardiso-&gt;mtype,
+<a name="line344">344: </a>      &amp;mat_mkl_pardiso-&gt;phase,
+<a name="line345">345: </a>      &amp;mat_mkl_pardiso-&gt;n,
+<a name="line346">346: </a>      NULL,
+<a name="line347">347: </a>      NULL,
+<a name="line348">348: </a>      NULL,
+<a name="line349">349: </a>      NULL,
+<a name="line350">350: </a>      &amp;mat_mkl_pardiso-&gt;nrhs,
+<a name="line351">351: </a>      mat_mkl_pardiso-&gt;iparm,
+<a name="line352">352: </a>      &amp;mat_mkl_pardiso-&gt;msglvl,
+<a name="line353">353: </a>      NULL,
+<a name="line354">354: </a>      NULL,
+<a name="line355">355: </a>      &amp;mat_mkl_pardiso-&gt;err);
+<a name="line356">356: </a>  }
+<a name="line357">357: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(mat_mkl_pardiso-&gt;perm);
+<a name="line358">358: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(mat_mkl_pardiso-&gt;schur_work);
+<a name="line359">359: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(mat_mkl_pardiso-&gt;schur_idxs);
+<a name="line360">360: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;freeaij) {
+<a name="line361">361: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(mat_mkl_pardiso-&gt;ia,mat_mkl_pardiso-&gt;ja);
+<a name="line362">362: </a>    <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;iparm[34] == 1) {
+<a name="line363">363: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(mat_mkl_pardiso-&gt;a);
+<a name="line364">364: </a>    }
+<a name="line365">365: </a>  }
+<a name="line366">366: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(A-&gt;data);
+
+<a name="line368">368: </a>  <font color="#B22222">/* clear composed functions */</font>
+<a name="line369">369: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A,<font color="#666666">"MatFactorGetSolverType_C"</font>,NULL);
+<a name="line370">370: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A,<font color="#666666">"MatFactorSetSchurIS_C"</font>,NULL);
+<a name="line371">371: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A,<font color="#666666">"MatMkl_PardisoSetCntl_C"</font>,NULL);
+<a name="line372">372: </a>  <font color="#4169E1">return</font>(0);
+<a name="line373">373: </a>}
+
+<a name="line375">375: </a><strong><font color="#4169E1"><a name="MatMKLPardisoScatterSchur_Private"></a>static <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatMKLPardisoScatterSchur_Private(Mat_MKL_PARDISO *mpardiso, <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *whole, <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *schur, <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> reduce)</font></strong>
+<a name="line376">376: </a>{
+<a name="line378">378: </a>  <font color="#4169E1">if</font> (reduce) { <font color="#B22222">/* data given for the whole matrix */</font>
+<a name="line379">379: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> i,m=0,p=0;
+<a name="line380">380: </a>    <font color="#4169E1">for</font> (i=0;i&lt;mpardiso-&gt;nrhs;i++) {
+<a name="line381">381: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> j;
+<a name="line382">382: </a>      <font color="#4169E1">for</font> (j=0;j&lt;mpardiso-&gt;schur_size;j++) {
+<a name="line383">383: </a>        schur[p+j] = whole[m+mpardiso-&gt;schur_idxs[j]];
+<a name="line384">384: </a>      }
+<a name="line385">385: </a>      m += mpardiso-&gt;n;
+<a name="line386">386: </a>      p += mpardiso-&gt;schur_size;
+<a name="line387">387: </a>    }
+<a name="line388">388: </a>  } <font color="#4169E1">else</font> { <font color="#B22222">/* from Schur to whole */</font>
+<a name="line389">389: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> i,m=0,p=0;
+<a name="line390">390: </a>    <font color="#4169E1">for</font> (i=0;i&lt;mpardiso-&gt;nrhs;i++) {
+<a name="line391">391: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> j;
+<a name="line392">392: </a>      <font color="#4169E1">for</font> (j=0;j&lt;mpardiso-&gt;schur_size;j++) {
+<a name="line393">393: </a>        whole[m+mpardiso-&gt;schur_idxs[j]] = schur[p+j];
+<a name="line394">394: </a>      }
+<a name="line395">395: </a>      m += mpardiso-&gt;n;
+<a name="line396">396: </a>      p += mpardiso-&gt;schur_size;
+<a name="line397">397: </a>    }
+<a name="line398">398: </a>  }
+<a name="line399">399: </a>  <font color="#4169E1">return</font>(0);
+<a name="line400">400: </a>}
+
+<a name="line402">402: </a><strong><font color="#4169E1"><a name="MatSolve_MKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSolve_MKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../.._pardiso/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> b,<a href="../../../../.._pardiso/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x)</font></strong>
+<a name="line403">403: </a>{
+<a name="line404">404: </a>  Mat_MKL_PARDISO   *mat_mkl_pardiso=(Mat_MKL_PARDISO*)A-&gt;data;
+<a name="line405">405: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line406">406: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *xarray;
+<a name="line407">407: </a>  const <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *barray;
+
+<a name="line410">410: </a>  mat_mkl_pardiso-&gt;nrhs = 1;
+<a name="line411">411: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(x,&amp;xarray);
+<a name="line412">412: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(b,&amp;barray);
+
+<a name="line414">414: </a>  <font color="#4169E1">if</font> (!mat_mkl_pardiso-&gt;schur) mat_mkl_pardiso-&gt;phase = JOB_SOLVE_ITERATIVE_REFINEMENT;
+<a name="line415">415: </a>  <font color="#4169E1">else</font> mat_mkl_pardiso-&gt;phase = JOB_SOLVE_FORWARD_SUBSTITUTION;
+
+<a name="line417">417: </a>  <font color="#4169E1">if</font> (barray == xarray) { <font color="#B22222">/* if the two vectors share the same memory */</font>
+<a name="line418">418: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *work;
+<a name="line419">419: </a>    <font color="#4169E1">if</font> (!mat_mkl_pardiso-&gt;schur_work) {
+<a name="line420">420: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(mat_mkl_pardiso-&gt;n,&amp;work);
+<a name="line421">421: </a>    } <font color="#4169E1">else</font> {
+<a name="line422">422: </a>      work = mat_mkl_pardiso-&gt;schur_work;
+<a name="line423">423: </a>    }
+<a name="line424">424: </a>    mat_mkl_pardiso-&gt;iparm[6-1] = 1;
+<a name="line425">425: </a>    MKL_PARDISO (mat_mkl_pardiso-&gt;pt,
+<a name="line426">426: </a>      &amp;mat_mkl_pardiso-&gt;maxfct,
+<a name="line427">427: </a>      &amp;mat_mkl_pardiso-&gt;mnum,
+<a name="line428">428: </a>      &amp;mat_mkl_pardiso-&gt;mtype,
+<a name="line429">429: </a>      &amp;mat_mkl_pardiso-&gt;phase,
+<a name="line430">430: </a>      &amp;mat_mkl_pardiso-&gt;n,
+<a name="line431">431: </a>      mat_mkl_pardiso-&gt;a,
+<a name="line432">432: </a>      mat_mkl_pardiso-&gt;ia,
+<a name="line433">433: </a>      mat_mkl_pardiso-&gt;ja,
+<a name="line434">434: </a>      NULL,
+<a name="line435">435: </a>      &amp;mat_mkl_pardiso-&gt;nrhs,
+<a name="line436">436: </a>      mat_mkl_pardiso-&gt;iparm,
+<a name="line437">437: </a>      &amp;mat_mkl_pardiso-&gt;msglvl,
+<a name="line438">438: </a>      (void*)xarray,
+<a name="line439">439: </a>      (void*)work,
+<a name="line440">440: </a>      &amp;mat_mkl_pardiso-&gt;err);
+<a name="line441">441: </a>    <font color="#4169E1">if</font> (!mat_mkl_pardiso-&gt;schur_work) {
+<a name="line442">442: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(work);
+<a name="line443">443: </a>    }
+<a name="line444">444: </a>  } <font color="#4169E1">else</font> {
+<a name="line445">445: </a>    mat_mkl_pardiso-&gt;iparm[6-1] = 0;
+<a name="line446">446: </a>    MKL_PARDISO (mat_mkl_pardiso-&gt;pt,
+<a name="line447">447: </a>      &amp;mat_mkl_pardiso-&gt;maxfct,
+<a name="line448">448: </a>      &amp;mat_mkl_pardiso-&gt;mnum,
+<a name="line449">449: </a>      &amp;mat_mkl_pardiso-&gt;mtype,
+<a name="line450">450: </a>      &amp;mat_mkl_pardiso-&gt;phase,
+<a name="line451">451: </a>      &amp;mat_mkl_pardiso-&gt;n,
+<a name="line452">452: </a>      mat_mkl_pardiso-&gt;a,
+<a name="line453">453: </a>      mat_mkl_pardiso-&gt;ia,
+<a name="line454">454: </a>      mat_mkl_pardiso-&gt;ja,
+<a name="line455">455: </a>      mat_mkl_pardiso-&gt;perm,
+<a name="line456">456: </a>      &amp;mat_mkl_pardiso-&gt;nrhs,
+<a name="line457">457: </a>      mat_mkl_pardiso-&gt;iparm,
+<a name="line458">458: </a>      &amp;mat_mkl_pardiso-&gt;msglvl,
+<a name="line459">459: </a>      (void*)barray,
+<a name="line460">460: </a>      (void*)xarray,
+<a name="line461">461: </a>      &amp;mat_mkl_pardiso-&gt;err);
+<a name="line462">462: </a>  }
+<a name="line463">463: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(b,&amp;barray);
+
+<a name="line465">465: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;err &lt; 0) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error reported by MKL_PARDISO: err=%d. Please check manual"</font>,mat_mkl_pardiso-&gt;err);
+
+<a name="line467">467: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;schur) { <font color="#B22222">/* solve Schur complement and expand solution */</font>
+<a name="line468">468: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> shift = mat_mkl_pardiso-&gt;schur_size;
+
+<a name="line470">470: </a>    <font color="#B22222">/* if inverted, uses BLAS *MM subroutines, otherwise LAPACK *TRS */</font>
+<a name="line471">471: </a>    <font color="#4169E1">if</font> (A-&gt;schur_status != MAT_FACTOR_SCHUR_INVERTED) shift = 0;
+
+<a name="line473">473: </a>    <font color="#4169E1">if</font> (!mat_mkl_pardiso-&gt;solve_interior) {
+<a name="line474">474: </a>      <font color="#B22222">/* solve Schur complement */</font>
+<a name="line475">475: </a>      MatMKLPardisoScatterSchur_Private(mat_mkl_pardiso,xarray,mat_mkl_pardiso-&gt;schur_work,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line476">476: </a>      MatMKLPardisoSolveSchur_Private(A,mat_mkl_pardiso-&gt;schur_work,mat_mkl_pardiso-&gt;schur_work+shift);
+<a name="line477">477: </a>      MatMKLPardisoScatterSchur_Private(mat_mkl_pardiso,xarray,mat_mkl_pardiso-&gt;schur_work+shift,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line478">478: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* if we are solving for the interior problem, any value in barray[schur] forward-substituted to xarray[schur] will be neglected */</font>
+<a name="line479">479: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> i;
+<a name="line480">480: </a>      <font color="#4169E1">for</font> (i=0;i&lt;mat_mkl_pardiso-&gt;schur_size;i++) {
+<a name="line481">481: </a>        xarray[mat_mkl_pardiso-&gt;schur_idxs[i]] = 0.;
+<a name="line482">482: </a>      }
+<a name="line483">483: </a>    }
+
+<a name="line485">485: </a>    <font color="#B22222">/* expansion phase */</font>
+<a name="line486">486: </a>    mat_mkl_pardiso-&gt;iparm[6-1] = 1;
+<a name="line487">487: </a>    mat_mkl_pardiso-&gt;phase = JOB_SOLVE_BACKWARD_SUBSTITUTION;
+<a name="line488">488: </a>    MKL_PARDISO (mat_mkl_pardiso-&gt;pt,
+<a name="line489">489: </a>      &amp;mat_mkl_pardiso-&gt;maxfct,
+<a name="line490">490: </a>      &amp;mat_mkl_pardiso-&gt;mnum,
+<a name="line491">491: </a>      &amp;mat_mkl_pardiso-&gt;mtype,
+<a name="line492">492: </a>      &amp;mat_mkl_pardiso-&gt;phase,
+<a name="line493">493: </a>      &amp;mat_mkl_pardiso-&gt;n,
+<a name="line494">494: </a>      mat_mkl_pardiso-&gt;a,
+<a name="line495">495: </a>      mat_mkl_pardiso-&gt;ia,
+<a name="line496">496: </a>      mat_mkl_pardiso-&gt;ja,
+<a name="line497">497: </a>      mat_mkl_pardiso-&gt;perm,
+<a name="line498">498: </a>      &amp;mat_mkl_pardiso-&gt;nrhs,
+<a name="line499">499: </a>      mat_mkl_pardiso-&gt;iparm,
+<a name="line500">500: </a>      &amp;mat_mkl_pardiso-&gt;msglvl,
+<a name="line501">501: </a>      (void*)xarray,
+<a name="line502">502: </a>      (void*)mat_mkl_pardiso-&gt;schur_work, <font color="#B22222">/* according to the specs, the solution vector is always used */</font>
+<a name="line503">503: </a>      &amp;mat_mkl_pardiso-&gt;err);
+
+<a name="line505">505: </a>    <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;err &lt; 0) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error reported by MKL_PARDISO: err=%d. Please check manual"</font>,mat_mkl_pardiso-&gt;err);
+<a name="line506">506: </a>    mat_mkl_pardiso-&gt;iparm[6-1] = 0;
+<a name="line507">507: </a>  }
+<a name="line508">508: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(x,&amp;xarray);
+<a name="line509">509: </a>  mat_mkl_pardiso-&gt;CleanUp = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line510">510: </a>  <font color="#4169E1">return</font>(0);
+<a name="line511">511: </a>}
+
+<a name="line513">513: </a><strong><font color="#4169E1"><a name="MatSolveTranspose_MKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSolveTranspose_MKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../.._pardiso/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> b,<a href="../../../../.._pardiso/../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x)</font></strong>
+<a name="line514">514: </a>{
+<a name="line515">515: </a>  Mat_MKL_PARDISO *mat_mkl_pardiso=(Mat_MKL_PARDISO*)A-&gt;data;
+<a name="line516">516: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        oiparm12;
+<a name="line517">517: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line520">520: </a>  oiparm12 = mat_mkl_pardiso-&gt;iparm[12 - 1];
+<a name="line521">521: </a>  mat_mkl_pardiso-&gt;iparm[12 - 1] = 2;
+<a name="line522">522: </a>  MatSolve_MKL_PARDISO(A,b,x);
+<a name="line523">523: </a>  mat_mkl_pardiso-&gt;iparm[12 - 1] = oiparm12;
+<a name="line524">524: </a>  <font color="#4169E1">return</font>(0);
+<a name="line525">525: </a>}
+
+<a name="line527">527: </a><strong><font color="#4169E1"><a name="MatMatSolve_MKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatMatSolve_MKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B,<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> X)</font></strong>
+<a name="line528">528: </a>{
+<a name="line529">529: </a>  Mat_MKL_PARDISO   *mat_mkl_pardiso=(Mat_MKL_PARDISO*)(A)-&gt;data;
+<a name="line530">530: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line531">531: </a>  const <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *barray;
+<a name="line532">532: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *xarray;
+<a name="line533">533: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         flg;
+
+<a name="line536">536: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectBaseTypeCompare.html#PetscObjectBaseTypeCompare">PetscObjectBaseTypeCompare</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQDENSE.html#MATSEQDENSE">MATSEQDENSE</a>,&amp;flg);
+<a name="line537">537: </a>  <font color="#4169E1">if</font> (!flg) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),PETSC_ERR_ARG_WRONG,<font color="#666666">"Matrix B must be <a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQDENSE.html#MATSEQDENSE">MATSEQDENSE</a> matrix"</font>);
+<a name="line538">538: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectBaseTypeCompare.html#PetscObjectBaseTypeCompare">PetscObjectBaseTypeCompare</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)X,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQDENSE.html#MATSEQDENSE">MATSEQDENSE</a>,&amp;flg);
+<a name="line539">539: </a>  <font color="#4169E1">if</font> (!flg) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),PETSC_ERR_ARG_WRONG,<font color="#666666">"Matrix X must be <a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQDENSE.html#MATSEQDENSE">MATSEQDENSE</a> matrix"</font>);
+
+<a name="line541">541: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatGetSize.html#MatGetSize">MatGetSize</a>(B,NULL,(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*)&amp;mat_mkl_pardiso-&gt;nrhs);
+
+<a name="line543">543: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;nrhs &gt; 0) {
+<a name="line544">544: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatDenseGetArrayRead.html#MatDenseGetArrayRead">MatDenseGetArrayRead</a>(B,&amp;barray);
+<a name="line545">545: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatDenseGetArray.html#MatDenseGetArray">MatDenseGetArray</a>(X,&amp;xarray);
+
+<a name="line547">547: </a>    <font color="#4169E1">if</font> (barray == xarray) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"B and X cannot share the same memory location"</font>);
+<a name="line548">548: </a>    <font color="#4169E1">if</font> (!mat_mkl_pardiso-&gt;schur) mat_mkl_pardiso-&gt;phase = JOB_SOLVE_ITERATIVE_REFINEMENT;
+<a name="line549">549: </a>    <font color="#4169E1">else</font> mat_mkl_pardiso-&gt;phase = JOB_SOLVE_FORWARD_SUBSTITUTION;
+<a name="line550">550: </a>    mat_mkl_pardiso-&gt;iparm[6-1] = 0;
+
+<a name="line552">552: </a>    MKL_PARDISO (mat_mkl_pardiso-&gt;pt,
+<a name="line553">553: </a>      &amp;mat_mkl_pardiso-&gt;maxfct,
+<a name="line554">554: </a>      &amp;mat_mkl_pardiso-&gt;mnum,
+<a name="line555">555: </a>      &amp;mat_mkl_pardiso-&gt;mtype,
+<a name="line556">556: </a>      &amp;mat_mkl_pardiso-&gt;phase,
+<a name="line557">557: </a>      &amp;mat_mkl_pardiso-&gt;n,
+<a name="line558">558: </a>      mat_mkl_pardiso-&gt;a,
+<a name="line559">559: </a>      mat_mkl_pardiso-&gt;ia,
+<a name="line560">560: </a>      mat_mkl_pardiso-&gt;ja,
+<a name="line561">561: </a>      mat_mkl_pardiso-&gt;perm,
+<a name="line562">562: </a>      &amp;mat_mkl_pardiso-&gt;nrhs,
+<a name="line563">563: </a>      mat_mkl_pardiso-&gt;iparm,
+<a name="line564">564: </a>      &amp;mat_mkl_pardiso-&gt;msglvl,
+<a name="line565">565: </a>      (void*)barray,
+<a name="line566">566: </a>      (void*)xarray,
+<a name="line567">567: </a>      &amp;mat_mkl_pardiso-&gt;err);
+<a name="line568">568: </a>    <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;err &lt; 0) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error reported by MKL_PARDISO: err=%d. Please check manual"</font>,mat_mkl_pardiso-&gt;err);
+
+<a name="line570">570: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatDenseRestoreArrayRead.html#MatDenseRestoreArrayRead">MatDenseRestoreArrayRead</a>(B,&amp;barray);
+<a name="line571">571: </a>    <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;schur) { <font color="#B22222">/* solve Schur complement and expand solution */</font>
+<a name="line572">572: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *o_schur_work = NULL;
+<a name="line573">573: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    shift = mat_mkl_pardiso-&gt;schur_size*mat_mkl_pardiso-&gt;nrhs,scale;
+<a name="line574">574: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    mem = mat_mkl_pardiso-&gt;n*mat_mkl_pardiso-&gt;nrhs;
+
+<a name="line576">576: </a>      <font color="#B22222">/* allocate extra memory if it is needed */</font>
+<a name="line577">577: </a>      scale = 1;
+<a name="line578">578: </a>      <font color="#4169E1">if</font> (A-&gt;schur_status == MAT_FACTOR_SCHUR_INVERTED) scale = 2;
+
+<a name="line580">580: </a>      mem *= scale;
+<a name="line581">581: </a>      <font color="#4169E1">if</font> (mem &gt; mat_mkl_pardiso-&gt;schur_work_size) {
+<a name="line582">582: </a>        o_schur_work = mat_mkl_pardiso-&gt;schur_work;
+<a name="line583">583: </a>        <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(mem,&amp;mat_mkl_pardiso-&gt;schur_work);
+<a name="line584">584: </a>      }
+
+<a name="line586">586: </a>      <font color="#B22222">/* if inverted, uses BLAS *MM subroutines, otherwise LAPACK *TRS */</font>
+<a name="line587">587: </a>      <font color="#4169E1">if</font> (A-&gt;schur_status != MAT_FACTOR_SCHUR_INVERTED) shift = 0;
+
+<a name="line589">589: </a>      <font color="#B22222">/* solve Schur complement */</font>
+<a name="line590">590: </a>      <font color="#4169E1">if</font> (!mat_mkl_pardiso-&gt;solve_interior) {
+<a name="line591">591: </a>        MatMKLPardisoScatterSchur_Private(mat_mkl_pardiso,xarray,mat_mkl_pardiso-&gt;schur_work,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line592">592: </a>        MatMKLPardisoSolveSchur_Private(A,mat_mkl_pardiso-&gt;schur_work,mat_mkl_pardiso-&gt;schur_work+shift);
+<a name="line593">593: </a>        MatMKLPardisoScatterSchur_Private(mat_mkl_pardiso,xarray,mat_mkl_pardiso-&gt;schur_work+shift,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line594">594: </a>      } <font color="#4169E1">else</font> { <font color="#B22222">/* if we are solving for the interior problem, any value in barray[schur,n] forward-substituted to xarray[schur,n] will be neglected */</font>
+<a name="line595">595: </a>        <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> i,n,m=0;
+<a name="line596">596: </a>        <font color="#4169E1">for</font> (n=0;n&lt;mat_mkl_pardiso-&gt;nrhs;n++) {
+<a name="line597">597: </a>          <font color="#4169E1">for</font> (i=0;i&lt;mat_mkl_pardiso-&gt;schur_size;i++) {
+<a name="line598">598: </a>            xarray[mat_mkl_pardiso-&gt;schur_idxs[i]+m] = 0.;
+<a name="line599">599: </a>          }
+<a name="line600">600: </a>          m += mat_mkl_pardiso-&gt;n;
+<a name="line601">601: </a>        }
+<a name="line602">602: </a>      }
+
+<a name="line604">604: </a>      <font color="#B22222">/* expansion phase */</font>
+<a name="line605">605: </a>      mat_mkl_pardiso-&gt;iparm[6-1] = 1;
+<a name="line606">606: </a>      mat_mkl_pardiso-&gt;phase = JOB_SOLVE_BACKWARD_SUBSTITUTION;
+<a name="line607">607: </a>      MKL_PARDISO (mat_mkl_pardiso-&gt;pt,
+<a name="line608">608: </a>        &amp;mat_mkl_pardiso-&gt;maxfct,
+<a name="line609">609: </a>        &amp;mat_mkl_pardiso-&gt;mnum,
+<a name="line610">610: </a>        &amp;mat_mkl_pardiso-&gt;mtype,
+<a name="line611">611: </a>        &amp;mat_mkl_pardiso-&gt;phase,
+<a name="line612">612: </a>        &amp;mat_mkl_pardiso-&gt;n,
+<a name="line613">613: </a>        mat_mkl_pardiso-&gt;a,
+<a name="line614">614: </a>        mat_mkl_pardiso-&gt;ia,
+<a name="line615">615: </a>        mat_mkl_pardiso-&gt;ja,
+<a name="line616">616: </a>        mat_mkl_pardiso-&gt;perm,
+<a name="line617">617: </a>        &amp;mat_mkl_pardiso-&gt;nrhs,
+<a name="line618">618: </a>        mat_mkl_pardiso-&gt;iparm,
+<a name="line619">619: </a>        &amp;mat_mkl_pardiso-&gt;msglvl,
+<a name="line620">620: </a>        (void*)xarray,
+<a name="line621">621: </a>        (void*)mat_mkl_pardiso-&gt;schur_work, <font color="#B22222">/* according to the specs, the solution vector is always used */</font>
+<a name="line622">622: </a>        &amp;mat_mkl_pardiso-&gt;err);
+<a name="line623">623: </a>      <font color="#4169E1">if</font> (o_schur_work) { <font color="#B22222">/* restore original schur_work (minimal size) */</font>
+<a name="line624">624: </a>        <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(mat_mkl_pardiso-&gt;schur_work);
+<a name="line625">625: </a>        mat_mkl_pardiso-&gt;schur_work = o_schur_work;
+<a name="line626">626: </a>      }
+<a name="line627">627: </a>      <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;err &lt; 0) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error reported by MKL_PARDISO: err=%d. Please check manual"</font>,mat_mkl_pardiso-&gt;err);
+<a name="line628">628: </a>      mat_mkl_pardiso-&gt;iparm[6-1] = 0;
+<a name="line629">629: </a>    }
+<a name="line630">630: </a>  }
+<a name="line631">631: </a>  mat_mkl_pardiso-&gt;CleanUp = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line632">632: </a>  <font color="#4169E1">return</font>(0);
+<a name="line633">633: </a>}
+
+<a name="line635">635: </a><strong><font color="#4169E1"><a name="MatFactorNumeric_MKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatFactorNumeric_MKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> F,<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,const <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line636">636: </a>{
+<a name="line637">637: </a>  Mat_MKL_PARDISO *mat_mkl_pardiso=(Mat_MKL_PARDISO*)(F)-&gt;data;
+<a name="line638">638: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line641">641: </a>  mat_mkl_pardiso-&gt;matstruc = <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatStructure.html#MatStructure">SAME_NONZERO_PATTERN</a>;
+<a name="line642">642: </a>  (*mat_mkl_pardiso-&gt;Convert)(A,mat_mkl_pardiso-&gt;needsym,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_REUSE_MATRIX</a>,&amp;mat_mkl_pardiso-&gt;freeaij,&amp;mat_mkl_pardiso-&gt;nz,&amp;mat_mkl_pardiso-&gt;ia,&amp;mat_mkl_pardiso-&gt;ja,(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>**)&amp;mat_mkl_pardiso-&gt;a);
+
+<a name="line644">644: </a>  mat_mkl_pardiso-&gt;phase = JOB_NUMERICAL_FACTORIZATION;
+<a name="line645">645: </a>  MKL_PARDISO (mat_mkl_pardiso-&gt;pt,
+<a name="line646">646: </a>    &amp;mat_mkl_pardiso-&gt;maxfct,
+<a name="line647">647: </a>    &amp;mat_mkl_pardiso-&gt;mnum,
+<a name="line648">648: </a>    &amp;mat_mkl_pardiso-&gt;mtype,
+<a name="line649">649: </a>    &amp;mat_mkl_pardiso-&gt;phase,
+<a name="line650">650: </a>    &amp;mat_mkl_pardiso-&gt;n,
+<a name="line651">651: </a>    mat_mkl_pardiso-&gt;a,
+<a name="line652">652: </a>    mat_mkl_pardiso-&gt;ia,
+<a name="line653">653: </a>    mat_mkl_pardiso-&gt;ja,
+<a name="line654">654: </a>    mat_mkl_pardiso-&gt;perm,
+<a name="line655">655: </a>    &amp;mat_mkl_pardiso-&gt;nrhs,
+<a name="line656">656: </a>    mat_mkl_pardiso-&gt;iparm,
+<a name="line657">657: </a>    &amp;mat_mkl_pardiso-&gt;msglvl,
+<a name="line658">658: </a>    NULL,
+<a name="line659">659: </a>    (void*)mat_mkl_pardiso-&gt;schur,
+<a name="line660">660: </a>    &amp;mat_mkl_pardiso-&gt;err);
+<a name="line661">661: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;err &lt; 0) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error reported by MKL_PARDISO: err=%d. Please check manual"</font>,mat_mkl_pardiso-&gt;err);
+
+<a name="line663">663: </a>  <font color="#B22222">/* report flops */</font>
+<a name="line664">664: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;iparm[18] &gt; 0) {
+<a name="line665">665: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(PetscPowRealInt(10.,6)*mat_mkl_pardiso-&gt;iparm[18]);
+<a name="line666">666: </a>  }
+
+<a name="line668">668: </a>  <font color="#4169E1">if</font> (F-&gt;schur) { <font color="#B22222">/* schur output from pardiso is in row major format */</font>
+<a name="line669">669: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line670">670: </a>    F-&gt;schur-&gt;offloadmask = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">PETSC_OFFLOAD_CPU</a>;
+<a name="line671">671: </a><font color="#A020F0">#endif</font>
+<a name="line672">672: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorRestoreSchurComplement.html#MatFactorRestoreSchurComplement">MatFactorRestoreSchurComplement</a>(F,NULL,MAT_FACTOR_SCHUR_UNFACTORED);
+<a name="line673">673: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatTranspose.html#MatTranspose">MatTranspose</a>(F-&gt;schur,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INPLACE_MATRIX</a>,&amp;F-&gt;schur);
+<a name="line674">674: </a>  }
+<a name="line675">675: </a>  mat_mkl_pardiso-&gt;matstruc = <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatStructure.html#MatStructure">SAME_NONZERO_PATTERN</a>;
+<a name="line676">676: </a>  mat_mkl_pardiso-&gt;CleanUp  = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line677">677: </a>  <font color="#4169E1">return</font>(0);
+<a name="line678">678: </a>}
+
+<a name="line680">680: </a><strong><font color="#4169E1"><a name="PetscSetMKL_PARDISOFromOptions"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscSetMKL_PARDISOFromOptions(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> F, <a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A)</font></strong>
+<a name="line681">681: </a>{
+<a name="line682">682: </a>  Mat_MKL_PARDISO     *mat_mkl_pardiso = (Mat_MKL_PARDISO*)F-&gt;data;
+<a name="line683">683: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>      ierr;
+<a name="line684">684: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>            icntl,threads=1;
+<a name="line685">685: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>           flg;
+
+<a name="line688">688: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsBegin.html#PetscOptionsBegin">PetscOptionsBegin</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A)-&gt;prefix,<font color="#666666">"MKL_PARDISO Options"</font>,<font color="#666666">"<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>"</font>);
+
+<a name="line690">690: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_65"</font>,<font color="#666666">"Number of threads to use within PARDISO"</font>,<font color="#666666">"None"</font>,threads,&amp;threads,&amp;flg);
+<a name="line691">691: </a>  <font color="#4169E1">if</font> (flg) PetscSetMKL_PARDISOThreads((int)threads);
+
+<a name="line693">693: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_66"</font>,<font color="#666666">"Maximum number of factors with identical sparsity structure that must be kept in memory at the same time"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;maxfct,&amp;icntl,&amp;flg);
+<a name="line694">694: </a>  <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;maxfct = icntl;
+
+<a name="line696">696: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_67"</font>,<font color="#666666">"Indicates the actual matrix for the solution phase"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;mnum,&amp;icntl,&amp;flg);
+<a name="line697">697: </a>  <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;mnum = icntl;
+
+<a name="line699">699: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_68"</font>,<font color="#666666">"Message level information"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;msglvl,&amp;icntl,&amp;flg);
+<a name="line700">700: </a>  <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;msglvl = icntl;
+
+<a name="line702">702: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_69"</font>,<font color="#666666">"Defines the matrix type"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;mtype,&amp;icntl,&amp;flg);
+<a name="line703">703: </a>  <font color="#4169E1">if</font> (flg) {
+<a name="line704">704: </a>    void *pt[IPARM_SIZE];
+<a name="line705">705: </a>    mat_mkl_pardiso-&gt;mtype = icntl;
+<a name="line706">706: </a>    MKL_PARDISO_INIT(pt, &amp;mat_mkl_pardiso-&gt;mtype, mat_mkl_pardiso-&gt;iparm);
+<a name="line707">707: </a><font color="#A020F0">#if defined(PETSC_USE_REAL_SINGLE)</font>
+<a name="line708">708: </a>    mat_mkl_pardiso-&gt;iparm[27] = 1;
+<a name="line709">709: </a><font color="#A020F0">#else</font>
+<a name="line710">710: </a>    mat_mkl_pardiso-&gt;iparm[27] = 0;
+<a name="line711">711: </a><font color="#A020F0">#endif</font>
+<a name="line712">712: </a>    mat_mkl_pardiso-&gt;iparm[34] = 1; <font color="#B22222">/* use 0-based indexing */</font>
+<a name="line713">713: </a>  }
+<a name="line714">714: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_1"</font>,<font color="#666666">"Use default values (if 0)"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[0],&amp;icntl,&amp;flg);
+
+<a name="line716">716: </a>  <font color="#4169E1">if</font> (flg &amp;&amp; icntl != 0) {
+<a name="line717">717: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_2"</font>,<font color="#666666">"Fill-in reducing ordering for the input matrix"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[1],&amp;icntl,&amp;flg);
+<a name="line718">718: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[1] = icntl;
+
+<a name="line720">720: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_4"</font>,<font color="#666666">"Preconditioned CGS/CG"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[3],&amp;icntl,&amp;flg);
+<a name="line721">721: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[3] = icntl;
+
+<a name="line723">723: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_5"</font>,<font color="#666666">"User permutation"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[4],&amp;icntl,&amp;flg);
+<a name="line724">724: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[4] = icntl;
+
+<a name="line726">726: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_6"</font>,<font color="#666666">"Write solution on x"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[5],&amp;icntl,&amp;flg);
+<a name="line727">727: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[5] = icntl;
+
+<a name="line729">729: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_8"</font>,<font color="#666666">"Iterative refinement step"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[7],&amp;icntl,&amp;flg);
+<a name="line730">730: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[7] = icntl;
+
+<a name="line732">732: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_10"</font>,<font color="#666666">"Pivoting perturbation"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[9],&amp;icntl,&amp;flg);
+<a name="line733">733: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[9] = icntl;
+
+<a name="line735">735: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_11"</font>,<font color="#666666">"Scaling vectors"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[10],&amp;icntl,&amp;flg);
+<a name="line736">736: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[10] = icntl;
+
+<a name="line738">738: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_12"</font>,<font color="#666666">"Solve with transposed or conjugate transposed matrix A"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[11],&amp;icntl,&amp;flg);
+<a name="line739">739: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[11] = icntl;
+
+<a name="line741">741: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_13"</font>,<font color="#666666">"Improved accuracy using (non-) symmetric weighted matching"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[12],&amp;icntl,&amp;flg);
+<a name="line742">742: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[12] = icntl;
+
+<a name="line744">744: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_18"</font>,<font color="#666666">"Numbers of non-zero elements"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[17],&amp;icntl,&amp;flg);
+<a name="line745">745: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[17] = icntl;
+
+<a name="line747">747: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_19"</font>,<font color="#666666">"Report number of floating point operations (0 to disable)"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[18],&amp;icntl,&amp;flg);
+<a name="line748">748: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[18] = icntl;
+
+<a name="line750">750: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_21"</font>,<font color="#666666">"Pivoting for symmetric indefinite matrices"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[20],&amp;icntl,&amp;flg);
+<a name="line751">751: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[20] = icntl;
+
+<a name="line753">753: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_24"</font>,<font color="#666666">"Parallel factorization control"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[23],&amp;icntl,&amp;flg);
+<a name="line754">754: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[23] = icntl;
+
+<a name="line756">756: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_25"</font>,<font color="#666666">"Parallel forward/backward solve control"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[24],&amp;icntl,&amp;flg);
+<a name="line757">757: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[24] = icntl;
+
+<a name="line759">759: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_27"</font>,<font color="#666666">"Matrix checker"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[26],&amp;icntl,&amp;flg);
+<a name="line760">760: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[26] = icntl;
+
+<a name="line762">762: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_31"</font>,<font color="#666666">"Partial solve and computing selected components of the solution vectors"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[30],&amp;icntl,&amp;flg);
+<a name="line763">763: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[30] = icntl;
+
+<a name="line765">765: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_34"</font>,<font color="#666666">"Optimal number of threads for conditional numerical reproducibility (CNR) mode"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[33],&amp;icntl,&amp;flg);
+<a name="line766">766: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[33] = icntl;
+
+<a name="line768">768: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-mat_mkl_pardiso_60"</font>,<font color="#666666">"Intel MKL_PARDISO mode"</font>,<font color="#666666">"None"</font>,mat_mkl_pardiso-&gt;iparm[59],&amp;icntl,&amp;flg);
+<a name="line769">769: </a>    <font color="#4169E1">if</font> (flg) mat_mkl_pardiso-&gt;iparm[59] = icntl;
+<a name="line770">770: </a>  }
+<a name="line771">771: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscOptionsEnd.html#PetscOptionsEnd">PetscOptionsEnd</a>();
+<a name="line772">772: </a>  <font color="#4169E1">return</font>(0);
+<a name="line773">773: </a>}
+
+<a name="line775">775: </a><strong><font color="#4169E1"><a name="MatFactorMKL_PARDISOInitialize_Private"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatFactorMKL_PARDISOInitialize_Private(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A, <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MatFactorType</a> ftype, Mat_MKL_PARDISO *mat_mkl_pardiso)</font></strong>
+<a name="line776">776: </a>{
+<a name="line778">778: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,bs;
+<a name="line779">779: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      match;
+
+<a name="line782">782: </a>  <font color="#4169E1">for</font> (i=0; i&lt;IPARM_SIZE; i++) mat_mkl_pardiso-&gt;iparm[i] = 0;
+<a name="line783">783: </a>  <font color="#4169E1">for</font> (i=0; i&lt;IPARM_SIZE; i++) mat_mkl_pardiso-&gt;pt[i] = 0;
+<a name="line784">784: </a>  <font color="#B22222">/* Default options for both sym and unsym */</font>
+<a name="line785">785: </a>  mat_mkl_pardiso-&gt;iparm[ 0] =  1; <font color="#B22222">/* Solver default parameters overriden with provided by iparm */</font>
+<a name="line786">786: </a>  mat_mkl_pardiso-&gt;iparm[ 1] =  2; <font color="#B22222">/* Metis reordering */</font>
+<a name="line787">787: </a>  mat_mkl_pardiso-&gt;iparm[ 5] =  0; <font color="#B22222">/* Write solution into x */</font>
+<a name="line788">788: </a>  mat_mkl_pardiso-&gt;iparm[ 7] =  0; <font color="#B22222">/* Max number of iterative refinement steps */</font>
+<a name="line789">789: </a>  mat_mkl_pardiso-&gt;iparm[17] = -1; <font color="#B22222">/* Output: Number of nonzeros in the factor LU */</font>
+<a name="line790">790: </a>  mat_mkl_pardiso-&gt;iparm[18] = -1; <font color="#B22222">/* Output: Mflops for LU factorization */</font>
+<a name="line791">791: </a><font color="#A020F0">#if 0</font>
+<a name="line792">792: </a>  mat_mkl_pardiso-&gt;iparm[23] =  1; <font color="#B22222">/* Parallel factorization control*/</font>
+<a name="line793">793: </a><font color="#A020F0">#endif</font>
+<a name="line794">794: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectTypeCompareAny.html#PetscObjectTypeCompareAny">PetscObjectTypeCompareAny</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A,&amp;match,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQBAIJ.html#MATSEQBAIJ">MATSEQBAIJ</a>,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQSBAIJ.html#MATSEQSBAIJ">MATSEQSBAIJ</a>,<font color="#666666">""</font>);
+<a name="line795">795: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatGetBlockSize.html#MatGetBlockSize">MatGetBlockSize</a>(A,&amp;bs);
+<a name="line796">796: </a>  <font color="#4169E1">if</font> (!match || bs == 1) {
+<a name="line797">797: </a>    mat_mkl_pardiso-&gt;iparm[34] = 1; <font color="#B22222">/* Cluster Sparse Solver use C-style indexing for ia and ja arrays */</font>
+<a name="line798">798: </a>    mat_mkl_pardiso-&gt;n         = A-&gt;rmap-&gt;N;
+<a name="line799">799: </a>  } <font color="#4169E1">else</font> {
+<a name="line800">800: </a>    mat_mkl_pardiso-&gt;iparm[34] = 0; <font color="#B22222">/* Cluster Sparse Solver use Fortran-style indexing for ia and ja arrays */</font>
+<a name="line801">801: </a>    mat_mkl_pardiso-&gt;iparm[36] = bs;
+<a name="line802">802: </a>    mat_mkl_pardiso-&gt;n         = A-&gt;rmap-&gt;N/bs;
+<a name="line803">803: </a>  }
+<a name="line804">804: </a>  mat_mkl_pardiso-&gt;iparm[39] =  0; <font color="#B22222">/* Input: matrix/rhs/solution stored on master */</font>
+
+<a name="line806">806: </a>  mat_mkl_pardiso-&gt;CleanUp   = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line807">807: </a>  mat_mkl_pardiso-&gt;maxfct    = 1; <font color="#B22222">/* Maximum number of numerical factorizations. */</font>
+<a name="line808">808: </a>  mat_mkl_pardiso-&gt;mnum      = 1; <font color="#B22222">/* Which factorization to use. */</font>
+<a name="line809">809: </a>  mat_mkl_pardiso-&gt;msglvl    = 0; <font color="#B22222">/* 0: do not print 1: Print statistical information in file */</font>
+<a name="line810">810: </a>  mat_mkl_pardiso-&gt;phase     = -1;
+<a name="line811">811: </a>  mat_mkl_pardiso-&gt;err       = 0;
+
+<a name="line813">813: </a>  mat_mkl_pardiso-&gt;nrhs      = 1;
+<a name="line814">814: </a>  mat_mkl_pardiso-&gt;err       = 0;
+<a name="line815">815: </a>  mat_mkl_pardiso-&gt;phase     = -1;
+
+<a name="line817">817: </a>  <font color="#4169E1">if</font> (ftype == <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_LU</a>) {
+<a name="line818">818: </a>    mat_mkl_pardiso-&gt;iparm[ 9] = 13; <font color="#B22222">/* Perturb the pivot elements with 1E-13 */</font>
+<a name="line819">819: </a>    mat_mkl_pardiso-&gt;iparm[10] =  1; <font color="#B22222">/* Use nonsymmetric permutation and scaling MPS */</font>
+<a name="line820">820: </a>    mat_mkl_pardiso-&gt;iparm[12] =  1; <font color="#B22222">/* Switch on Maximum Weighted Matching algorithm (default for non-symmetric) */</font>
+<a name="line821">821: </a>  } <font color="#4169E1">else</font> {
+<a name="line822">822: </a>    mat_mkl_pardiso-&gt;iparm[ 9] = 8; <font color="#B22222">/* Perturb the pivot elements with 1E-8 */</font>
+<a name="line823">823: </a>    mat_mkl_pardiso-&gt;iparm[10] = 0; <font color="#B22222">/* Use nonsymmetric permutation and scaling MPS */</font>
+<a name="line824">824: </a>    mat_mkl_pardiso-&gt;iparm[12] = 1; <font color="#B22222">/* Switch on Maximum Weighted Matching algorithm (default for non-symmetric) */</font>
+<a name="line825">825: </a><font color="#A020F0">#if defined(PETSC_USE_DEBUG)</font>
+<a name="line826">826: </a>    mat_mkl_pardiso-&gt;iparm[26] = 1; <font color="#B22222">/* Matrix checker */</font>
+<a name="line827">827: </a><font color="#A020F0">#endif</font>
+<a name="line828">828: </a>  }
+<a name="line829">829: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(A-&gt;rmap-&gt;N*<font color="#4169E1">sizeof</font>(INT_TYPE), &amp;mat_mkl_pardiso-&gt;perm);
+<a name="line830">830: </a>  <font color="#4169E1">for</font> (i=0; i&lt;A-&gt;rmap-&gt;N; i++) {
+<a name="line831">831: </a>    mat_mkl_pardiso-&gt;perm[i] = 0;
+<a name="line832">832: </a>  }
+<a name="line833">833: </a>  mat_mkl_pardiso-&gt;schur_size = 0;
+<a name="line834">834: </a>  <font color="#4169E1">return</font>(0);
+<a name="line835">835: </a>}
+
+<a name="line837">837: </a><strong><font color="#4169E1"><a name="MatFactorSymbolic_AIJMKL_PARDISO_Private"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatFactorSymbolic_AIJMKL_PARDISO_Private(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> F,<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,const <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line838">838: </a>{
+<a name="line839">839: </a>  Mat_MKL_PARDISO *mat_mkl_pardiso = (Mat_MKL_PARDISO*)F-&gt;data;
+<a name="line840">840: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line843">843: </a>  mat_mkl_pardiso-&gt;matstruc = <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatStructure.html#MatStructure">DIFFERENT_NONZERO_PATTERN</a>;
+<a name="line844">844: </a>  PetscSetMKL_PARDISOFromOptions(F,A);
+
+<a name="line846">846: </a>  <font color="#B22222">/* throw away any previously computed structure */</font>
+<a name="line847">847: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;freeaij) {
+<a name="line848">848: </a>    <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(mat_mkl_pardiso-&gt;ia,mat_mkl_pardiso-&gt;ja);
+<a name="line849">849: </a>    <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;iparm[34] == 1) {
+<a name="line850">850: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(mat_mkl_pardiso-&gt;a);
+<a name="line851">851: </a>    }
+<a name="line852">852: </a>  }
+<a name="line853">853: </a>  (*mat_mkl_pardiso-&gt;Convert)(A,mat_mkl_pardiso-&gt;needsym,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;mat_mkl_pardiso-&gt;freeaij,&amp;mat_mkl_pardiso-&gt;nz,&amp;mat_mkl_pardiso-&gt;ia,&amp;mat_mkl_pardiso-&gt;ja,(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>**)&amp;mat_mkl_pardiso-&gt;a);
+<a name="line854">854: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;iparm[34] == 1) mat_mkl_pardiso-&gt;n = A-&gt;rmap-&gt;N;
+<a name="line855">855: </a>  <font color="#4169E1">else</font> mat_mkl_pardiso-&gt;n = A-&gt;rmap-&gt;N/A-&gt;rmap-&gt;bs;
+
+<a name="line857">857: </a>  mat_mkl_pardiso-&gt;phase = JOB_ANALYSIS;
+
+<a name="line859">859: </a>  <font color="#B22222">/* reset flops counting if requested */</font>
+<a name="line860">860: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;iparm[18]) mat_mkl_pardiso-&gt;iparm[18] = -1;
+
+<a name="line862">862: </a>  MKL_PARDISO (mat_mkl_pardiso-&gt;pt,
+<a name="line863">863: </a>    &amp;mat_mkl_pardiso-&gt;maxfct,
+<a name="line864">864: </a>    &amp;mat_mkl_pardiso-&gt;mnum,
+<a name="line865">865: </a>    &amp;mat_mkl_pardiso-&gt;mtype,
+<a name="line866">866: </a>    &amp;mat_mkl_pardiso-&gt;phase,
+<a name="line867">867: </a>    &amp;mat_mkl_pardiso-&gt;n,
+<a name="line868">868: </a>    mat_mkl_pardiso-&gt;a,
+<a name="line869">869: </a>    mat_mkl_pardiso-&gt;ia,
+<a name="line870">870: </a>    mat_mkl_pardiso-&gt;ja,
+<a name="line871">871: </a>    mat_mkl_pardiso-&gt;perm,
+<a name="line872">872: </a>    &amp;mat_mkl_pardiso-&gt;nrhs,
+<a name="line873">873: </a>    mat_mkl_pardiso-&gt;iparm,
+<a name="line874">874: </a>    &amp;mat_mkl_pardiso-&gt;msglvl,
+<a name="line875">875: </a>    NULL,
+<a name="line876">876: </a>    NULL,
+<a name="line877">877: </a>    &amp;mat_mkl_pardiso-&gt;err);
+<a name="line878">878: </a>  <font color="#4169E1">if</font> (mat_mkl_pardiso-&gt;err &lt; 0) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error reported by MKL_PARDISO: err=%d. Please check manual"</font>,mat_mkl_pardiso-&gt;err);
+
+<a name="line880">880: </a>  mat_mkl_pardiso-&gt;CleanUp = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line882">882: </a>  <font color="#4169E1">if</font> (F-&gt;factortype == <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_LU</a>) F-&gt;ops-&gt;lufactornumeric = MatFactorNumeric_MKL_PARDISO;
+<a name="line883">883: </a>  <font color="#4169E1">else</font> F-&gt;ops-&gt;choleskyfactornumeric = MatFactorNumeric_MKL_PARDISO;
+
+<a name="line885">885: </a>  F-&gt;ops-&gt;solve           = MatSolve_MKL_PARDISO;
+<a name="line886">886: </a>  F-&gt;ops-&gt;solvetranspose  = MatSolveTranspose_MKL_PARDISO;
+<a name="line887">887: </a>  F-&gt;ops-&gt;matsolve        = MatMatSolve_MKL_PARDISO;
+<a name="line888">888: </a>  <font color="#4169E1">return</font>(0);
+<a name="line889">889: </a>}
+
+<a name="line891">891: </a><strong><font color="#4169E1"><a name="MatLUFactorSymbolic_AIJMKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatLUFactorSymbolic_AIJMKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> F,<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../.._pardiso/../docs/manualpages/IS/IS.html#IS">IS</a> r,<a href="../../../../.._pardiso/../docs/manualpages/IS/IS.html#IS">IS</a> c,const <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line892">892: </a>{
+
+<a name="line896">896: </a>  MatFactorSymbolic_AIJMKL_PARDISO_Private(F, A, info);
+<a name="line897">897: </a>  <font color="#4169E1">return</font>(0);
+<a name="line898">898: </a>}
+
+<a name="line900">900: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line901">901: </a><strong><font color="#4169E1"><a name="MatGetInertia_MKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatGetInertia_MKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> F,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *nneg,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *nzero,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *npos)</font></strong>
+<a name="line902">902: </a>{
+<a name="line903">903: </a>  Mat_MKL_PARDISO   *mat_mkl_pardiso=(Mat_MKL_PARDISO*)F-&gt;data;
+
+<a name="line906">906: </a>  <font color="#4169E1">if</font> (nneg) *nneg = mat_mkl_pardiso-&gt;iparm[22];
+<a name="line907">907: </a>  <font color="#4169E1">if</font> (npos) *npos = mat_mkl_pardiso-&gt;iparm[21];
+<a name="line908">908: </a>  <font color="#4169E1">if</font> (nzero) *nzero = F-&gt;rmap-&gt;N - (mat_mkl_pardiso-&gt;iparm[22] + mat_mkl_pardiso-&gt;iparm[21]);
+<a name="line909">909: </a>  <font color="#4169E1">return</font>(0);
+<a name="line910">910: </a>}
+<a name="line911">911: </a><font color="#A020F0">#endif</font>
+
+<a name="line913">913: </a><strong><font color="#4169E1"><a name="MatCholeskyFactorSymbolic_AIJMKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatCholeskyFactorSymbolic_AIJMKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> F,<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../.._pardiso/../docs/manualpages/IS/IS.html#IS">IS</a> r,const <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorInfo.html#MatFactorInfo">MatFactorInfo</a> *info)</font></strong>
+<a name="line914">914: </a>{
+
+<a name="line918">918: </a>  MatFactorSymbolic_AIJMKL_PARDISO_Private(F, A, info);
+<a name="line919">919: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line920">920: </a>  F-&gt;ops-&gt;getinertia = NULL;
+<a name="line921">921: </a><font color="#A020F0">#else</font>
+<a name="line922">922: </a>  F-&gt;ops-&gt;getinertia = MatGetInertia_MKL_PARDISO;
+<a name="line923">923: </a><font color="#A020F0">#endif</font>
+<a name="line924">924: </a>  <font color="#4169E1">return</font>(0);
+<a name="line925">925: </a>}
+
+<a name="line927">927: </a><strong><font color="#4169E1"><a name="MatView_MKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatView_MKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A, <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line928">928: </a>{
+<a name="line929">929: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line930">930: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         iascii;
+<a name="line931">931: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PetscViewerFormat</a> format;
+<a name="line932">932: </a>  Mat_MKL_PARDISO   *mat_mkl_pardiso=(Mat_MKL_PARDISO*)A-&gt;data;
+<a name="line933">933: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i;
+
+<a name="line936">936: </a>  <font color="#4169E1">if</font> (A-&gt;ops-&gt;solve != MatSolve_MKL_PARDISO) <font color="#4169E1">return</font>(0);
+
+<a name="line938">938: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../.._pardiso/../docs/manualpages/Viewer/PETSCVIEWERASCII.html#PETSCVIEWERASCII">PETSCVIEWERASCII</a>,&amp;iascii);
+<a name="line939">939: </a>  <font color="#4169E1">if</font> (iascii) {
+<a name="line940">940: </a>    PetscViewerGetFormat(viewer,&amp;format);
+<a name="line941">941: </a>    <font color="#4169E1">if</font> (format == <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_ASCII_INFO</a>) {
+<a name="line942">942: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"MKL_PARDISO run parameters:\n"</font>);
+<a name="line943">943: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"MKL_PARDISO phase:             %d \n"</font>,mat_mkl_pardiso-&gt;phase);
+<a name="line944">944: </a>      <font color="#4169E1">for</font> (i=1; i&lt;=64; i++) {
+<a name="line945">945: </a>        <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"MKL_PARDISO iparm[%d]:     %d \n"</font>,i, mat_mkl_pardiso-&gt;iparm[i - 1]);
+<a name="line946">946: </a>      }
+<a name="line947">947: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"MKL_PARDISO maxfct:     %d \n"</font>, mat_mkl_pardiso-&gt;maxfct);
+<a name="line948">948: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"MKL_PARDISO mnum:     %d \n"</font>, mat_mkl_pardiso-&gt;mnum);
+<a name="line949">949: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"MKL_PARDISO mtype:     %d \n"</font>, mat_mkl_pardiso-&gt;mtype);
+<a name="line950">950: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"MKL_PARDISO n:     %d \n"</font>, mat_mkl_pardiso-&gt;n);
+<a name="line951">951: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"MKL_PARDISO nrhs:     %d \n"</font>, mat_mkl_pardiso-&gt;nrhs);
+<a name="line952">952: </a>      <a href="../../../../.._pardiso/../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"MKL_PARDISO msglvl:     %d \n"</font>, mat_mkl_pardiso-&gt;msglvl);
+<a name="line953">953: </a>    }
+<a name="line954">954: </a>  }
+<a name="line955">955: </a>  <font color="#4169E1">return</font>(0);
+<a name="line956">956: </a>}
+
+
+<a name="line959">959: </a><strong><font color="#4169E1"><a name="MatGetInfo_MKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatGetInfo_MKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A, <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatInfoType.html#MatInfoType">MatInfoType</a> flag, <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatInfo.html#MatInfo">MatInfo</a> *info)</font></strong>
+<a name="line960">960: </a>{
+<a name="line961">961: </a>  Mat_MKL_PARDISO *mat_mkl_pardiso = (Mat_MKL_PARDISO*)A-&gt;data;
+
+<a name="line964">964: </a>  info-&gt;block_size        = 1.0;
+<a name="line965">965: </a>  info-&gt;nz_used           = mat_mkl_pardiso-&gt;iparm[17];
+<a name="line966">966: </a>  info-&gt;nz_allocated      = mat_mkl_pardiso-&gt;iparm[17];
+<a name="line967">967: </a>  info-&gt;nz_unneeded       = 0.0;
+<a name="line968">968: </a>  info-&gt;assemblies        = 0.0;
+<a name="line969">969: </a>  info-&gt;mallocs           = 0.0;
+<a name="line970">970: </a>  info-&gt;memory            = 0.0;
+<a name="line971">971: </a>  info-&gt;fill_ratio_given  = 0;
+<a name="line972">972: </a>  info-&gt;fill_ratio_needed = 0;
+<a name="line973">973: </a>  info-&gt;factor_mallocs    = 0;
+<a name="line974">974: </a>  <font color="#4169E1">return</font>(0);
+<a name="line975">975: </a>}
+
+<a name="line977">977: </a><strong><font color="#4169E1"><a name="MatMkl_PardisoSetCntl_MKL_PARDISO"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatMkl_PardisoSetCntl_MKL_PARDISO(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> F,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> icntl,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> ival)</font></strong>
+<a name="line978">978: </a>{
+<a name="line979">979: </a>  Mat_MKL_PARDISO *mat_mkl_pardiso = (Mat_MKL_PARDISO*)F-&gt;data;
+
+<a name="line982">982: </a>  <font color="#4169E1">if</font> (icntl &lt;= 64) {
+<a name="line983">983: </a>    mat_mkl_pardiso-&gt;iparm[icntl - 1] = ival;
+<a name="line984">984: </a>  } <font color="#4169E1">else</font> {
+<a name="line985">985: </a>    <font color="#4169E1">if</font> (icntl == 65) PetscSetMKL_PARDISOThreads(ival);
+<a name="line986">986: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (icntl == 66) mat_mkl_pardiso-&gt;maxfct = ival;
+<a name="line987">987: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (icntl == 67) mat_mkl_pardiso-&gt;mnum = ival;
+<a name="line988">988: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (icntl == 68) mat_mkl_pardiso-&gt;msglvl = ival;
+<a name="line989">989: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (icntl == 69) {
+<a name="line990">990: </a>      void *pt[IPARM_SIZE];
+<a name="line991">991: </a>      mat_mkl_pardiso-&gt;mtype = ival;
+<a name="line992">992: </a>      MKL_PARDISO_INIT(pt, &amp;mat_mkl_pardiso-&gt;mtype, mat_mkl_pardiso-&gt;iparm);
+<a name="line993">993: </a><font color="#A020F0">#if defined(PETSC_USE_REAL_SINGLE)</font>
+<a name="line994">994: </a>      mat_mkl_pardiso-&gt;iparm[27] = 1;
+<a name="line995">995: </a><font color="#A020F0">#else</font>
+<a name="line996">996: </a>      mat_mkl_pardiso-&gt;iparm[27] = 0;
+<a name="line997">997: </a><font color="#A020F0">#endif</font>
+<a name="line998">998: </a>      mat_mkl_pardiso-&gt;iparm[34] = 1;
+<a name="line999">999: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (icntl==70) mat_mkl_pardiso-&gt;solve_interior = (<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>)!!ival;
+<a name="line1000">1000: </a>  }
+<a name="line1001">1001: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1002">1002: </a>}
+
+<a name="line1004">1004: </a><font color="#B22222">/*@</font>
+<a name="line1005">1005: </a><font color="#B22222">  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatMkl_PardisoSetCntl.html#MatMkl_PardisoSetCntl">MatMkl_PardisoSetCntl</a> - Set Mkl_Pardiso parameters</font>
+
+<a name="line1007">1007: </a><font color="#B22222">   Logically Collective on <a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a></font>
+
+<a name="line1009">1009: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line1010">1010: </a><font color="#B22222">+  F - the factored matrix obtained by calling <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatGetFactor.html#MatGetFactor">MatGetFactor</a>()</font>
+<a name="line1011">1011: </a><font color="#B22222">.  icntl - index of Mkl_Pardiso parameter</font>
+<a name="line1012">1012: </a><font color="#B22222">-  ival - value of Mkl_Pardiso parameter</font>
+
+<a name="line1014">1014: </a><font color="#B22222">  Options Database:</font>
+<a name="line1015">1015: </a><font color="#B22222">.   -mat_mkl_pardiso_&lt;icntl&gt; &lt;ival&gt;</font>
+
+<a name="line1017">1017: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line1019">1019: </a><font color="#B22222">   References:</font>
+<a name="line1020">1020: </a><font color="#B22222">.      Mkl_Pardiso Users' Guide</font>
+
+<a name="line1022">1022: </a><font color="#B22222">.seealso: <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatGetFactor.html#MatGetFactor">MatGetFactor</a>()</font>
+<a name="line1023">1023: </a><font color="#B22222">@*/</font>
+<a name="line1024">1024: </a><strong><font color="#4169E1"><a name="MatMkl_PardisoSetCntl"></a><a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatMkl_PardisoSetCntl.html#MatMkl_PardisoSetCntl">MatMkl_PardisoSetCntl</a>(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> F,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> icntl,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> ival)</font></strong>
+<a name="line1025">1025: </a>{
+
+<a name="line1029">1029: </a>  PetscTryMethod(F,<font color="#666666">"MatMkl_PardisoSetCntl_C"</font>,(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>),(F,icntl,ival));
+<a name="line1030">1030: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1031">1031: </a>}
+
+<a name="line1033">1033: </a><font color="#B22222">/*MC</font>
+<a name="line1034">1034: </a><font color="#B22222">  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSOLVERMKL_PARDISO.html#MATSOLVERMKL_PARDISO">MATSOLVERMKL_PARDISO</a> -  A matrix type providing direct solvers (LU) for</font>
+<a name="line1035">1035: </a><font color="#B22222">  sequential matrices via the external package MKL_PARDISO.</font>
+
+<a name="line1037">1037: </a><font color="#B22222">  Works with <a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQAIJ.html#MATSEQAIJ">MATSEQAIJ</a> matrices</font>
+
+<a name="line1039">1039: </a><font color="#B22222">  Use -pc_type lu -pc_factor_mat_solver_type mkl_pardiso to use this direct solver</font>
+
+<a name="line1041">1041: </a><font color="#B22222">  Options Database Keys:</font>
+<a name="line1042">1042: </a><font color="#B22222">+ -mat_mkl_pardiso_65 - Number of threads to use within MKL_PARDISO</font>
+<a name="line1043">1043: </a><font color="#B22222">. -mat_mkl_pardiso_66 - Maximum number of factors with identical sparsity structure that must be kept in memory at the same time</font>
+<a name="line1044">1044: </a><font color="#B22222">. -mat_mkl_pardiso_67 - Indicates the actual matrix for the solution phase</font>
+<a name="line1045">1045: </a><font color="#B22222">. -mat_mkl_pardiso_68 - Message level information</font>
+<a name="line1046">1046: </a><font color="#B22222">. -mat_mkl_pardiso_69 - Defines the matrix type. IMPORTANT: When you set this flag, iparm parameters are going to be set to the default ones for the matrix type</font>
+<a name="line1047">1047: </a><font color="#B22222">. -mat_mkl_pardiso_1  - Use default values</font>
+<a name="line1048">1048: </a><font color="#B22222">. -mat_mkl_pardiso_2  - Fill-in reducing ordering for the input matrix</font>
+<a name="line1049">1049: </a><font color="#B22222">. -mat_mkl_pardiso_4  - Preconditioned CGS/CG</font>
+<a name="line1050">1050: </a><font color="#B22222">. -mat_mkl_pardiso_5  - User permutation</font>
+<a name="line1051">1051: </a><font color="#B22222">. -mat_mkl_pardiso_6  - Write solution on x</font>
+<a name="line1052">1052: </a><font color="#B22222">. -mat_mkl_pardiso_8  - Iterative refinement step</font>
+<a name="line1053">1053: </a><font color="#B22222">. -mat_mkl_pardiso_10 - Pivoting perturbation</font>
+<a name="line1054">1054: </a><font color="#B22222">. -mat_mkl_pardiso_11 - Scaling vectors</font>
+<a name="line1055">1055: </a><font color="#B22222">. -mat_mkl_pardiso_12 - Solve with transposed or conjugate transposed matrix A</font>
+<a name="line1056">1056: </a><font color="#B22222">. -mat_mkl_pardiso_13 - Improved accuracy using (non-) symmetric weighted matching</font>
+<a name="line1057">1057: </a><font color="#B22222">. -mat_mkl_pardiso_18 - Numbers of non-zero elements</font>
+<a name="line1058">1058: </a><font color="#B22222">. -mat_mkl_pardiso_19 - Report number of floating point operations</font>
+<a name="line1059">1059: </a><font color="#B22222">. -mat_mkl_pardiso_21 - Pivoting for symmetric indefinite matrices</font>
+<a name="line1060">1060: </a><font color="#B22222">. -mat_mkl_pardiso_24 - Parallel factorization control</font>
+<a name="line1061">1061: </a><font color="#B22222">. -mat_mkl_pardiso_25 - Parallel forward/backward solve control</font>
+<a name="line1062">1062: </a><font color="#B22222">. -mat_mkl_pardiso_27 - Matrix checker</font>
+<a name="line1063">1063: </a><font color="#B22222">. -mat_mkl_pardiso_31 - Partial solve and computing selected components of the solution vectors</font>
+<a name="line1064">1064: </a><font color="#B22222">. -mat_mkl_pardiso_34 - Optimal number of threads for conditional numerical reproducibility (CNR) mode</font>
+<a name="line1065">1065: </a><font color="#B22222">- -mat_mkl_pardiso_60 - Intel MKL_PARDISO mode</font>
+
+<a name="line1067">1067: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line1069">1069: </a><font color="#B22222">  For more information please check  mkl_pardiso manual</font>
+
+<a name="line1071">1071: </a><font color="#B22222">.seealso: <a href="../../../../.._pardiso/../docs/manualpages/PC/PCFactorSetMatSolverType.html#PCFactorSetMatSolverType">PCFactorSetMatSolverType</a>(), <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatSolverType.html#MatSolverType">MatSolverType</a></font>
+
+<a name="line1073">1073: </a><font color="#B22222">M*/</font>
+<a name="line1074">1074: </a><strong><font color="#4169E1"><a name="MatFactorGetSolverType_mkl_pardiso"></a>static <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatFactorGetSolverType_mkl_pardiso(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A, <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatSolverType.html#MatSolverType">MatSolverType</a> *type)</font></strong>
+<a name="line1075">1075: </a>{
+<a name="line1077">1077: </a>  *type = <a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSOLVERMKL_PARDISO.html#MATSOLVERMKL_PARDISO">MATSOLVERMKL_PARDISO</a>;
+<a name="line1078">1078: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1079">1079: </a>}
+
+<a name="line1081">1081: </a><strong><font color="#4169E1"><a name="MatGetFactor_aij_mkl_pardiso"></a>PETSC_EXTERN <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatGetFactor_aij_mkl_pardiso(<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MatFactorType</a> ftype,<a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *F)</font></strong>
+<a name="line1082">1082: </a>{
+<a name="line1083">1083: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/Mat.html#Mat">Mat</a>             B;
+<a name="line1084">1084: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+<a name="line1085">1085: </a>  Mat_MKL_PARDISO *mat_mkl_pardiso;
+<a name="line1086">1086: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       isSeqAIJ,isSeqBAIJ,isSeqSBAIJ;
+
+<a name="line1089">1089: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectBaseTypeCompare.html#PetscObjectBaseTypeCompare">PetscObjectBaseTypeCompare</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQAIJ.html#MATSEQAIJ">MATSEQAIJ</a>,&amp;isSeqAIJ);
+<a name="line1090">1090: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQBAIJ.html#MATSEQBAIJ">MATSEQBAIJ</a>,&amp;isSeqBAIJ);
+<a name="line1091">1091: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQSBAIJ.html#MATSEQSBAIJ">MATSEQSBAIJ</a>,&amp;isSeqSBAIJ);
+<a name="line1092">1092: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),&amp;B);
+<a name="line1093">1093: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(B,A-&gt;rmap-&gt;n,A-&gt;cmap-&gt;n,A-&gt;rmap-&gt;N,A-&gt;cmap-&gt;N);
+<a name="line1094">1094: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscStrallocpy.html#PetscStrallocpy">PetscStrallocpy</a>(<font color="#666666">"mkl_pardiso"</font>,&amp;((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B)-&gt;type_name);
+<a name="line1095">1095: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatSetUp.html#MatSetUp">MatSetUp</a>(B);
+
+<a name="line1097">1097: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(B,&amp;mat_mkl_pardiso);
+<a name="line1098">1098: </a>  B-&gt;data = mat_mkl_pardiso;
+
+<a name="line1100">1100: </a>  MatFactorMKL_PARDISOInitialize_Private(A, ftype, mat_mkl_pardiso);
+<a name="line1101">1101: </a>  <font color="#4169E1">if</font> (ftype == <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_LU</a>) {
+<a name="line1102">1102: </a>    B-&gt;ops-&gt;lufactorsymbolic = MatLUFactorSymbolic_AIJMKL_PARDISO;
+<a name="line1103">1103: </a>    B-&gt;factortype            = <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_LU</a>;
+<a name="line1104">1104: </a>    mat_mkl_pardiso-&gt;needsym = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1105">1105: </a>    <font color="#4169E1">if</font> (isSeqAIJ) mat_mkl_pardiso-&gt;Convert = MatMKLPardiso_Convert_seqaij;
+<a name="line1106">1106: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isSeqBAIJ) mat_mkl_pardiso-&gt;Convert = MatMKLPardiso_Convert_seqbaij;
+<a name="line1107">1107: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isSeqSBAIJ) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),PETSC_ERR_SUP,<font color="#666666">"No support for PARDISO LU factor with SEQSBAIJ format! Use <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_CHOLESKY</a> instead"</font>);
+<a name="line1108">1108: </a>    <font color="#4169E1">else</font> <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),PETSC_ERR_SUP,<font color="#666666">"No support for PARDISO LU with %s format"</font>,((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A)-&gt;type_name);
+<a name="line1109">1109: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line1110">1110: </a>    mat_mkl_pardiso-&gt;mtype = 13;
+<a name="line1111">1111: </a><font color="#A020F0">#else</font>
+<a name="line1112">1112: </a>    mat_mkl_pardiso-&gt;mtype = 11;
+<a name="line1113">1113: </a><font color="#A020F0">#endif</font>
+<a name="line1114">1114: </a>  } <font color="#4169E1">else</font> {
+<a name="line1115">1115: </a>    B-&gt;ops-&gt;choleskyfactorsymbolic = MatCholeskyFactorSymbolic_AIJMKL_PARDISO;
+<a name="line1116">1116: </a>    B-&gt;factortype                  = <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_CHOLESKY</a>;
+<a name="line1117">1117: </a>    <font color="#4169E1">if</font> (isSeqAIJ) mat_mkl_pardiso-&gt;Convert = MatMKLPardiso_Convert_seqaij;
+<a name="line1118">1118: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isSeqBAIJ) mat_mkl_pardiso-&gt;Convert = MatMKLPardiso_Convert_seqbaij;
+<a name="line1119">1119: </a>    <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isSeqSBAIJ) mat_mkl_pardiso-&gt;Convert = MatMKLPardiso_Convert_seqsbaij;
+<a name="line1120">1120: </a>    <font color="#4169E1">else</font> <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),PETSC_ERR_SUP,<font color="#666666">"No support for PARDISO CHOLESKY with %s format"</font>,((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A)-&gt;type_name);
+
+<a name="line1122">1122: </a>    mat_mkl_pardiso-&gt;needsym = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1123">1123: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line1124">1124: </a>    <font color="#4169E1">if</font> (A-&gt;spd_set &amp;&amp; A-&gt;spd) mat_mkl_pardiso-&gt;mtype = 2;
+<a name="line1125">1125: </a>    <font color="#4169E1">else</font>                      mat_mkl_pardiso-&gt;mtype = -2;
+<a name="line1126">1126: </a><font color="#A020F0">#else</font>
+<a name="line1127">1127: </a>    mat_mkl_pardiso-&gt;mtype = 6;
+<a name="line1128">1128: </a>    <font color="#4169E1">if</font> (A-&gt;hermitian) <a href="../../../../.._pardiso/../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)A),PETSC_ERR_SUP,<font color="#666666">"No support for PARDISO CHOLESKY with Hermitian matrices! Use <a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_LU</a> instead"</font>);
+<a name="line1129">1129: </a><font color="#A020F0">#endif</font>
+<a name="line1130">1130: </a>  }
+<a name="line1131">1131: </a>  B-&gt;ops-&gt;destroy = MatDestroy_MKL_PARDISO;
+<a name="line1132">1132: </a>  B-&gt;ops-&gt;view    = MatView_MKL_PARDISO;
+<a name="line1133">1133: </a>  B-&gt;ops-&gt;getinfo = MatGetInfo_MKL_PARDISO;
+<a name="line1134">1134: </a>  B-&gt;factortype   = ftype;
+<a name="line1135">1135: </a>  B-&gt;assembled    = <a href="../../../../.._pardiso/../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+
+<a name="line1137">1137: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(B-&gt;solvertype);
+<a name="line1138">1138: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscStrallocpy.html#PetscStrallocpy">PetscStrallocpy</a>(<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSOLVERMKL_PARDISO.html#MATSOLVERMKL_PARDISO">MATSOLVERMKL_PARDISO</a>,&amp;B-&gt;solvertype);
+
+<a name="line1140">1140: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B,<font color="#666666">"MatFactorGetSolverType_C"</font>,MatFactorGetSolverType_mkl_pardiso);
+<a name="line1141">1141: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B,<font color="#666666">"MatFactorSetSchurIS_C"</font>,MatFactorSetSchurIS_MKL_PARDISO);
+<a name="line1142">1142: </a>  <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B,<font color="#666666">"MatMkl_PardisoSetCntl_C"</font>,MatMkl_PardisoSetCntl_MKL_PARDISO);
+
+<a name="line1144">1144: </a>  *F = B;
+<a name="line1145">1145: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1146">1146: </a>}
+
+<a name="line1148">1148: </a><strong><font color="#4169E1"><a name="MatSolverTypeRegister_MKL_Pardiso"></a>PETSC_EXTERN <a href="../../../../.._pardiso/../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSolverTypeRegister_MKL_Pardiso(void)</font></strong>
+<a name="line1149">1149: </a>{
+
+<a name="line1153">1153: </a>  MatSolverTypeRegister(<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSOLVERMKL_PARDISO.html#MATSOLVERMKL_PARDISO">MATSOLVERMKL_PARDISO</a>,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQAIJ.html#MATSEQAIJ">MATSEQAIJ</a>,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_LU</a>,MatGetFactor_aij_mkl_pardiso);
+<a name="line1154">1154: </a>  MatSolverTypeRegister(<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSOLVERMKL_PARDISO.html#MATSOLVERMKL_PARDISO">MATSOLVERMKL_PARDISO</a>,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQAIJ.html#MATSEQAIJ">MATSEQAIJ</a>,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_CHOLESKY</a>,MatGetFactor_aij_mkl_pardiso);
+<a name="line1155">1155: </a>  MatSolverTypeRegister(<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSOLVERMKL_PARDISO.html#MATSOLVERMKL_PARDISO">MATSOLVERMKL_PARDISO</a>,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQBAIJ.html#MATSEQBAIJ">MATSEQBAIJ</a>,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_LU</a>,MatGetFactor_aij_mkl_pardiso);
+<a name="line1156">1156: </a>  MatSolverTypeRegister(<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSOLVERMKL_PARDISO.html#MATSOLVERMKL_PARDISO">MATSOLVERMKL_PARDISO</a>,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MATSEQSBAIJ.html#MATSEQSBAIJ">MATSEQSBAIJ</a>,<a href="../../../../.._pardiso/../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_CHOLESKY</a>,MatGetFactor_aij_mkl_pardiso);
+<a name="line1157">1157: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1158">1158: </a>}
+
+</pre>
+</body>
+
+</html>

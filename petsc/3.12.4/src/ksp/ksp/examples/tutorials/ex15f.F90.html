@@ -1,0 +1,372 @@
+<center><a href="ex15f.F90">Actual source code: ex15f.F90</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/ksp/examples/tutorials/ex15f.F90.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:20:36+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/ksp/examples/tutorials/ex15f.F90.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a>!
+<a name="line2">  2: </a>!   Solves a linear system in parallel with <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>.  Also indicates
+<a name="line3">  3: </a>!   use of a user-provided preconditioner.  Input parameters include:
+<a name="line4">  4: </a>!      -user_defined_pc : Activate a user-defined preconditioner
+<a name="line5">  5: </a>!
+<a name="line6">  6: </a>!
+<a name="line7">  7: </a>!!<font color="#B22222">/*T</font>
+<a name="line8">  8: </a><font color="#B22222">!   Concepts: <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>^basic parallel example</font>
+<a name="line9">  9: </a><font color="#B22222">!   Concepts: <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>^setting a user-defined shell preconditioner</font>
+<a name="line10"> 10: </a><font color="#B22222">!   Processors: n</font>
+<a name="line11"> 11: </a><font color="#B22222">!T*/</font>
+
+
+<a name="line14"> 14: </a>!
+<a name="line15"> 15: </a>!     -------------------------------------------------------------------------
+<a name="line16"> 16: </a>!
+<a name="line17"> 17: </a>!     Module contains diag needed by shell preconditioner
+<a name="line18"> 18: </a>!
+<a name="line19"> 19: </a>      module mymoduleex15f
+<a name="line20"> 20: </a> #include <A href="../../../../../include/petsc/finclude/petscksp.h.html">&lt;petsc/finclude/petscksp.h&gt;</A>
+<a name="line21"> 21: </a>      use petscksp
+<a name="line22"> 22: </a>      <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>    diag
+<a name="line23"> 23: </a>      end module
+
+<a name="line25"> 25: </a>      program main
+<a name="line26"> 26: </a>      use mymoduleex15f
+<a name="line27"> 27: </a>      implicit none
+
+<a name="line29"> 29: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+<a name="line30"> 30: </a>!                   Variable declarations
+<a name="line31"> 31: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+<a name="line32"> 32: </a>!
+<a name="line33"> 33: </a>!  Variables:
+<a name="line34"> 34: </a>!     ksp     - linear solver context
+<a name="line35"> 35: </a>!     ksp      - Krylov subspace method context
+<a name="line36"> 36: </a>!     pc       - preconditioner context
+<a name="line37"> 37: </a>!     x, b, u  - approx solution, right-hand-side, exact solution vectors
+<a name="line38"> 38: </a>!     A        - matrix that defines linear system
+<a name="line39"> 39: </a>!     its      - iterations <font color="#4169E1">for</font> convergence
+<a name="line40"> 40: </a>!     norm     - norm of solution error
+
+<a name="line42"> 42: </a>      <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>              x,b,u
+<a name="line43"> 43: </a>      <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>              A
+<a name="line44"> 44: </a>      <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>               pc
+<a name="line45"> 45: </a>      <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>              ksp
+<a name="line46"> 46: </a>      <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>      v,one,neg_one
+<a name="line47"> 47: </a>      <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> norm,tol
+<a name="line48"> 48: </a>      <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> ierr
+<a name="line49"> 49: </a>      <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   i,j,II,JJ,Istart
+<a name="line50"> 50: </a>      <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   Iend,m,n,i1,its,five
+<a name="line51"> 51: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a> rank
+<a name="line52"> 52: </a>      <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>  user_defined_pc,flg
+
+<a name="line54"> 54: </a>!  Note: Any user-defined Fortran routines MUST be declared as external.
+
+<a name="line56"> 56: </a>      external SampleShellPCSetUp, SampleShellPCApply
+<a name="line57"> 57: </a>      external  SampleShellPCDestroy
+
+<a name="line59"> 59: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+<a name="line60"> 60: </a>!                 Beginning of program
+<a name="line61"> 61: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+<a name="line63"> 63: </a>      call <a href="../../../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(PETSC_NULL_CHARACTER,ierr)
+<a name="line64"> 64: </a>      <font color="#4169E1">if</font> (ierr .ne. 0) then
+<a name="line65"> 65: </a>        print*,'Unable to initialize PETSc'
+<a name="line66"> 66: </a>        stop
+<a name="line67"> 67: </a>      endif
+<a name="line68"> 68: </a>      one     = 1.0
+<a name="line69"> 69: </a>      neg_one = -1.0
+<a name="line70"> 70: </a>      i1 = 1
+<a name="line71"> 71: </a>      m       = 8
+<a name="line72"> 72: </a>      n       = 7
+<a name="line73"> 73: </a>      five    = 5
+<a name="line74"> 74: </a>      call <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetInt.html#PetscOptionsGetInt">PetscOptionsGetInt</a>(PETSC_NULL_OPTIONS,PETSC_NULL_CHARACTER,'-m',m,flg,ierr)
+<a name="line75"> 75: </a>      call <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetInt.html#PetscOptionsGetInt">PetscOptionsGetInt</a>(PETSC_NULL_OPTIONS,PETSC_NULL_CHARACTER,'-n',n,flg,ierr)
+<a name="line76"> 76: </a>      call <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,rank,ierr)
+
+<a name="line78"> 78: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+<a name="line79"> 79: </a>!      Compute the matrix and right-hand-side vector that define
+<a name="line80"> 80: </a>!      the linear system, Ax = b.
+<a name="line81"> 81: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+<a name="line83"> 83: </a>!  Create parallel matrix, specifying only its global dimensions.
+<a name="line84"> 84: </a>!  When using <a href="../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(), the matrix format can be specified at
+<a name="line85"> 85: </a>!  runtime. Also, the parallel partitioning of the matrix is
+<a name="line86"> 86: </a>!  determined by PETSc at runtime.
+
+<a name="line88"> 88: </a>      call <a href="../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,A,ierr)
+<a name="line89"> 89: </a>      call <a href="../../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(A,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,m*n,m*n,ierr)
+<a name="line90"> 90: </a>      call <a href="../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(A, <a href="../../../../../docs/manualpages/Mat/MATAIJ.html#MATAIJ">MATAIJ</a>,ierr)
+<a name="line91"> 91: </a>      call <a href="../../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(A,ierr)
+<a name="line92"> 92: </a>      call <a href="../../../../../docs/manualpages/Mat/MatMPIAIJSetPreallocation.html#MatMPIAIJSetPreallocation">MatMPIAIJSetPreallocation</a>(A,five,PETSC_NULL_INTEGER,five,PETSC_NULL_INTEGER,ierr)
+<a name="line93"> 93: </a>      call <a href="../../../../../docs/manualpages/Mat/MatSeqAIJSetPreallocation.html#MatSeqAIJSetPreallocation">MatSeqAIJSetPreallocation</a>(A,five,PETSC_NULL_INTEGER,ierr)
+
+<a name="line95"> 95: </a>!  Currently, all PETSc parallel matrix formats are partitioned by
+<a name="line96"> 96: </a>!  contiguous chunks of rows across the processors.  Determine which
+<a name="line97"> 97: </a>!  rows of the matrix are locally owned.
+
+<a name="line99"> 99: </a>      call <a href="../../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(A,Istart,Iend,ierr)
+
+<a name="line101">101: </a>!  Set matrix elements <font color="#4169E1">for</font> the 2-D, five-point stencil in parallel.
+<a name="line102">102: </a>!   - Each processor needs to insert only elements that it owns
+<a name="line103">103: </a>!     locally (but any non-local elements will be sent to the
+<a name="line104">104: </a>!     appropriate processor during matrix assembly).
+<a name="line105">105: </a>!   - Always specify global row and columns of matrix entries.
+<a name="line106">106: </a>!   - Note that <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>() uses 0-based row and column numbers
+<a name="line107">107: </a>!     in Fortran as well as in C.
+
+<a name="line109">109: </a>      <font color="#4169E1">do</font> 10, II=Istart,Iend-1
+<a name="line110">110: </a>        v = -1.0
+<a name="line111">111: </a>        i = II/n
+<a name="line112">112: </a>        j = II - i*n
+<a name="line113">113: </a>        <font color="#4169E1">if</font> (i.gt.0) then
+<a name="line114">114: </a>          JJ = II - n
+<a name="line115">115: </a>          call <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(A,i1,II,i1,JJ,v,<a href="../../../../../docs/manualpages/Sys/ADD_VALUES.html#ADD_VALUES">ADD_VALUES</a>,ierr)
+<a name="line116">116: </a>        endif
+<a name="line117">117: </a>        <font color="#4169E1">if</font> (i.lt.m-1) then
+<a name="line118">118: </a>          JJ = II + n
+<a name="line119">119: </a>          call <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(A,i1,II,i1,JJ,v,<a href="../../../../../docs/manualpages/Sys/ADD_VALUES.html#ADD_VALUES">ADD_VALUES</a>,ierr)
+<a name="line120">120: </a>        endif
+<a name="line121">121: </a>        <font color="#4169E1">if</font> (j.gt.0) then
+<a name="line122">122: </a>          JJ = II - 1
+<a name="line123">123: </a>          call <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(A,i1,II,i1,JJ,v,<a href="../../../../../docs/manualpages/Sys/ADD_VALUES.html#ADD_VALUES">ADD_VALUES</a>,ierr)
+<a name="line124">124: </a>        endif
+<a name="line125">125: </a>        <font color="#4169E1">if</font> (j.lt.n-1) then
+<a name="line126">126: </a>          JJ = II + 1
+<a name="line127">127: </a>          call <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(A,i1,II,i1,JJ,v,<a href="../../../../../docs/manualpages/Sys/ADD_VALUES.html#ADD_VALUES">ADD_VALUES</a>,ierr)
+<a name="line128">128: </a>        endif
+<a name="line129">129: </a>        v = 4.0
+<a name="line130">130: </a>        call  <a href="../../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(A,i1,II,i1,II,v,<a href="../../../../../docs/manualpages/Sys/ADD_VALUES.html#ADD_VALUES">ADD_VALUES</a>,ierr)
+<a name="line131">131: </a> 10   <font color="#4169E1">continue</font>
+
+<a name="line133">133: </a>!  Assemble matrix, using the 2-step process:
+<a name="line134">134: </a>!       <a href="../../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(), <a href="../../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>()
+<a name="line135">135: </a>!  Computations can be done <font color="#4169E1">while</font> messages are in transition,
+<a name="line136">136: </a>!  by placing code between these two statements.
+
+<a name="line138">138: </a>      call <a href="../../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(A,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>,ierr)
+<a name="line139">139: </a>      call <a href="../../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(A,<a href="../../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>,ierr)
+
+<a name="line141">141: </a>!  Create parallel vectors.
+<a name="line142">142: </a>!   - Here, the parallel partitioning of the vector is determined by
+<a name="line143">143: </a>!     PETSc at runtime.  We could also specify the local dimensions
+<a name="line144">144: </a>!     <font color="#4169E1">if</font> desired -- or use the more general routine <a href="../../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>().
+<a name="line145">145: </a>!   - When solving a linear system, the vectors and matrices MUST
+<a name="line146">146: </a>!     be partitioned accordingly.  PETSc automatically generates
+<a name="line147">147: </a>!     appropriately partitioned matrices and vectors when <a href="../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>()
+<a name="line148">148: </a>!     and <a href="../../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>() are used with the same communicator.
+<a name="line149">149: </a>!   - Note: We form 1 vector from scratch and then duplicate as needed.
+
+<a name="line151">151: </a>      call <a href="../../../../../docs/manualpages/Vec/VecCreateMPI.html#VecCreateMPI">VecCreateMPI</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,m*n,u,ierr)
+<a name="line152">152: </a>      call <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(u,b,ierr)
+<a name="line153">153: </a>      call <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(b,x,ierr)
+
+<a name="line155">155: </a>!  Set exact solution; then compute right-hand-side vector.
+
+<a name="line157">157: </a>      call <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(u,one,ierr)
+<a name="line158">158: </a>      call <a href="../../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a>(A,u,b,ierr)
+
+<a name="line160">160: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+<a name="line161">161: </a>!         Create the linear solver and set various options
+<a name="line162">162: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+<a name="line164">164: </a>!  Create linear solver context
+
+<a name="line166">166: </a>      call <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,ksp,ierr)
+
+<a name="line168">168: </a>!  Set operators. Here the matrix that defines the linear system
+<a name="line169">169: </a>!  also serves as the preconditioning matrix.
+
+<a name="line171">171: </a>      call <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(ksp,A,A,ierr)
+
+<a name="line173">173: </a>!  Set linear solver defaults <font color="#4169E1">for</font> this problem (optional).
+<a name="line174">174: </a>!   - By extracting the <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> and <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> contexts from the <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> context,
+<a name="line175">175: </a>!     we can then directly directly call any <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> and <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> routines
+<a name="line176">176: </a>!     to set various options.
+
+<a name="line178">178: </a>      call <a href="../../../../../docs/manualpages/KSP/KSPGetPC.html#KSPGetPC">KSPGetPC</a>(ksp,pc,ierr)
+<a name="line179">179: </a>      tol = 1.e-7
+<a name="line180">180: </a>      call <a href="../../../../../docs/manualpages/KSP/KSPSetTolerances.html#KSPSetTolerances">KSPSetTolerances</a>(ksp,tol,PETSC_DEFAULT_REAL,PETSC_DEFAULT_REAL,PETSC_DEFAULT_INTEGER,ierr)
+
+<a name="line182">182: </a>!
+<a name="line183">183: </a>!  Set a user-defined shell preconditioner <font color="#4169E1">if</font> desired
+<a name="line184">184: </a>!
+<a name="line185">185: </a>      call <a href="../../../../../docs/manualpages/Sys/PetscOptionsHasName.html#PetscOptionsHasName">PetscOptionsHasName</a>(PETSC_NULL_OPTIONS,PETSC_NULL_CHARACTER,'-user_defined_pc',user_defined_pc,ierr)
+
+<a name="line187">187: </a>      <font color="#4169E1">if</font> (user_defined_pc) then
+
+<a name="line189">189: </a>!  (Required) Indicate to PETSc that we are using a shell preconditioner
+<a name="line190">190: </a>         call <a href="../../../../../docs/manualpages/PC/PCSetType.html#PCSetType">PCSetType</a>(pc,<a href="../../../../../docs/manualpages/PC/PCSHELL.html#PCSHELL">PCSHELL</a>,ierr)
+
+<a name="line192">192: </a>!  (Required) Set the user-defined routine <font color="#4169E1">for</font> applying the preconditioner
+<a name="line193">193: </a>         call <a href="../../../../../docs/manualpages/PC/PCShellSetApply.html#PCShellSetApply">PCShellSetApply</a>(pc,SampleShellPCApply,ierr)
+
+<a name="line195">195: </a>!  (Optional) Do any setup required <font color="#4169E1">for</font> the preconditioner
+<a name="line196">196: </a>         call <a href="../../../../../docs/manualpages/PC/PCShellSetSetUp.html#PCShellSetSetUp">PCShellSetSetUp</a>(pc,SampleShellPCSetUp,ierr)
+
+<a name="line198">198: </a>!  (Optional) Frees any objects we created <font color="#4169E1">for</font> the preconditioner
+<a name="line199">199: </a>         call <a href="../../../../../docs/manualpages/PC/PCShellSetDestroy.html#PCShellSetDestroy">PCShellSetDestroy</a>(pc,SampleShellPCDestroy,ierr)
+
+<a name="line201">201: </a>      <font color="#4169E1">else</font>
+<a name="line202">202: </a>         call <a href="../../../../../docs/manualpages/PC/PCSetType.html#PCSetType">PCSetType</a>(pc,<a href="../../../../../docs/manualpages/PC/PCJACOBI.html#PCJACOBI">PCJACOBI</a>,ierr)
+<a name="line203">203: </a>      endif
+
+<a name="line205">205: </a>!  Set runtime options, e.g.,
+<a name="line206">206: </a>!      -ksp_type &lt;type&gt; -pc_type &lt;type&gt; -ksp_monitor -ksp_rtol &lt;rtol&gt;
+<a name="line207">207: </a>!  These options will override those specified above as long as
+<a name="line208">208: </a>!  <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>() is called _after_ any other customization
+<a name="line209">209: </a>!  routines.
+
+<a name="line211">211: </a>      call <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(ksp,ierr)
+
+<a name="line213">213: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+<a name="line214">214: </a>!                      Solve the linear system
+<a name="line215">215: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+<a name="line217">217: </a>      call <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(ksp,b,x,ierr)
+
+<a name="line219">219: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+<a name="line220">220: </a>!                     Check solution and clean up
+<a name="line221">221: </a>! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+<a name="line223">223: </a>!  Check the error
+
+<a name="line225">225: </a>      call <a href="../../../../../docs/manualpages/Vec/VecAXPY.html#VecAXPY">VecAXPY</a>(x,neg_one,u,ierr)
+<a name="line226">226: </a>      call <a href="../../../../../docs/manualpages/Vec/VecNorm.html#VecNorm">VecNorm</a>(x,<a href="../../../../../docs/manualpages/Vec/NORM_2.html#NORM_2">NORM_2</a>,norm,ierr)
+<a name="line227">227: </a>      call <a href="../../../../../docs/manualpages/KSP/KSPGetIterationNumber.html#KSPGetIterationNumber">KSPGetIterationNumber</a>(ksp,its,ierr)
+
+<a name="line229">229: </a>      <font color="#4169E1">if</font> (rank .eq. 0) then
+<a name="line230">230: </a>        <font color="#4169E1">if</font> (norm .gt. 1.e-12) then
+<a name="line231">231: </a>           write(6,100) norm,its
+<a name="line232">232: </a>        <font color="#4169E1">else</font>
+<a name="line233">233: </a>           write(6,110) its
+<a name="line234">234: </a>        endif
+<a name="line235">235: </a>      endif
+<a name="line236">236: </a>  100 format('Norm of error ',1pe11.4,' iterations ',i5)
+<a name="line237">237: </a>  110 format('Norm of error < 1.e-12,iterations ',i5)
+
+<a name="line239">239: </a>!  Free work space.  All PETSc objects should be destroyed when they
+<a name="line240">240: </a>!  are no longer needed.
+
+<a name="line242">242: </a>      call <a href="../../../../../docs/manualpages/KSP/KSPDestroy.html#KSPDestroy">KSPDestroy</a>(ksp,ierr)
+<a name="line243">243: </a>      call <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(u,ierr)
+<a name="line244">244: </a>      call <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(x,ierr)
+<a name="line245">245: </a>      call <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(b,ierr)
+<a name="line246">246: </a>      call <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(A,ierr)
+
+<a name="line248">248: </a>!  Always call <a href="../../../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>() before exiting a program.
+
+<a name="line250">250: </a>      call <a href="../../../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>(ierr)
+<a name="line251">251: </a>      end
+
+<a name="line253">253: </a>!<font color="#B22222">/***********************************************************************/</font>
+<a name="line254">254: </a>!<font color="#B22222">/*          Routines for a user-defined shell preconditioner           */</font>
+<a name="line255">255: </a>!<font color="#B22222">/***********************************************************************/</font>
+
+<a name="line257">257: </a>!
+<a name="line258">258: </a>!   SampleShellPCSetUp - This routine sets up a user-defined
+<a name="line259">259: </a>!   preconditioner context.
+<a name="line260">260: </a>!
+<a name="line261">261: </a>!   Input Parameters:
+<a name="line262">262: </a>!   pc - preconditioner object
+<a name="line263">263: </a>!
+<a name="line264">264: </a>!   Output Parameter:
+<a name="line265">265: </a>!   ierr  - error code (nonzero <font color="#4169E1">if</font> error has been detected)
+<a name="line266">266: </a>!
+<a name="line267">267: </a>!   Notes:
+<a name="line268">268: </a>!   In this example, we define the shell preconditioner to be Jacobi
+<a name="line269">269: </a>!   method.  Thus, here we create a work vector <font color="#4169E1">for</font> storing the reciprocal
+<a name="line270">270: </a>!   of the diagonal of the preconditioner matrix; this vector is then
+<a name="line271">271: </a>!   used within the routine SampleShellPCApply().
+<a name="line272">272: </a>!
+<a name="line273">273: </a>      subroutine SampleShellPCSetUp(pc,ierr)
+<a name="line274">274: </a>      use mymoduleex15f
+<a name="line275">275: </a>      use petscksp
+<a name="line276">276: </a>      implicit none
+
+<a name="line278">278: </a>      <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>      pc
+<a name="line279">279: </a>      <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>     pmat
+<a name="line280">280: </a>      integer ierr
+
+<a name="line282">282: </a>      call <a href="../../../../../docs/manualpages/PC/PCGetOperators.html#PCGetOperators">PCGetOperators</a>(pc,PETSC_NULL_MAT,pmat,ierr)
+<a name="line283">283: </a>      call <a href="../../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(pmat,diag,PETSC_NULL_VEC,ierr)
+<a name="line284">284: </a>      call <a href="../../../../../docs/manualpages/Mat/MatGetDiagonal.html#MatGetDiagonal">MatGetDiagonal</a>(pmat,diag,ierr)
+<a name="line285">285: </a>      call <a href="../../../../../docs/manualpages/Vec/VecReciprocal.html#VecReciprocal">VecReciprocal</a>(diag,ierr)
+
+<a name="line287">287: </a>      end
+
+<a name="line289">289: </a>! -------------------------------------------------------------------
+<a name="line290">290: </a>!
+<a name="line291">291: </a>!   SampleShellPCApply - This routine demonstrates the use of a
+<a name="line292">292: </a>!   user-provided preconditioner.
+<a name="line293">293: </a>!
+<a name="line294">294: </a>!   Input Parameters:
+<a name="line295">295: </a>!   pc - preconditioner object
+<a name="line296">296: </a>!   x - input vector
+<a name="line297">297: </a>!
+<a name="line298">298: </a>!   Output Parameters:
+<a name="line299">299: </a>!   y - preconditioned vector
+<a name="line300">300: </a>!   ierr  - error code (nonzero <font color="#4169E1">if</font> error has been detected)
+<a name="line301">301: </a>!
+<a name="line302">302: </a>!   Notes:
+<a name="line303">303: </a>!   This code implements the Jacobi preconditioner, merely as an
+<a name="line304">304: </a>!   example of working with a <a href="../../../../../docs/manualpages/PC/PCSHELL.html#PCSHELL">PCSHELL</a>.  Note that the Jacobi method
+<a name="line305">305: </a>!   is already provided within PETSc.
+<a name="line306">306: </a>!
+<a name="line307">307: </a>      subroutine SampleShellPCApply(pc,x,y,ierr)
+<a name="line308">308: </a>      use mymoduleex15f
+<a name="line309">309: </a>      implicit none
+
+<a name="line311">311: </a>      <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>      pc
+<a name="line312">312: </a>      <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>     x,y
+<a name="line313">313: </a>      integer ierr
+
+<a name="line315">315: </a>      call <a href="../../../../../docs/manualpages/Vec/VecPointwiseMult.html#VecPointwiseMult">VecPointwiseMult</a>(y,x,diag,ierr)
+
+<a name="line317">317: </a>      end
+
+<a name="line319">319: </a>!<font color="#B22222">/***********************************************************************/</font>
+<a name="line320">320: </a>!<font color="#B22222">/*          Routines for a user-defined shell preconditioner           */</font>
+<a name="line321">321: </a>!<font color="#B22222">/***********************************************************************/</font>
+
+<a name="line323">323: </a>!
+<a name="line324">324: </a>!   SampleShellPCDestroy - This routine destroys (frees the memory of) any
+<a name="line325">325: </a>!      objects we made <font color="#4169E1">for</font> the preconditioner
+<a name="line326">326: </a>!
+<a name="line327">327: </a>!   Input Parameters:
+<a name="line328">328: </a>!   pc - <font color="#4169E1">for</font> this example we use the actual <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> as our shell context
+<a name="line329">329: </a>!
+<a name="line330">330: </a>!   Output Parameter:
+<a name="line331">331: </a>!   ierr  - error code (nonzero <font color="#4169E1">if</font> error has been detected)
+<a name="line332">332: </a>!
+
+<a name="line334">334: </a>      subroutine SampleShellPCDestroy(pc,ierr)
+<a name="line335">335: </a>      use mymoduleex15f
+<a name="line336">336: </a>      implicit none
+
+<a name="line338">338: </a>      <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>      pc
+<a name="line339">339: </a>      <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> ierr
+
+<a name="line341">341: </a>!  Normally we would recommend storing all the work data (like diag) in
+<a name="line342">342: </a>!  the context set with <a href="../../../../../docs/manualpages/PC/PCShellSetContext.html#PCShellSetContext">PCShellSetContext</a>()
+
+<a name="line344">344: </a>      call <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(diag,ierr)
+
+<a name="line346">346: </a>      end
+
+<a name="line348">348: </a>!
+<a name="line349">349: </a>!<font color="#B22222">/*TEST</font>
+<a name="line350">350: </a><font color="#B22222">!</font>
+<a name="line351">351: </a><font color="#B22222">!   test:</font>
+<a name="line352">352: </a><font color="#B22222">!      nsize: 2</font>
+<a name="line353">353: </a><font color="#B22222">!      args: -ksp_view -user_defined_pc -ksp_gmres_cgs_refinement_type refine_always</font>
+<a name="line354">354: </a><font color="#B22222">!</font>
+<a name="line355">355: </a><font color="#B22222">!TEST*/</font>
+</pre>
+</body>
+
+</html>

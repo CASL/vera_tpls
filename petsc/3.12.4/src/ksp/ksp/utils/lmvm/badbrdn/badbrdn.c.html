@@ -1,0 +1,355 @@
+<center><a href="badbrdn.c">Actual source code: badbrdn.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/ksp/utils/lmvm/badbrdn/badbrdn.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:21:18+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/ksp/utils/lmvm/badbrdn/badbrdn.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a> #include <A href="../../../../../../include/../src/ksp/ksp/utils/lmvm/lmvm.h.html">&lt;../src/ksp/ksp/utils/lmvm/lmvm.h&gt;</A>
+
+<a name="line3">  3: </a><font color="#B22222">/*</font>
+<a name="line4">  4: </a><font color="#B22222">  Limited-memory "good" Broyden's method for approximating the inverse of </font>
+<a name="line5">  5: </a><font color="#B22222">  a Jacobian.</font>
+<a name="line6">  6: </a><font color="#B22222">*/</font>
+
+<a name="line8">  8: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line9">  9: </a>  <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *P, *Q;
+<a name="line10"> 10: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> allocated, needP, needQ;
+<a name="line11"> 11: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *yty, *yts;
+<a name="line12"> 12: </a>} Mat_BadBrdn;
+
+<a name="line14"> 14: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line16"> 16: </a><font color="#B22222">/*</font>
+<a name="line17"> 17: </a><font color="#B22222">  The solution method is the matrix-free implementation of the inverse Hessian in</font>
+<a name="line18"> 18: </a><font color="#B22222">  Equation 6 on page 312 of Griewank "Broyden Updating, The Good and The Bad!" </font>
+<a name="line19"> 19: </a><font color="#B22222">  (http://www.emis.ams.org/journals/DMJDMV/vol-ismp/45_griewank-andreas-broyden.pdf).</font>
+<a name="line20"> 20: </a><font color="#B22222">  </font>
+<a name="line21"> 21: </a><font color="#B22222">  Q[i] = (B_i)^{-1}*S[i] terms are computed ahead of time whenever </font>
+<a name="line22"> 22: </a><font color="#B22222">  the matrix is updated with a new (S[i], Y[i]) pair. This allows </font>
+<a name="line23"> 23: </a><font color="#B22222">  repeated calls of <a href="../../../../../../docs/manualpages/Mat/MatSolve.html#MatSolve">MatSolve</a> without incurring redundant computation.</font>
+<a name="line24"> 24: </a><font color="#B22222">  </font>
+<a name="line25"> 25: </a><font color="#B22222">  dX &lt;- J0^{-1} * F</font>
+<a name="line26"> 26: </a><font color="#B22222">  </font>
+<a name="line27"> 27: </a><font color="#B22222">  for i=0,1,2,...,k</font>
+<a name="line28"> 28: </a><font color="#B22222">    # Q[i] = (B_i)^{-1} * Y[i]</font>
+<a name="line29"> 29: </a><font color="#B22222">    tau = (Y[i]^T F) / (Y[i]^T Y[i])</font>
+<a name="line30"> 30: </a><font color="#B22222">    dX &lt;- dX + (tau * (S[i] - Q[i]))</font>
+<a name="line31"> 31: </a><font color="#B22222">  end</font>
+<a name="line32"> 32: </a><font color="#B22222"> */</font>
+
+<a name="line34"> 34: </a><strong><font color="#4169E1"><a name="MatSolve_LMVMBadBrdn"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSolve_LMVMBadBrdn(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> dX)</font></strong>
+<a name="line35"> 35: </a>{
+<a name="line36"> 36: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line37"> 37: </a>  Mat_BadBrdn       *lbb = (Mat_BadBrdn*)lmvm-&gt;ctx;
+<a name="line38"> 38: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line39"> 39: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i, j;
+<a name="line40"> 40: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       yjtyi, ytf;
+<a name="line41"> 41: </a>
+<a name="line43"> 43: </a>  VecCheckSameSize(F, 2, dX, 3);
+<a name="line44"> 44: </a>  VecCheckMatCompatible(B, dX, 3, F, 2);
+<a name="line45"> 45: </a>
+<a name="line46"> 46: </a>  <font color="#4169E1">if</font> (lbb-&gt;needQ) {
+<a name="line47"> 47: </a>    <font color="#B22222">/* Pre-compute (Q[i] = (B_i)^{-1} * Y[i]) */</font>
+<a name="line48"> 48: </a>    <font color="#4169E1">for</font> (i = 0; i &lt;= lmvm-&gt;k; ++i) {
+<a name="line49"> 49: </a>      <a href="../../../../../../docs/manualpages/KSP/MatLMVMApplyJ0Inv.html#MatLMVMApplyJ0Inv">MatLMVMApplyJ0Inv</a>(B, lmvm-&gt;Y[i], lbb-&gt;Q[i]);
+<a name="line50"> 50: </a>      <font color="#4169E1">for</font> (j = 0; j &lt;= i-1; ++j) {
+<a name="line51"> 51: </a>        <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(lmvm-&gt;Y[j], lmvm-&gt;Y[i], &amp;yjtyi);
+<a name="line52"> 52: </a>        <a href="../../../../../../docs/manualpages/Vec/VecAXPBYPCZ.html#VecAXPBYPCZ">VecAXPBYPCZ</a>(lbb-&gt;Q[i], <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(yjtyi)/lbb-&gt;yty[j], -<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(yjtyi)/lbb-&gt;yty[j], 1.0, lmvm-&gt;S[j], lbb-&gt;Q[j]);
+<a name="line53"> 53: </a>      }
+<a name="line54"> 54: </a>    }
+<a name="line55"> 55: </a>    lbb-&gt;needQ = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line56"> 56: </a>  }
+<a name="line57"> 57: </a>
+<a name="line58"> 58: </a>  <a href="../../../../../../docs/manualpages/KSP/MatLMVMApplyJ0Inv.html#MatLMVMApplyJ0Inv">MatLMVMApplyJ0Inv</a>(B, F, dX);
+<a name="line59"> 59: </a>  <font color="#4169E1">for</font> (i = 0; i &lt;= lmvm-&gt;k-1; ++i) {
+<a name="line60"> 60: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(lmvm-&gt;Y[i], F, &amp;ytf);
+<a name="line61"> 61: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAXPBYPCZ.html#VecAXPBYPCZ">VecAXPBYPCZ</a>(dX, <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(ytf)/lbb-&gt;yty[i], -<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(ytf)/lbb-&gt;yty[i], 1.0, lmvm-&gt;S[i], lbb-&gt;Q[i]);
+<a name="line62"> 62: </a>  }
+<a name="line63"> 63: </a>  <font color="#4169E1">return</font>(0);
+<a name="line64"> 64: </a>}
+
+<a name="line66"> 66: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line68"> 68: </a><font color="#B22222">/*</font>
+<a name="line69"> 69: </a><font color="#B22222">  The forward product is the matrix-free implementation of the direct update in </font>
+<a name="line70"> 70: </a><font color="#B22222">  Equation 6 on page 302 of Griewank "Broyden Updating, The Good and The Bad!"</font>
+<a name="line71"> 71: </a><font color="#B22222">  (http://www.emis.ams.org/journals/DMJDMV/vol-ismp/45_griewank-andreas-broyden.pdf).</font>
+<a name="line72"> 72: </a><font color="#B22222">  </font>
+<a name="line73"> 73: </a><font color="#B22222">  P[i] = (B_i)*S[i] terms are computed ahead of time whenever </font>
+<a name="line74"> 74: </a><font color="#B22222">  the matrix is updated with a new (S[i], Y[i]) pair. This allows </font>
+<a name="line75"> 75: </a><font color="#B22222">  repeated calls of <a href="../../../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a> inside <a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> solvers without unnecessarily </font>
+<a name="line76"> 76: </a><font color="#B22222">  recomputing P[i] terms in expensive nested-loops.</font>
+<a name="line77"> 77: </a><font color="#B22222">  </font>
+<a name="line78"> 78: </a><font color="#B22222">  Z &lt;- J0 * X</font>
+<a name="line79"> 79: </a><font color="#B22222">  </font>
+<a name="line80"> 80: </a><font color="#B22222">  for i=0,1,2,...,k</font>
+<a name="line81"> 81: </a><font color="#B22222">    # P[i] = B_i * S[i]</font>
+<a name="line82"> 82: </a><font color="#B22222">    tau = (Y[i]^T X) / (Y[i]^T S[i])</font>
+<a name="line83"> 83: </a><font color="#B22222">    dX &lt;- dX + (tau * (Y[i] - P[i]))</font>
+<a name="line84"> 84: </a><font color="#B22222">  end</font>
+<a name="line85"> 85: </a><font color="#B22222"> */</font>
+
+<a name="line87"> 87: </a><strong><font color="#4169E1"><a name="MatMult_LMVMBadBrdn"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatMult_LMVMBadBrdn(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> Z)</font></strong>
+<a name="line88"> 88: </a>{
+<a name="line89"> 89: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line90"> 90: </a>  Mat_BadBrdn       *lbb = (Mat_BadBrdn*)lmvm-&gt;ctx;
+<a name="line91"> 91: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line92"> 92: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i, j;
+<a name="line93"> 93: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       yjtsi, ytx;
+<a name="line94"> 94: </a>
+<a name="line96"> 96: </a>  VecCheckSameSize(X, 2, Z, 3);
+<a name="line97"> 97: </a>  VecCheckMatCompatible(B, X, 2, Z, 3);
+<a name="line98"> 98: </a>
+<a name="line99"> 99: </a>  <font color="#4169E1">if</font> (lbb-&gt;needP) {
+<a name="line100">100: </a>    <font color="#B22222">/* Pre-compute (P[i] = (B_i) * S[i]) */</font>
+<a name="line101">101: </a>    <font color="#4169E1">for</font> (i = 0; i &lt;= lmvm-&gt;k; ++i) {
+<a name="line102">102: </a>      <a href="../../../../../../docs/manualpages/KSP/MatLMVMApplyJ0Fwd.html#MatLMVMApplyJ0Fwd">MatLMVMApplyJ0Fwd</a>(B, lmvm-&gt;S[i], lbb-&gt;P[i]);
+<a name="line103">103: </a>      <font color="#4169E1">for</font> (j = 0; j &lt;= i-1; ++j) {
+<a name="line104">104: </a>        <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(lmvm-&gt;Y[j], lmvm-&gt;S[i], &amp;yjtsi);
+<a name="line105">105: </a>        <a href="../../../../../../docs/manualpages/Vec/VecAXPBYPCZ.html#VecAXPBYPCZ">VecAXPBYPCZ</a>(lbb-&gt;P[i], <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(yjtsi)/lbb-&gt;yts[j], -<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(yjtsi)/lbb-&gt;yts[j], 1.0, lmvm-&gt;Y[j], lbb-&gt;P[j]);
+<a name="line106">106: </a>      }
+<a name="line107">107: </a>    }
+<a name="line108">108: </a>    lbb-&gt;needP = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line109">109: </a>  }
+<a name="line110">110: </a>
+<a name="line111">111: </a>  <a href="../../../../../../docs/manualpages/KSP/MatLMVMApplyJ0Fwd.html#MatLMVMApplyJ0Fwd">MatLMVMApplyJ0Fwd</a>(B, X, Z);
+<a name="line112">112: </a>  <font color="#4169E1">for</font> (i = 0; i &lt;= lmvm-&gt;k-1; ++i) {
+<a name="line113">113: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(lmvm-&gt;Y[i], X, &amp;ytx);
+<a name="line114">114: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAXPBYPCZ.html#VecAXPBYPCZ">VecAXPBYPCZ</a>(Z, <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(ytx)/lbb-&gt;yts[i], -<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(ytx)/lbb-&gt;yts[i], 1.0, lmvm-&gt;Y[i], lbb-&gt;P[i]);
+<a name="line115">115: </a>  }
+<a name="line116">116: </a>  <font color="#4169E1">return</font>(0);
+<a name="line117">117: </a>}
+
+<a name="line119">119: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line121">121: </a><strong><font color="#4169E1"><a name="MatUpdate_LMVMBadBrdn"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatUpdate_LMVMBadBrdn(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F)</font></strong>
+<a name="line122">122: </a>{
+<a name="line123">123: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line124">124: </a>  Mat_BadBrdn       *lbb = (Mat_BadBrdn*)lmvm-&gt;ctx;
+<a name="line125">125: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line126">126: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          old_k, i;
+<a name="line127">127: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       yty, yts;
+
+<a name="line130">130: </a>  <font color="#4169E1">if</font> (!lmvm-&gt;m) <font color="#4169E1">return</font>(0);
+<a name="line131">131: </a>  <font color="#4169E1">if</font> (lmvm-&gt;prev_set) {
+<a name="line132">132: </a>    <font color="#B22222">/* Compute the new (S = X - Xprev) and (Y = F - Fprev) vectors */</font>
+<a name="line133">133: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(lmvm-&gt;Xprev, -1.0, X);
+<a name="line134">134: </a>    <a href="../../../../../../docs/manualpages/Vec/VecAYPX.html#VecAYPX">VecAYPX</a>(lmvm-&gt;Fprev, -1.0, F);
+<a name="line135">135: </a>    <font color="#B22222">/* Accept the update */</font>
+<a name="line136">136: </a>    lbb-&gt;needP = lbb-&gt;needQ = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line137">137: </a>    old_k = lmvm-&gt;k;
+<a name="line138">138: </a>    MatUpdateKernel_LMVM(B, lmvm-&gt;Xprev, lmvm-&gt;Fprev);
+<a name="line139">139: </a>    <font color="#B22222">/* If we hit the memory limit, shift the yty and yts arrays */</font>
+<a name="line140">140: </a>    <font color="#4169E1">if</font> (old_k == lmvm-&gt;k) {
+<a name="line141">141: </a>      <font color="#4169E1">for</font> (i = 0; i &lt;= lmvm-&gt;k-1; ++i) {
+<a name="line142">142: </a>        lbb-&gt;yty[i] = lbb-&gt;yty[i+1];
+<a name="line143">143: </a>        lbb-&gt;yts[i] = lbb-&gt;yts[i+1];
+<a name="line144">144: </a>      }
+<a name="line145">145: </a>    }
+<a name="line146">146: </a>    <font color="#B22222">/* Accumulate the latest yTy and yTs dot products */</font>
+<a name="line147">147: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotBegin.html#VecDotBegin">VecDotBegin</a>(lmvm-&gt;Y[lmvm-&gt;k], lmvm-&gt;Y[lmvm-&gt;k], &amp;yty);
+<a name="line148">148: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotBegin.html#VecDotBegin">VecDotBegin</a>(lmvm-&gt;Y[lmvm-&gt;k], lmvm-&gt;S[lmvm-&gt;k], &amp;yts);
+<a name="line149">149: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotEnd.html#VecDotEnd">VecDotEnd</a>(lmvm-&gt;Y[lmvm-&gt;k], lmvm-&gt;Y[lmvm-&gt;k], &amp;yty);
+<a name="line150">150: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDotEnd.html#VecDotEnd">VecDotEnd</a>(lmvm-&gt;Y[lmvm-&gt;k], lmvm-&gt;S[lmvm-&gt;k], &amp;yts);
+<a name="line151">151: </a>    lbb-&gt;yty[lmvm-&gt;k] = <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(yty);
+<a name="line152">152: </a>    lbb-&gt;yts[lmvm-&gt;k] = <a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(yts);
+<a name="line153">153: </a>  }
+<a name="line154">154: </a>  <font color="#B22222">/* Save the solution and function to be used in the next update */</font>
+<a name="line155">155: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(X, lmvm-&gt;Xprev);
+<a name="line156">156: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(F, lmvm-&gt;Fprev);
+<a name="line157">157: </a>  lmvm-&gt;prev_set = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line158">158: </a>  <font color="#4169E1">return</font>(0);
+<a name="line159">159: </a>}
+
+<a name="line161">161: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line163">163: </a><strong><font color="#4169E1"><a name="MatCopy_LMVMBadBrdn"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatCopy_LMVMBadBrdn(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> M, <a href="../../../../../../docs/manualpages/Mat/MatStructure.html#MatStructure">MatStructure</a> str)</font></strong>
+<a name="line164">164: </a>{
+<a name="line165">165: </a>  Mat_LMVM          *bdata = (Mat_LMVM*)B-&gt;data;
+<a name="line166">166: </a>  Mat_BadBrdn       *bctx = (Mat_BadBrdn*)bdata-&gt;ctx;
+<a name="line167">167: </a>  Mat_LMVM          *mdata = (Mat_LMVM*)M-&gt;data;
+<a name="line168">168: </a>  Mat_BadBrdn       *mctx = (Mat_BadBrdn*)mdata-&gt;ctx;
+<a name="line169">169: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line170">170: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i;
+
+<a name="line173">173: </a>  mctx-&gt;needP = bctx-&gt;needP;
+<a name="line174">174: </a>  mctx-&gt;needQ = bctx-&gt;needQ;
+<a name="line175">175: </a>  <font color="#4169E1">for</font> (i=0; i&lt;=bdata-&gt;k; ++i) {
+<a name="line176">176: </a>    mctx-&gt;yty[i] = bctx-&gt;yty[i];
+<a name="line177">177: </a>    mctx-&gt;yts[i] = bctx-&gt;yts[i];
+<a name="line178">178: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(bctx-&gt;P[i], mctx-&gt;P[i]);
+<a name="line179">179: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(bctx-&gt;Q[i], mctx-&gt;Q[i]);
+<a name="line180">180: </a>  }
+<a name="line181">181: </a>  <font color="#4169E1">return</font>(0);
+<a name="line182">182: </a>}
+
+<a name="line184">184: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line186">186: </a><strong><font color="#4169E1"><a name="MatReset_LMVMBadBrdn"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatReset_LMVMBadBrdn(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> destructive)</font></strong>
+<a name="line187">187: </a>{
+<a name="line188">188: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line189">189: </a>  Mat_BadBrdn       *lbb = (Mat_BadBrdn*)lmvm-&gt;ctx;
+<a name="line190">190: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line191">191: </a>
+<a name="line193">193: </a>  lbb-&gt;needP = lbb-&gt;needQ = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line194">194: </a>  <font color="#4169E1">if</font> (destructive &amp;&amp; lbb-&gt;allocated) {
+<a name="line195">195: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(lbb-&gt;yty, lbb-&gt;yts);
+<a name="line196">196: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(lmvm-&gt;m, &amp;lbb-&gt;P);
+<a name="line197">197: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(lmvm-&gt;m, &amp;lbb-&gt;Q);
+<a name="line198">198: </a>    lbb-&gt;allocated = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line199">199: </a>  }
+<a name="line200">200: </a>  MatReset_LMVM(B, destructive);
+<a name="line201">201: </a>  <font color="#4169E1">return</font>(0);
+<a name="line202">202: </a>}
+
+<a name="line204">204: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line206">206: </a><strong><font color="#4169E1"><a name="MatAllocate_LMVMBadBrdn"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatAllocate_LMVMBadBrdn(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F)</font></strong>
+<a name="line207">207: </a>{
+<a name="line208">208: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line209">209: </a>  Mat_BadBrdn          *lbb = (Mat_BadBrdn*)lmvm-&gt;ctx;
+<a name="line210">210: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line211">211: </a>
+<a name="line213">213: </a>  MatAllocate_LMVM(B, X, F);
+<a name="line214">214: </a>  <font color="#4169E1">if</font> (!lbb-&gt;allocated) {
+<a name="line215">215: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(lmvm-&gt;m, &amp;lbb-&gt;yty, lmvm-&gt;m, &amp;lbb-&gt;yts);
+<a name="line216">216: </a>    <font color="#4169E1">if</font> (lmvm-&gt;m &gt; 0) {
+<a name="line217">217: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(X, lmvm-&gt;m, &amp;lbb-&gt;P);
+<a name="line218">218: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(X, lmvm-&gt;m, &amp;lbb-&gt;Q);
+<a name="line219">219: </a>    }
+<a name="line220">220: </a>    lbb-&gt;allocated = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line221">221: </a>  }
+<a name="line222">222: </a>  <font color="#4169E1">return</font>(0);
+<a name="line223">223: </a>}
+
+<a name="line225">225: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line227">227: </a><strong><font color="#4169E1"><a name="MatDestroy_LMVMBadBrdn"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatDestroy_LMVMBadBrdn(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B)</font></strong>
+<a name="line228">228: </a>{
+<a name="line229">229: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line230">230: </a>  Mat_BadBrdn       *lbb = (Mat_BadBrdn*)lmvm-&gt;ctx;
+<a name="line231">231: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+<a name="line234">234: </a>  <font color="#4169E1">if</font> (lbb-&gt;allocated) {
+<a name="line235">235: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(lbb-&gt;yty, lbb-&gt;yts);
+<a name="line236">236: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(lmvm-&gt;m, &amp;lbb-&gt;P);
+<a name="line237">237: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(lmvm-&gt;m, &amp;lbb-&gt;Q);
+<a name="line238">238: </a>    lbb-&gt;allocated = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line239">239: </a>  }
+<a name="line240">240: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(lmvm-&gt;ctx);
+<a name="line241">241: </a>  MatDestroy_LMVM(B);
+<a name="line242">242: </a>  <font color="#4169E1">return</font>(0);
+<a name="line243">243: </a>}
+
+<a name="line245">245: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line247">247: </a><strong><font color="#4169E1"><a name="MatSetUp_LMVMBadBrdn"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSetUp_LMVMBadBrdn(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B)</font></strong>
+<a name="line248">248: </a>{
+<a name="line249">249: </a>  Mat_LMVM          *lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line250">250: </a>  Mat_BadBrdn       *lbb = (Mat_BadBrdn*)lmvm-&gt;ctx;
+<a name="line251">251: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line252">252: </a>
+<a name="line254">254: </a>  MatSetUp_LMVM(B);
+<a name="line255">255: </a>  <font color="#4169E1">if</font> (!lbb-&gt;allocated) {
+<a name="line256">256: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(lmvm-&gt;m, &amp;lbb-&gt;yty, lmvm-&gt;m, &amp;lbb-&gt;yts);
+<a name="line257">257: </a>    <font color="#4169E1">if</font> (lmvm-&gt;m &gt; 0) {
+<a name="line258">258: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(lmvm-&gt;Xprev, lmvm-&gt;m, &amp;lbb-&gt;P);
+<a name="line259">259: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(lmvm-&gt;Xprev, lmvm-&gt;m, &amp;lbb-&gt;Q);
+<a name="line260">260: </a>    }
+<a name="line261">261: </a>    lbb-&gt;allocated = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line262">262: </a>  }
+<a name="line263">263: </a>  <font color="#4169E1">return</font>(0);
+<a name="line264">264: </a>}
+
+<a name="line266">266: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line268">268: </a><strong><font color="#4169E1"><a name="MatCreate_LMVMBadBrdn"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatCreate_LMVMBadBrdn(<a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B)</font></strong>
+<a name="line269">269: </a>{
+<a name="line270">270: </a>  Mat_LMVM          *lmvm;
+<a name="line271">271: </a>  Mat_BadBrdn       *lbb;
+<a name="line272">272: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+<a name="line275">275: </a>  MatCreate_LMVM(B);
+<a name="line276">276: </a>  PetscObjectChangeTypeName((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)B, MATLMVMBADBRDN);
+<a name="line277">277: </a>  B-&gt;ops-&gt;setup = MatSetUp_LMVMBadBrdn;
+<a name="line278">278: </a>  B-&gt;ops-&gt;destroy = MatDestroy_LMVMBadBrdn;
+<a name="line279">279: </a>  B-&gt;ops-&gt;solve = MatSolve_LMVMBadBrdn;
+
+<a name="line281">281: </a>  lmvm = (Mat_LMVM*)B-&gt;data;
+<a name="line282">282: </a>  lmvm-&gt;square = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line283">283: </a>  lmvm-&gt;ops-&gt;allocate = MatAllocate_LMVMBadBrdn;
+<a name="line284">284: </a>  lmvm-&gt;ops-&gt;reset = MatReset_LMVMBadBrdn;
+<a name="line285">285: </a>  lmvm-&gt;ops-&gt;mult = MatMult_LMVMBadBrdn;
+<a name="line286">286: </a>  lmvm-&gt;ops-&gt;update = MatUpdate_LMVMBadBrdn;
+<a name="line287">287: </a>  lmvm-&gt;ops-&gt;copy = MatCopy_LMVMBadBrdn;
+
+<a name="line289">289: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(B, &amp;lbb);
+<a name="line290">290: </a>  lmvm-&gt;ctx = (void*)lbb;
+<a name="line291">291: </a>  lbb-&gt;allocated = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line292">292: </a>  lbb-&gt;needP = lbb-&gt;needQ = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line293">293: </a>  <font color="#4169E1">return</font>(0);
+<a name="line294">294: </a>}
+
+<a name="line296">296: </a><font color="#B22222">/*------------------------------------------------------------*/</font>
+
+<a name="line298">298: </a><font color="#B22222">/*@</font>
+<a name="line299">299: </a><font color="#B22222">   <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMBadBrdn.html#MatCreateLMVMBadBrdn">MatCreateLMVMBadBrdn</a> - Creates a limited-memory modified (aka "bad") Broyden-type </font>
+<a name="line300">300: </a><font color="#B22222">   approximation matrix used for a Jacobian. L-BadBrdn is not guaranteed to be </font>
+<a name="line301">301: </a><font color="#B22222">   symmetric or positive-definite.</font>
+<a name="line302">302: </a><font color="#B22222">   </font>
+<a name="line303">303: </a><font color="#B22222">   The provided local and global sizes must match the solution and function vectors </font>
+<a name="line304">304: </a><font color="#B22222">   used with <a href="../../../../../../docs/manualpages/KSP/MatLMVMUpdate.html#MatLMVMUpdate">MatLMVMUpdate</a>() and <a href="../../../../../../docs/manualpages/Mat/MatSolve.html#MatSolve">MatSolve</a>(). The resulting L-BadBrdn matrix will have </font>
+<a name="line305">305: </a><font color="#B22222">   storage vectors allocated with <a href="../../../../../../docs/manualpages/Vec/VecCreateSeq.html#VecCreateSeq">VecCreateSeq</a>() in serial and <a href="../../../../../../docs/manualpages/Vec/VecCreateMPI.html#VecCreateMPI">VecCreateMPI</a>() in </font>
+<a name="line306">306: </a><font color="#B22222">   parallel. To use the L-BadBrdn matrix with other vector types, the matrix must be </font>
+<a name="line307">307: </a><font color="#B22222">   created using <a href="../../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>() and <a href="../../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(), followed by <a href="../../../../../../docs/manualpages/KSP/MatLMVMAllocate.html#MatLMVMAllocate">MatLMVMAllocate</a>(). </font>
+<a name="line308">308: </a><font color="#B22222">   This ensures that the internal storage and work vectors are duplicated from the </font>
+<a name="line309">309: </a><font color="#B22222">   correct type of vector.</font>
+
+<a name="line311">311: </a><font color="#B22222">   Collective</font>
+
+<a name="line313">313: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line314">314: </a><font color="#B22222">+  comm - MPI communicator, set to <a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a></font>
+<a name="line315">315: </a><font color="#B22222">.  n - number of local rows for storage vectors</font>
+<a name="line316">316: </a><font color="#B22222">-  N - global size of the storage vectors</font>
+
+<a name="line318">318: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line319">319: </a><font color="#B22222">.  B - the matrix</font>
+
+<a name="line321">321: </a><font color="#B22222">   It is recommended that one use the <a href="../../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(), <a href="../../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>() and/or <a href="../../../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>()</font>
+<a name="line322">322: </a><font color="#B22222">   paradigm instead of this routine directly.</font>
+
+<a name="line324">324: </a><font color="#B22222">   Options Database Keys:</font>
+<a name="line325">325: </a><font color="#B22222">+   -mat_lmvm_num_vecs - maximum number of correction vectors (i.e.: updates) stored</font>
+<a name="line326">326: </a><font color="#B22222">.   -mat_lmvm_scale_type - (developer) type of scaling applied to J0 (none, scalar, diagonal)</font>
+<a name="line327">327: </a><font color="#B22222">.   -mat_lmvm_theta - (developer) convex ratio between BFGS and DFP components of the diagonal J0 scaling</font>
+<a name="line328">328: </a><font color="#B22222">.   -mat_lmvm_rho - (developer) update limiter for the J0 scaling</font>
+<a name="line329">329: </a><font color="#B22222">.   -mat_lmvm_alpha - (developer) coefficient factor for the quadratic subproblem in J0 scaling</font>
+<a name="line330">330: </a><font color="#B22222">.   -mat_lmvm_beta - (developer) exponential factor for the diagonal J0 scaling</font>
+<a name="line331">331: </a><font color="#B22222">-   -mat_lmvm_sigma_hist - (developer) number of past updates to use in J0 scaling</font>
+
+<a name="line333">333: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line335">335: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(), MATLMVM, MATLMVMBADBRDN, <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMDFP.html#MatCreateLMVMDFP">MatCreateLMVMDFP</a>(), <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMSR1.html#MatCreateLMVMSR1">MatCreateLMVMSR1</a>(), </font>
+<a name="line336">336: </a><font color="#B22222">          <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMBFGS.html#MatCreateLMVMBFGS">MatCreateLMVMBFGS</a>(), <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMBrdn.html#MatCreateLMVMBrdn">MatCreateLMVMBrdn</a>(), <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMSymBrdn.html#MatCreateLMVMSymBrdn">MatCreateLMVMSymBrdn</a>()</font>
+<a name="line337">337: </a><font color="#B22222">@*/</font>
+<a name="line338">338: </a><strong><font color="#4169E1"><a name="MatCreateLMVMBadBrdn"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/KSP/MatCreateLMVMBadBrdn.html#MatCreateLMVMBadBrdn">MatCreateLMVMBadBrdn</a>(<a href="../../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> N, <a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *B)</font></strong>
+<a name="line339">339: </a>{
+<a name="line340">340: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line341">341: </a>
+<a name="line343">343: </a>  <a href="../../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(comm, B);
+<a name="line344">344: </a>  <a href="../../../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(*B, n, n, N, N);
+<a name="line345">345: </a>  <a href="../../../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(*B, MATLMVMBADBRDN);
+<a name="line346">346: </a>  <a href="../../../../../../docs/manualpages/Mat/MatSetUp.html#MatSetUp">MatSetUp</a>(*B);
+<a name="line347">347: </a>  <font color="#4169E1">return</font>(0);
+<a name="line348">348: </a>}
+</pre>
+</body>
+
+</html>

@@ -1,0 +1,185 @@
+<center><a href="baijsolvtran3.c">Actual source code: baijsolvtran3.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/mat/impls/baij/seq/baijsolvtran3.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:48:26+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/mat/impls/baij/seq/baijsolvtran3.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a> #include <A href="../../../../../include/../src/mat/impls/baij/seq/baij.h.html">&lt;../src/mat/impls/baij/seq/baij.h&gt;</A>
+<a name="line2">  2: </a> #include <A href="../../../../../include/petsc/private/kernels/blockinvert.h.html">&lt;petsc/private/kernels/blockinvert.h&gt;</A>
+
+<a name="line4">  4: </a><strong><font color="#4169E1"><a name="MatSolveTranspose_SeqBAIJ_3_inplace"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSolveTranspose_SeqBAIJ_3_inplace(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> bb,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xx)</font></strong>
+<a name="line5">  5: </a>{
+<a name="line6">  6: </a>  Mat_SeqBAIJ       *a   =(Mat_SeqBAIJ*)A-&gt;data;
+<a name="line7">  7: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>                iscol=a-&gt;col,isrow=a-&gt;row;
+<a name="line8">  8: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line9">  9: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *r,*c,*rout,*cout;
+<a name="line10"> 10: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *diag=a-&gt;diag,n=a-&gt;mbs,*vi,*ai=a-&gt;i,*aj=a-&gt;j;
+<a name="line11"> 11: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          i,nz,idx,idt,ii,ic,ir,oidx;
+<a name="line12"> 12: </a>  const MatScalar   *aa=a-&gt;a,*v;
+<a name="line13"> 13: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       s1,s2,s3,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>,*x,*t;
+<a name="line14"> 14: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *b;
+
+<a name="line17"> 17: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(bb,&amp;b);
+<a name="line18"> 18: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(xx,&amp;x);
+<a name="line19"> 19: </a>  t    = a-&gt;solve_work;
+
+<a name="line21"> 21: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isrow,&amp;rout); r = rout;
+<a name="line22"> 22: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(iscol,&amp;cout); c = cout;
+
+<a name="line24"> 24: </a>  <font color="#B22222">/* copy the b into temp work space according to permutation */</font>
+<a name="line25"> 25: </a>  ii = 0;
+<a name="line26"> 26: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line27"> 27: </a>    ic      = 3*c[i];
+<a name="line28"> 28: </a>    t[ii]   = b[ic];
+<a name="line29"> 29: </a>    t[ii+1] = b[ic+1];
+<a name="line30"> 30: </a>    t[ii+2] = b[ic+2];
+<a name="line31"> 31: </a>    ii     += 3;
+<a name="line32"> 32: </a>  }
+
+<a name="line34"> 34: </a>  <font color="#B22222">/* forward solve the U^T */</font>
+<a name="line35"> 35: </a>  idx = 0;
+<a name="line36"> 36: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+
+<a name="line38"> 38: </a>    v = aa + 9*diag[i];
+<a name="line39"> 39: </a>    <font color="#B22222">/* multiply by the inverse of the block diagonal */</font>
+<a name="line40"> 40: </a>    <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> = t[idx];   <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a> = t[1+idx]; <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>    = t[2+idx];
+<a name="line41"> 41: </a>    s1 = v[0]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>  +  v[1]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a> +  v[2]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>;
+<a name="line42"> 42: </a>    s2 = v[3]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>  +  v[4]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a> +  v[5]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>;
+<a name="line43"> 43: </a>    s3 = v[6]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>  +  v[7]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a> + v[8]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>;
+<a name="line44"> 44: </a>    v += 9;
+
+<a name="line46"> 46: </a>    vi = aj + diag[i] + 1;
+<a name="line47"> 47: </a>    nz = ai[i+1] - diag[i] - 1;
+<a name="line48"> 48: </a>    <font color="#4169E1">while</font> (nz--) {
+<a name="line49"> 49: </a>      oidx       = 3*(*vi++);
+<a name="line50"> 50: </a>      t[oidx]   -= v[0]*s1  +  v[1]*s2 +  v[2]*s3;
+<a name="line51"> 51: </a>      t[oidx+1] -= v[3]*s1  +  v[4]*s2 +  v[5]*s3;
+<a name="line52"> 52: </a>      t[oidx+2] -= v[6]*s1 + v[7]*s2 + v[8]*s3;
+<a name="line53"> 53: </a>      v         += 9;
+<a name="line54"> 54: </a>    }
+<a name="line55"> 55: </a>    t[idx] = s1;t[1+idx] = s2; t[2+idx] = s3;
+<a name="line56"> 56: </a>    idx   += 3;
+<a name="line57"> 57: </a>  }
+<a name="line58"> 58: </a>  <font color="#B22222">/* backward solve the L^T */</font>
+<a name="line59"> 59: </a>  <font color="#4169E1">for</font> (i=n-1; i&gt;=0; i--) {
+<a name="line60"> 60: </a>    v   = aa + 9*diag[i] - 9;
+<a name="line61"> 61: </a>    vi  = aj + diag[i] - 1;
+<a name="line62"> 62: </a>    nz  = diag[i] - ai[i];
+<a name="line63"> 63: </a>    idt = 3*i;
+<a name="line64"> 64: </a>    s1  = t[idt];  s2 = t[1+idt]; s3 = t[2+idt];
+<a name="line65"> 65: </a>    <font color="#4169E1">while</font> (nz--) {
+<a name="line66"> 66: </a>      idx       = 3*(*vi--);
+<a name="line67"> 67: </a>      t[idx]   -=  v[0]*s1 +  v[1]*s2 +  v[2]*s3;
+<a name="line68"> 68: </a>      t[idx+1] -=  v[3]*s1 +  v[4]*s2 +  v[5]*s3;
+<a name="line69"> 69: </a>      t[idx+2] -= v[6]*s1 + v[7]*s2 + v[8]*s3;
+<a name="line70"> 70: </a>      v        -= 9;
+<a name="line71"> 71: </a>    }
+<a name="line72"> 72: </a>  }
+
+<a name="line74"> 74: </a>  <font color="#B22222">/* copy t into x according to permutation */</font>
+<a name="line75"> 75: </a>  ii = 0;
+<a name="line76"> 76: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line77"> 77: </a>    ir      = 3*r[i];
+<a name="line78"> 78: </a>    x[ir]   = t[ii];
+<a name="line79"> 79: </a>    x[ir+1] = t[ii+1];
+<a name="line80"> 80: </a>    x[ir+2] = t[ii+2];
+<a name="line81"> 81: </a>    ii     += 3;
+<a name="line82"> 82: </a>  }
+
+<a name="line84"> 84: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isrow,&amp;rout);
+<a name="line85"> 85: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(iscol,&amp;cout);
+<a name="line86"> 86: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(bb,&amp;b);
+<a name="line87"> 87: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(xx,&amp;x);
+<a name="line88"> 88: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(2.0*9*(a-&gt;nz) - 3.0*A-&gt;cmap-&gt;n);
+<a name="line89"> 89: </a>  <font color="#4169E1">return</font>(0);
+<a name="line90"> 90: </a>}
+
+<a name="line92"> 92: </a><strong><font color="#4169E1"><a name="MatSolveTranspose_SeqBAIJ_3"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> MatSolveTranspose_SeqBAIJ_3(<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> bb,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xx)</font></strong>
+<a name="line93"> 93: </a>{
+<a name="line94"> 94: </a>  Mat_SeqBAIJ       *a=(Mat_SeqBAIJ*)A-&gt;data;
+<a name="line95"> 95: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line96"> 96: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>                iscol=a-&gt;col,isrow=a-&gt;row;
+<a name="line97"> 97: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    n    =a-&gt;mbs,*vi,*ai=a-&gt;i,*aj=a-&gt;j,*diag=a-&gt;diag;
+<a name="line98"> 98: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    *r,*c,*rout,*cout;
+<a name="line99"> 99: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          nz,idx,idt,j,i,oidx,ii,ic,ir;
+<a name="line100">100: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    bs =A-&gt;rmap-&gt;bs,bs2=a-&gt;bs2;
+<a name="line101">101: </a>  const MatScalar   *aa=a-&gt;a,*v;
+<a name="line102">102: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       s1,s2,s3,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>,<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>,*x,*t;
+<a name="line103">103: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *b;
+
+<a name="line106">106: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(bb,&amp;b);
+<a name="line107">107: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(xx,&amp;x);
+<a name="line108">108: </a>  t    = a-&gt;solve_work;
+
+<a name="line110">110: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(isrow,&amp;rout); r = rout;
+<a name="line111">111: </a>  <a href="../../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(iscol,&amp;cout); c = cout;
+
+<a name="line113">113: </a>  <font color="#B22222">/* copy b into temp work space according to permutation */</font>
+<a name="line114">114: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line115">115: </a>    ii    = bs*i; ic = bs*c[i];
+<a name="line116">116: </a>    t[ii] = b[ic]; t[ii+1] = b[ic+1]; t[ii+2] = b[ic+2];
+<a name="line117">117: </a>  }
+
+<a name="line119">119: </a>  <font color="#B22222">/* forward solve the U^T */</font>
+<a name="line120">120: </a>  idx = 0;
+<a name="line121">121: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line122">122: </a>    v = aa + bs2*diag[i];
+<a name="line123">123: </a>    <font color="#B22222">/* multiply by the inverse of the block diagonal */</font>
+<a name="line124">124: </a>    <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a> = t[idx];   <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a> = t[1+idx]; <a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>    = t[2+idx];
+<a name="line125">125: </a>    s1 = v[0]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>  +  v[1]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a> +  v[2]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>;
+<a name="line126">126: </a>    s2 = v[3]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>  +  v[4]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a> +  v[5]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>;
+<a name="line127">127: </a>    s3 = v[6]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>  +  v[7]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a> + v[8]*<a href="../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x3</a>;
+<a name="line128">128: </a>    v -= bs2;
+
+<a name="line130">130: </a>    vi = aj + diag[i] - 1;
+<a name="line131">131: </a>    nz = diag[i] - diag[i+1] - 1;
+<a name="line132">132: </a>    <font color="#4169E1">for</font> (j=0; j&gt;-nz; j--) {
+<a name="line133">133: </a>      oidx       = bs*vi[j];
+<a name="line134">134: </a>      t[oidx]   -= v[0]*s1  +  v[1]*s2 +  v[2]*s3;
+<a name="line135">135: </a>      t[oidx+1] -= v[3]*s1  +  v[4]*s2 +  v[5]*s3;
+<a name="line136">136: </a>      t[oidx+2] -= v[6]*s1 + v[7]*s2 + v[8]*s3;
+<a name="line137">137: </a>      v         -= bs2;
+<a name="line138">138: </a>    }
+<a name="line139">139: </a>    t[idx] = s1;t[1+idx] = s2;  t[2+idx] = s3;
+<a name="line140">140: </a>    idx   += bs;
+<a name="line141">141: </a>  }
+<a name="line142">142: </a>  <font color="#B22222">/* backward solve the L^T */</font>
+<a name="line143">143: </a>  <font color="#4169E1">for</font> (i=n-1; i&gt;=0; i--) {
+<a name="line144">144: </a>    v   = aa + bs2*ai[i];
+<a name="line145">145: </a>    vi  = aj + ai[i];
+<a name="line146">146: </a>    nz  = ai[i+1] - ai[i];
+<a name="line147">147: </a>    idt = bs*i;
+<a name="line148">148: </a>    s1  = t[idt];  s2 = t[1+idt];  s3 = t[2+idt];
+<a name="line149">149: </a>    <font color="#4169E1">for</font> (j=0; j&lt;nz; j++) {
+<a name="line150">150: </a>      idx       = bs*vi[j];
+<a name="line151">151: </a>      t[idx]   -= v[0]*s1  +  v[1]*s2 +  v[2]*s3;
+<a name="line152">152: </a>      t[idx+1] -= v[3]*s1  +  v[4]*s2 +  v[5]*s3;
+<a name="line153">153: </a>      t[idx+2] -= v[6]*s1 + v[7]*s2 + v[8]*s3;
+<a name="line154">154: </a>      v        += bs2;
+<a name="line155">155: </a>    }
+<a name="line156">156: </a>  }
+
+<a name="line158">158: </a>  <font color="#B22222">/* copy t into x according to permutation */</font>
+<a name="line159">159: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) {
+<a name="line160">160: </a>    ii    = bs*i;  ir = bs*r[i];
+<a name="line161">161: </a>    x[ir] = t[ii];  x[ir+1] = t[ii+1]; x[ir+2] = t[ii+2];
+<a name="line162">162: </a>  }
+
+<a name="line164">164: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(isrow,&amp;rout);
+<a name="line165">165: </a>  <a href="../../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(iscol,&amp;cout);
+<a name="line166">166: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(bb,&amp;b);
+<a name="line167">167: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(xx,&amp;x);
+<a name="line168">168: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogFlops.html#PetscLogFlops">PetscLogFlops</a>(2.0*bs2*(a-&gt;nz) - bs*A-&gt;cmap-&gt;n);
+<a name="line169">169: </a>  <font color="#4169E1">return</font>(0);
+<a name="line170">170: </a>}
+</pre>
+</body>
+
+</html>

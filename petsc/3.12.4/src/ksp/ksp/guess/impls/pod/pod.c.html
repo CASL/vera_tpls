@@ -1,0 +1,479 @@
+<center><a href="pod.c">Actual source code: pod.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/ksp/guess/impls/pod/pod.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:21:36+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/ksp/guess/impls/pod/pod.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a> #include <A href="../../../../../../include/petsc/private/kspimpl.h.html">&lt;petsc/private/kspimpl.h&gt;</A>
+<a name="line2">  2: </a> #include <A href="../../../../../../include/petsc/private/matimpl.h.html">&lt;petsc/private/matimpl.h&gt;</A>
+<a name="line3">  3: </a> #include <A href="../../../../../../include/petscblaslapack.h.html">&lt;petscblaslapack.h&gt;</A>
+<a name="line4">  4: </a>static <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>  cited = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line5">  5: </a>static const char citation[] =
+<a name="line6">  6: </a><font color="#666666">"@phdthesis{zampini2010non,\n"</font>
+<a name="line7">  7: </a><font color="#666666">"  title={Non-overlapping Domain Decomposition Methods for Cardiac Reaction-Diffusion Models and Applications},\n"</font>
+<a name="line8">  8: </a><font color="#666666">"  author={Zampini, S},\n"</font>
+<a name="line9">  9: </a><font color="#666666">"  year={2010},\n"</font>
+<a name="line10"> 10: </a><font color="#666666">"  school={PhD thesis, Universita degli Studi di Milano}\n"</font>
+<a name="line11"> 11: </a><font color="#666666">"}\n"</font>;
+
+<a name="line13"> 13: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line14"> 14: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     maxn;             <font color="#B22222">/* maximum number of snapshots */</font>
+<a name="line15"> 15: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     n;                <font color="#B22222">/* number of active snapshots */</font>
+<a name="line16"> 16: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     curr;             <font color="#B22222">/* current tip of snapshots set */</font>
+<a name="line17"> 17: </a>  <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>          *xsnap;           <font color="#B22222">/* snapshots */</font>
+<a name="line18"> 18: </a>  <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>          *bsnap;           <font color="#B22222">/* rhs snapshots */</font>
+<a name="line19"> 19: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>  *dots_iallreduce;
+<a name="line20"> 20: </a>  MPI_Request  req_iallreduce;
+<a name="line21"> 21: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     ndots_iallreduce; <font color="#B22222">/* if we have iallreduce we can hide the <a href="../../../../../../docs/manualpages/Vec/VecMDot.html#VecMDot">VecMDot</a> communications */</font>
+<a name="line22"> 22: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>    tol;              <font color="#B22222">/* relative tolerance to retain eigenvalues */</font>
+<a name="line23"> 23: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>    Aspd;             <font color="#B22222">/* if true, uses the SPD operator as inner product */</font>
+<a name="line24"> 24: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>  *corr;            <font color="#B22222">/* correlation matrix */</font>
+<a name="line25"> 25: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>    *eigs;            <font color="#B22222">/* eigenvalues */</font>
+<a name="line26"> 26: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>  *eigv;            <font color="#B22222">/* eigenvectors */</font>
+<a name="line27"> 27: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a> nen;              <font color="#B22222">/* dimension of lower dimensional system */</font>
+<a name="line28"> 28: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     st;               <font color="#B22222">/* first eigenvector of correlation matrix to be retained */</font>
+<a name="line29"> 29: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a> *iwork;           <font color="#B22222">/* integer work vector */</font>
+<a name="line30"> 30: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>  *yhay;            <font color="#B22222">/* Y^H * A * Y */</font>
+<a name="line31"> 31: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>  *low;             <font color="#B22222">/* lower dimensional linear system */</font>
+<a name="line32"> 32: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line33"> 33: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>    *rwork;
+<a name="line34"> 34: </a><font color="#A020F0">#endif</font>
+<a name="line35"> 35: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a> lwork;
+<a name="line36"> 36: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>  *swork;
+<a name="line37"> 37: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>    monitor;
+<a name="line38"> 38: </a>} KSPGuessPOD;
+
+<a name="line40"> 40: </a><strong><font color="#4169E1"><a name="KSPGuessReset_POD"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPGuessReset_POD(<a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a> guess)</font></strong>
+<a name="line41"> 41: </a>{
+<a name="line42"> 42: </a>  KSPGuessPOD    *pod = (KSPGuessPOD*)guess-&gt;data;
+<a name="line44"> 44: </a>  <a href="../../../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a>    Alay = NULL,vlay = NULL;
+<a name="line45"> 45: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      cong;
+
+<a name="line48"> 48: </a>  pod-&gt;nen  = 0;
+<a name="line49"> 49: </a>  pod-&gt;n    = 0;
+<a name="line50"> 50: </a>  pod-&gt;curr = 0;
+<a name="line51"> 51: </a>  <font color="#B22222">/* need to wait for completion of outstanding requests */</font>
+<a name="line52"> 52: </a>  <font color="#4169E1">if</font> (pod-&gt;ndots_iallreduce) {
+<a name="line53"> 53: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Wait.html#MPI_Wait">MPI_Wait</a>(&amp;pod-&gt;req_iallreduce,MPI_STATUS_IGNORE);
+<a name="line54"> 54: </a>  }
+<a name="line55"> 55: </a>  pod-&gt;ndots_iallreduce = 0;
+<a name="line56"> 56: </a>  <font color="#B22222">/* destroy vectors if the size of the linear system has changed */</font>
+<a name="line57"> 57: </a>  <font color="#4169E1">if</font> (guess-&gt;A) {
+<a name="line58"> 58: </a>    <a href="../../../../../../docs/manualpages/Mat/MatGetLayouts.html#MatGetLayouts">MatGetLayouts</a>(guess-&gt;A,&amp;Alay,NULL);
+<a name="line59"> 59: </a>  }
+<a name="line60"> 60: </a>  <font color="#4169E1">if</font> (pod-&gt;xsnap) {
+<a name="line61"> 61: </a>    <a href="../../../../../../docs/manualpages/Vec/VecGetLayout.html#VecGetLayout">VecGetLayout</a>(pod-&gt;xsnap[0],&amp;vlay);
+<a name="line62"> 62: </a>  }
+<a name="line63"> 63: </a>  cong = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line64"> 64: </a>  <font color="#4169E1">if</font> (vlay &amp;&amp; Alay) {
+<a name="line65"> 65: </a>    <a href="../../../../../../docs/manualpages/IS/PetscLayoutCompare.html#PetscLayoutCompare">PetscLayoutCompare</a>(Alay,vlay,&amp;cong);
+<a name="line66"> 66: </a>  }
+<a name="line67"> 67: </a>  <font color="#4169E1">if</font> (!cong) {
+<a name="line68"> 68: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(pod-&gt;maxn,&amp;pod-&gt;xsnap);
+<a name="line69"> 69: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(pod-&gt;maxn,&amp;pod-&gt;bsnap);
+<a name="line70"> 70: </a>  }
+<a name="line71"> 71: </a>  <font color="#4169E1">return</font>(0);
+<a name="line72"> 72: </a>}
+
+<a name="line74"> 74: </a><strong><font color="#4169E1"><a name="KSPGuessSetUp_POD"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPGuessSetUp_POD(<a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a> guess)</font></strong>
+<a name="line75"> 75: </a>{
+<a name="line76"> 76: </a>  KSPGuessPOD    *pod = (KSPGuessPOD*)guess-&gt;data;
+
+<a name="line80"> 80: </a>  <font color="#4169E1">if</font> (!pod-&gt;corr) {
+<a name="line81"> 81: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>  sdummy;
+<a name="line82"> 82: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>    rdummy = 0;
+<a name="line83"> 83: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a> bN,lierr,idummy;
+
+<a name="line85"> 85: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscCalloc6.html#PetscCalloc6">PetscCalloc6</a>(pod-&gt;maxn*pod-&gt;maxn,&amp;pod-&gt;corr,pod-&gt;maxn,&amp;pod-&gt;eigs,pod-&gt;maxn*pod-&gt;maxn,&amp;pod-&gt;eigv,
+<a name="line86"> 86: </a>                        6*pod-&gt;maxn,&amp;pod-&gt;iwork,pod-&gt;maxn*pod-&gt;maxn,&amp;pod-&gt;yhay,pod-&gt;maxn*pod-&gt;maxn,&amp;pod-&gt;low);
+<a name="line87"> 87: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line88"> 88: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(7*pod-&gt;maxn,&amp;pod-&gt;rwork);
+<a name="line89"> 89: </a><font color="#A020F0">#endif</font>
+<a name="line90"> 90: </a><font color="#A020F0">#if defined(PETSC_HAVE_MPI_IALLREDUCE)</font>
+<a name="line91"> 91: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(3*pod-&gt;maxn,&amp;pod-&gt;dots_iallreduce);
+<a name="line92"> 92: </a><font color="#A020F0">#endif</font>
+<a name="line93"> 93: </a>    pod-&gt;lwork = -1;
+<a name="line94"> 94: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(pod-&gt;maxn,&amp;bN);
+<a name="line95"> 95: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line96"> 96: </a>    PetscStackCallBLAS(<font color="#666666">"LAPACKsyevx"</font>,LAPACKsyevx_(<font color="#666666">"V"</font>,<font color="#666666">"A"</font>,<font color="#666666">"L"</font>,&amp;bN,pod-&gt;corr,&amp;bN,&amp;rdummy,&amp;rdummy,&amp;idummy,&amp;idummy,
+<a name="line97"> 97: </a>                                                  &amp;rdummy,&amp;idummy,pod-&gt;eigs,pod-&gt;eigv,&amp;bN,&amp;sdummy,&amp;pod-&gt;lwork,pod-&gt;iwork,pod-&gt;iwork+5*bN,&amp;lierr));
+<a name="line98"> 98: </a><font color="#A020F0">#else</font>
+<a name="line99"> 99: </a>    PetscStackCallBLAS(<font color="#666666">"LAPACKsyevx"</font>,LAPACKsyevx_(<font color="#666666">"V"</font>,<font color="#666666">"A"</font>,<font color="#666666">"L"</font>,&amp;bN,pod-&gt;corr,&amp;bN,&amp;rdummy,&amp;rdummy,&amp;idummy,&amp;idummy,
+<a name="line100">100: </a>                                                  &amp;rdummy,&amp;idummy,pod-&gt;eigs,pod-&gt;eigv,&amp;bN,&amp;sdummy,&amp;pod-&gt;lwork,pod-&gt;rwork,pod-&gt;iwork,pod-&gt;iwork+5*bN,&amp;lierr));
+<a name="line101">101: </a><font color="#A020F0">#endif</font>
+<a name="line102">102: </a>    <font color="#4169E1">if</font> (lierr) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error in query to SYEV Lapack routine %d"</font>,(int)lierr);
+<a name="line103">103: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>((<a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>)<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(sdummy),&amp;pod-&gt;lwork);
+<a name="line104">104: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(pod-&gt;lwork+<a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(bN*bN,6*bN),&amp;pod-&gt;swork);
+<a name="line105">105: </a>  }
+<a name="line106">106: </a>  <font color="#B22222">/* work vectors are sequential, we explicitly use <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Allreduce.html#MPI_Allreduce">MPI_Allreduce</a> */</font>
+<a name="line107">107: </a>  <font color="#4169E1">if</font> (!pod-&gt;xsnap) {
+<a name="line108">108: </a>    <a href="../../../../../../docs/manualpages/Vec/VecType.html#VecType">VecType</a>   type;
+<a name="line109">109: </a>    <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>       *v,vseq;
+<a name="line110">110: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  n;
+
+<a name="line112">112: </a>    <a href="../../../../../../docs/manualpages/KSP/KSPCreateVecs.html#KSPCreateVecs">KSPCreateVecs</a>(guess-&gt;ksp,1,&amp;v,0,NULL);
+<a name="line113">113: </a>    <a href="../../../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;vseq);
+<a name="line114">114: </a>    <a href="../../../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(v[0],&amp;n);
+<a name="line115">115: </a>    <a href="../../../../../../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a>(vseq,n,n);
+<a name="line116">116: </a>    <a href="../../../../../../docs/manualpages/Vec/VecGetType.html#VecGetType">VecGetType</a>(v[0],&amp;type);
+<a name="line117">117: </a>    <a href="../../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(vseq,type);
+<a name="line118">118: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(1,&amp;v);
+<a name="line119">119: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(vseq,pod-&gt;maxn,&amp;pod-&gt;xsnap);
+<a name="line120">120: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;vseq);
+<a name="line121">121: </a>    PetscLogObjectParents(guess,pod-&gt;maxn,pod-&gt;xsnap);
+<a name="line122">122: </a>  }
+<a name="line123">123: </a>  <font color="#4169E1">if</font> (!pod-&gt;bsnap) {
+<a name="line124">124: </a>    <a href="../../../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(pod-&gt;xsnap[0],pod-&gt;maxn,&amp;pod-&gt;bsnap);
+<a name="line125">125: </a>    PetscLogObjectParents(guess,pod-&gt;maxn,pod-&gt;bsnap);
+<a name="line126">126: </a>  }
+<a name="line127">127: </a>  <font color="#4169E1">return</font>(0);
+<a name="line128">128: </a>}
+
+<a name="line130">130: </a><strong><font color="#4169E1"><a name="KSPGuessDestroy_POD"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPGuessDestroy_POD(<a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a> guess)</font></strong>
+<a name="line131">131: </a>{
+<a name="line132">132: </a>  KSPGuessPOD *pod = (KSPGuessPOD*)guess-&gt;data;
+<a name="line133">133: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line136">136: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree6.html#PetscFree6">PetscFree6</a>(pod-&gt;corr,pod-&gt;eigs,pod-&gt;eigv,pod-&gt;iwork,
+<a name="line137">137: </a>                    pod-&gt;yhay,pod-&gt;low);
+<a name="line138">138: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line139">139: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pod-&gt;rwork);
+<a name="line140">140: </a><font color="#A020F0">#endif</font>
+<a name="line141">141: </a>  <font color="#B22222">/* need to wait for completion before destroying dots_iallreduce */</font>
+<a name="line142">142: </a>  <font color="#4169E1">if</font> (pod-&gt;ndots_iallreduce) {
+<a name="line143">143: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Wait.html#MPI_Wait">MPI_Wait</a>(&amp;pod-&gt;req_iallreduce,MPI_STATUS_IGNORE);
+<a name="line144">144: </a>  }
+<a name="line145">145: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pod-&gt;dots_iallreduce);
+<a name="line146">146: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pod-&gt;swork);
+<a name="line147">147: </a>  <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(pod-&gt;maxn,&amp;pod-&gt;bsnap);
+<a name="line148">148: </a>  <a href="../../../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(pod-&gt;maxn,&amp;pod-&gt;xsnap);
+<a name="line149">149: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pod);
+<a name="line150">150: </a>  <font color="#4169E1">return</font>(0);
+<a name="line151">151: </a>}
+
+<a name="line153">153: </a><strong><font color="#4169E1">static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPGuessUpdate_POD(<a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a>,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>)</font></strong>;
+
+<a name="line155">155: </a><strong><font color="#4169E1"><a name="KSPGuessFormGuess_POD"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPGuessFormGuess_POD(<a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a> guess,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> b,<a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x)</font></strong>
+<a name="line156">156: </a>{
+<a name="line157">157: </a>  KSPGuessPOD    *pod = (KSPGuessPOD*)guess-&gt;data;
+<a name="line159">159: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    one = 1, zero = 0, *array;
+<a name="line160">160: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>   bN,ione = 1,bNen,lierr;
+<a name="line161">161: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i;
+
+<a name="line164">164: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscCitationsRegister.html#PetscCitationsRegister">PetscCitationsRegister</a>(citation,&amp;cited);
+<a name="line165">165: </a>  <font color="#4169E1">if</font> (pod-&gt;ndots_iallreduce) { <font color="#B22222">/* complete communication and project the linear system */</font>
+<a name="line166">166: </a>    KSPGuessUpdate_POD(guess,NULL,NULL);
+<a name="line167">167: </a>  }
+<a name="line168">168: </a>  <font color="#4169E1">if</font> (!pod-&gt;nen) <font color="#4169E1">return</font>(0);
+<a name="line169">169: </a>  <font color="#B22222">/* b_low = S * V^T * X^T * b */</font>
+<a name="line170">170: </a>  <a href="../../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(b,(const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>**)&amp;array);
+<a name="line171">171: </a>  <a href="../../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(pod-&gt;bsnap[pod-&gt;curr],array);
+<a name="line172">172: </a>  <a href="../../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(b,(const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>**)&amp;array);
+<a name="line173">173: </a>  <a href="../../../../../../docs/manualpages/Vec/VecMDot.html#VecMDot">VecMDot</a>(pod-&gt;bsnap[pod-&gt;curr],pod-&gt;n,pod-&gt;xsnap,pod-&gt;swork);
+<a name="line174">174: </a>  <a href="../../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(pod-&gt;bsnap[pod-&gt;curr]);
+<a name="line175">175: </a>  <a href="../../../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(pod-&gt;swork,pod-&gt;swork + pod-&gt;n,pod-&gt;n,<a href="../../../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>,MPIU_SUM,<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess));
+<a name="line176">176: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(pod-&gt;n,&amp;bN);
+<a name="line177">177: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(pod-&gt;nen,&amp;bNen);
+<a name="line178">178: </a>  PetscStackCallBLAS(<font color="#666666">"BLASgemv"</font>,BLASgemv_(<font color="#666666">"T"</font>,&amp;bN,&amp;bNen,&amp;one,pod-&gt;eigv+pod-&gt;st*pod-&gt;n,&amp;bN,pod-&gt;swork+pod-&gt;n,&amp;ione,&amp;zero,pod-&gt;swork,&amp;ione));
+<a name="line179">179: </a>  <font color="#4169E1">if</font> (pod-&gt;monitor) {
+<a name="line180">180: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"  KSPGuessPOD alphas = "</font>);
+<a name="line181">181: </a>    <font color="#4169E1">for</font> (i=0; i&lt;pod-&gt;nen; i++) {
+<a name="line182">182: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line183">183: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"%g + %g i"</font>,(double)<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(pod-&gt;swork[i]),(double)<a href="../../../../../../docs/manualpages/Sys/PetscImaginaryPart.html#PetscImaginaryPart">PetscImaginaryPart</a>(pod-&gt;swork[i]));
+<a name="line184">184: </a><font color="#A020F0">#else</font>
+<a name="line185">185: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"%g "</font>,(double)pod-&gt;swork[i]);
+<a name="line186">186: </a><font color="#A020F0">#endif</font>
+<a name="line187">187: </a>    }
+<a name="line188">188: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"\n"</font>);
+<a name="line189">189: </a>  }
+<a name="line190">190: </a>  <font color="#B22222">/* A_low x_low = b_low */</font>
+<a name="line191">191: </a>  <font color="#4169E1">if</font> (!pod-&gt;Aspd) { <font color="#B22222">/* A is spd -&gt; LOW = Identity */</font>
+<a name="line192">192: </a>    <a href="../../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>       pksp = guess-&gt;ksp;
+<a name="line193">193: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> tsolve,symm;
+
+<a name="line195">195: </a>    <font color="#4169E1">if</font> (pod-&gt;monitor) {
+<a name="line196">196: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a> rank;
+<a name="line197">197: </a>      <a href="../../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>         L;
+
+<a name="line199">199: </a>      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),&amp;rank);
+<a name="line200">200: </a>      <a href="../../../../../../docs/manualpages/Mat/MatCreateSeqDense.html#MatCreateSeqDense">MatCreateSeqDense</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,pod-&gt;nen,pod-&gt;nen,pod-&gt;low,&amp;L);
+<a name="line201">201: </a>      <font color="#4169E1">if</font> (!rank) {
+<a name="line202">202: </a>        <a href="../../../../../../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(L,NULL);
+<a name="line203">203: </a>      }
+<a name="line204">204: </a>      <a href="../../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;L);
+<a name="line205">205: </a>    }
+<a name="line206">206: </a>    <a href="../../../../../../docs/manualpages/Mat/MatGetOption.html#MatGetOption">MatGetOption</a>(guess-&gt;A,<a href="../../../../../../docs/manualpages/Mat/MatOption.html#MatOption">MAT_SYMMETRIC</a>,&amp;symm);
+<a name="line207">207: </a>    tsolve = symm ? <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a> : pksp-&gt;transpose_solve;
+<a name="line208">208: </a>    PetscStackCallBLAS(<font color="#666666">"LAPACKgetrf"</font>,LAPACKgetrf_(&amp;bNen,&amp;bNen,pod-&gt;low,&amp;bNen,pod-&gt;iwork,&amp;lierr));
+<a name="line209">209: </a>    <font color="#4169E1">if</font> (lierr) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error in GETRF Lapack routine %d"</font>,(int)lierr);
+<a name="line210">210: </a>    PetscStackCallBLAS(<font color="#666666">"LAPACKgetrs"</font>,LAPACKgetrs_(tsolve ? <font color="#666666">"T"</font> : <font color="#666666">"N"</font>,&amp;bNen,&amp;ione,pod-&gt;low,&amp;bNen,pod-&gt;iwork,pod-&gt;swork,&amp;bNen,&amp;lierr));
+<a name="line211">211: </a>    <font color="#4169E1">if</font> (lierr) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error in GETRS Lapack routine %d"</font>,(int)lierr);
+<a name="line212">212: </a>  }
+<a name="line213">213: </a>  <font color="#B22222">/* x = X * V * S * x_low */</font>
+<a name="line214">214: </a>  PetscStackCallBLAS(<font color="#666666">"BLASgemv"</font>,BLASgemv_(<font color="#666666">"N"</font>,&amp;bN,&amp;bNen,&amp;one,pod-&gt;eigv+pod-&gt;st*pod-&gt;n,&amp;bN,pod-&gt;swork,&amp;ione,&amp;zero,pod-&gt;swork+pod-&gt;n,&amp;ione));
+<a name="line215">215: </a>  <font color="#4169E1">if</font> (pod-&gt;monitor) {
+<a name="line216">216: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"  KSPGuessPOD sol = "</font>);
+<a name="line217">217: </a>    <font color="#4169E1">for</font> (i=0; i&lt;pod-&gt;nen; i++) {
+<a name="line218">218: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line219">219: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"%g + %g i"</font>,(double)<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(pod-&gt;swork[i+pod-&gt;n]),(double)<a href="../../../../../../docs/manualpages/Sys/PetscImaginaryPart.html#PetscImaginaryPart">PetscImaginaryPart</a>(pod-&gt;swork[i+pod-&gt;n]));
+<a name="line220">220: </a><font color="#A020F0">#else</font>
+<a name="line221">221: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"%g "</font>,(double)pod-&gt;swork[i+pod-&gt;n]);
+<a name="line222">222: </a><font color="#A020F0">#endif</font>
+<a name="line223">223: </a>    }
+<a name="line224">224: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"\n"</font>);
+<a name="line225">225: </a>  }
+<a name="line226">226: </a>  <a href="../../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(x,&amp;array);
+<a name="line227">227: </a>  <a href="../../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(pod-&gt;bsnap[pod-&gt;curr],array);
+<a name="line228">228: </a>  <a href="../../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(x,&amp;array);
+<a name="line229">229: </a>  <a href="../../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(pod-&gt;bsnap[pod-&gt;curr],0);
+<a name="line230">230: </a>  <a href="../../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(pod-&gt;bsnap[pod-&gt;curr],pod-&gt;n,pod-&gt;swork+pod-&gt;n,pod-&gt;xsnap);
+<a name="line231">231: </a>  <a href="../../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(pod-&gt;bsnap[pod-&gt;curr]);
+<a name="line232">232: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x);
+<a name="line233">233: </a>  <font color="#4169E1">return</font>(0);
+<a name="line234">234: </a>}
+
+<a name="line236">236: </a><strong><font color="#4169E1"><a name="KSPGuessUpdate_POD"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPGuessUpdate_POD(<a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a> guess, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> b, <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x)</font></strong>
+<a name="line237">237: </a>{
+<a name="line238">238: </a>  KSPGuessPOD    *pod = (KSPGuessPOD*)guess-&gt;data;
+<a name="line239">239: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    one = 1, zero = 0,*array;
+<a name="line240">240: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      toten, parten, reps = 0; <font color="#B22222">/* dlamch? */</font>
+<a name="line241">241: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>   bN,lierr,idummy;
+<a name="line242">242: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i;
+
+<a name="line246">246: </a>  <font color="#4169E1">if</font> (pod-&gt;ndots_iallreduce) <font color="#4169E1">goto</font> complete_request;
+<a name="line247">247: </a>  pod-&gt;n = pod-&gt;n &lt; pod-&gt;maxn ? pod-&gt;n+1 : pod-&gt;maxn;
+<a name="line248">248: </a>  <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(x,pod-&gt;xsnap[pod-&gt;curr]);
+<a name="line249">249: </a>  <a href="../../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(pod-&gt;bsnap[pod-&gt;curr],&amp;array);
+<a name="line250">250: </a>  <a href="../../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(b,array);
+<a name="line251">251: </a>  <a href="../../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(pod-&gt;bsnap[pod-&gt;curr],&amp;array);
+<a name="line252">252: </a>  KSP_MatMult(guess-&gt;ksp,guess-&gt;A,x,b);
+<a name="line253">253: </a>  <a href="../../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(b);
+<a name="line254">254: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pod-&gt;bsnap[pod-&gt;curr]);
+<a name="line255">255: </a>  <font color="#4169E1">if</font> (pod-&gt;Aspd) {
+<a name="line256">256: </a>    <a href="../../../../../../docs/manualpages/Vec/VecMDot.html#VecMDot">VecMDot</a>(pod-&gt;xsnap[pod-&gt;curr],pod-&gt;n,pod-&gt;bsnap,pod-&gt;swork);
+<a name="line257">257: </a><font color="#A020F0">#if !defined(PETSC_HAVE_MPI_IALLREDUCE)</font>
+<a name="line258">258: </a>    <a href="../../../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(pod-&gt;swork,pod-&gt;swork + 3*pod-&gt;n,pod-&gt;n,<a href="../../../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>,MPIU_SUM,<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess));
+<a name="line259">259: </a><font color="#A020F0">#else</font>
+<a name="line260">260: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Iallreduce.html#MPI_Iallreduce">MPI_Iallreduce</a>(pod-&gt;swork,pod-&gt;dots_iallreduce,pod-&gt;n,<a href="../../../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>,MPIU_SUM,<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),&amp;pod-&gt;req_iallreduce);
+<a name="line261">261: </a>    pod-&gt;ndots_iallreduce = 1;
+<a name="line262">262: </a><font color="#A020F0">#endif</font>
+<a name="line263">263: </a>  } <font color="#4169E1">else</font> {
+<a name="line264">264: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  off;
+<a name="line265">265: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> herm;
+
+<a name="line267">267: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line268">268: </a>    <a href="../../../../../../docs/manualpages/Mat/MatGetOption.html#MatGetOption">MatGetOption</a>(guess-&gt;A,<a href="../../../../../../docs/manualpages/Mat/MatOption.html#MatOption">MAT_HERMITIAN</a>,&amp;herm);
+<a name="line269">269: </a><font color="#A020F0">#else</font>
+<a name="line270">270: </a>    <a href="../../../../../../docs/manualpages/Mat/MatGetOption.html#MatGetOption">MatGetOption</a>(guess-&gt;A,<a href="../../../../../../docs/manualpages/Mat/MatOption.html#MatOption">MAT_SYMMETRIC</a>,&amp;herm);
+<a name="line271">271: </a><font color="#A020F0">#endif</font>
+<a name="line272">272: </a>    off = (guess-&gt;ksp-&gt;transpose_solve &amp;&amp; !herm) ? 2*pod-&gt;n : pod-&gt;n;
+
+<a name="line274">274: </a>    <font color="#B22222">/* TODO: we may want to use a user-defined dot for the correlation matrix */</font>
+<a name="line275">275: </a>    <a href="../../../../../../docs/manualpages/Vec/VecMDot.html#VecMDot">VecMDot</a>(pod-&gt;xsnap[pod-&gt;curr],pod-&gt;n,pod-&gt;xsnap,pod-&gt;swork);
+<a name="line276">276: </a>    <a href="../../../../../../docs/manualpages/Vec/VecMDot.html#VecMDot">VecMDot</a>(pod-&gt;bsnap[pod-&gt;curr],pod-&gt;n,pod-&gt;xsnap,pod-&gt;swork + off);
+<a name="line277">277: </a>    <font color="#4169E1">if</font> (!herm) {
+<a name="line278">278: </a>      off  = (off == pod-&gt;n) ? 2*pod-&gt;n : pod-&gt;n;
+<a name="line279">279: </a>      <a href="../../../../../../docs/manualpages/Vec/VecMDot.html#VecMDot">VecMDot</a>(pod-&gt;xsnap[pod-&gt;curr],pod-&gt;n,pod-&gt;bsnap,pod-&gt;swork + off);
+<a name="line280">280: </a><font color="#A020F0">#if !defined(PETSC_HAVE_MPI_IALLREDUCE)</font>
+<a name="line281">281: </a>      <a href="../../../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(pod-&gt;swork,pod-&gt;swork + 3*pod-&gt;n,3*pod-&gt;n,<a href="../../../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>,MPIU_SUM,<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess));
+<a name="line282">282: </a><font color="#A020F0">#else</font>
+<a name="line283">283: </a>      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Iallreduce.html#MPI_Iallreduce">MPI_Iallreduce</a>(pod-&gt;swork,pod-&gt;dots_iallreduce,3*pod-&gt;n,<a href="../../../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>,MPIU_SUM,<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),&amp;pod-&gt;req_iallreduce);
+<a name="line284">284: </a>      pod-&gt;ndots_iallreduce = 3;
+<a name="line285">285: </a><font color="#A020F0">#endif</font>
+<a name="line286">286: </a>    } <font color="#4169E1">else</font> {
+<a name="line287">287: </a><font color="#A020F0">#if !defined(PETSC_HAVE_MPI_IALLREDUCE)</font>
+<a name="line288">288: </a>      <a href="../../../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(pod-&gt;swork,pod-&gt;swork + 3*pod-&gt;n,2*pod-&gt;n,<a href="../../../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>,MPIU_SUM,<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess));
+<a name="line289">289: </a>      <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) pod-&gt;swork[5*pod-&gt;n + i] = pod-&gt;swork[4*pod-&gt;n + i];
+<a name="line290">290: </a><font color="#A020F0">#else</font>
+<a name="line291">291: </a>      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Iallreduce.html#MPI_Iallreduce">MPI_Iallreduce</a>(pod-&gt;swork,pod-&gt;dots_iallreduce,2*pod-&gt;n,<a href="../../../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>,MPIU_SUM,<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),&amp;pod-&gt;req_iallreduce);
+<a name="line292">292: </a>      pod-&gt;ndots_iallreduce = 2;
+<a name="line293">293: </a><font color="#A020F0">#endif</font>
+<a name="line294">294: </a>    }
+<a name="line295">295: </a>  }
+<a name="line296">296: </a>  <font color="#4169E1">if</font> (pod-&gt;ndots_iallreduce) <font color="#4169E1">return</font>(0);
+
+<a name="line298">298: </a><strong><font color="#FF0000">complete_request:</font></strong>
+<a name="line299">299: </a>  <font color="#4169E1">if</font> (pod-&gt;ndots_iallreduce) {
+<a name="line300">300: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Wait.html#MPI_Wait">MPI_Wait</a>(&amp;pod-&gt;req_iallreduce,MPI_STATUS_IGNORE);
+<a name="line301">301: </a>    <font color="#4169E1">switch</font> (pod-&gt;ndots_iallreduce) {
+<a name="line302">302: </a>    <font color="#4169E1">case</font> 3:
+<a name="line303">303: </a>      <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) pod-&gt;swork[3*pod-&gt;n + i] = pod-&gt;dots_iallreduce[         i];
+<a name="line304">304: </a>      <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) pod-&gt;swork[4*pod-&gt;n + i] = pod-&gt;dots_iallreduce[  pod-&gt;n+i];
+<a name="line305">305: </a>      <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) pod-&gt;swork[5*pod-&gt;n + i] = pod-&gt;dots_iallreduce[2*pod-&gt;n+i];
+<a name="line306">306: </a>      <font color="#4169E1">break</font>;
+<a name="line307">307: </a>    <font color="#4169E1">case</font> 2:
+<a name="line308">308: </a>      <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) pod-&gt;swork[3*pod-&gt;n + i] = pod-&gt;dots_iallreduce[       i];
+<a name="line309">309: </a>      <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) pod-&gt;swork[4*pod-&gt;n + i] = pod-&gt;dots_iallreduce[pod-&gt;n+i];
+<a name="line310">310: </a>      <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) pod-&gt;swork[5*pod-&gt;n + i] = pod-&gt;dots_iallreduce[pod-&gt;n+i];
+<a name="line311">311: </a>      <font color="#4169E1">break</font>;
+<a name="line312">312: </a>    <font color="#4169E1">case</font> 1:
+<a name="line313">313: </a>      <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) pod-&gt;swork[3*pod-&gt;n + i] = pod-&gt;dots_iallreduce[i];
+<a name="line314">314: </a>      <font color="#4169E1">break</font>;
+<a name="line315">315: </a><strong><font color="#FF0000">    default:</font></strong>
+<a name="line316">316: </a>      <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),PETSC_ERR_PLIB,<font color="#666666">"Invalid number of outstanding dots operations: %D"</font>,pod-&gt;ndots_iallreduce);
+<a name="line317">317: </a>      <font color="#4169E1">break</font>;
+<a name="line318">318: </a>    }
+<a name="line319">319: </a>  }
+<a name="line320">320: </a>  pod-&gt;ndots_iallreduce = 0;
+
+<a name="line322">322: </a>  <font color="#B22222">/* correlation matrix and Y^H A Y (Galerkin) */</font>
+<a name="line323">323: </a>  <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) {
+<a name="line324">324: </a>    pod-&gt;corr[pod-&gt;curr*pod-&gt;maxn+i] = pod-&gt;swork[3*pod-&gt;n + i];
+<a name="line325">325: </a>    pod-&gt;corr[i*pod-&gt;maxn+pod-&gt;curr] = PetscConj(pod-&gt;swork[3*pod-&gt;n + i]);
+<a name="line326">326: </a>    <font color="#4169E1">if</font> (!pod-&gt;Aspd) {
+<a name="line327">327: </a>      pod-&gt;yhay[pod-&gt;curr*pod-&gt;maxn+i] = pod-&gt;swork[4*pod-&gt;n + i];
+<a name="line328">328: </a>      pod-&gt;yhay[i*pod-&gt;maxn+pod-&gt;curr] = PetscConj(pod-&gt;swork[5*pod-&gt;n + i]);
+<a name="line329">329: </a>    }
+<a name="line330">330: </a>  }
+<a name="line331">331: </a>  <font color="#B22222">/* syevx change the input matrix */</font>
+<a name="line332">332: </a>  <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) {
+<a name="line333">333: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> j;
+<a name="line334">334: </a>    <font color="#4169E1">for</font> (j=i;j&lt;pod-&gt;n;j++) pod-&gt;swork[i*pod-&gt;n+j] = pod-&gt;corr[i*pod-&gt;maxn+j];
+<a name="line335">335: </a>  }
+<a name="line336">336: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(pod-&gt;n,&amp;bN);
+<a name="line337">337: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line338">338: </a>  PetscStackCallBLAS(<font color="#666666">"LAPACKsyevx"</font>,LAPACKsyevx_(<font color="#666666">"V"</font>,<font color="#666666">"A"</font>,<font color="#666666">"L"</font>,&amp;bN,pod-&gt;swork,&amp;bN,
+<a name="line339">339: </a>                                                &amp;reps,&amp;reps,&amp;idummy,&amp;idummy,
+<a name="line340">340: </a>                                                &amp;reps,&amp;idummy,pod-&gt;eigs,pod-&gt;eigv,&amp;bN,
+<a name="line341">341: </a>                                                pod-&gt;swork+bN*bN,&amp;pod-&gt;lwork,pod-&gt;iwork,pod-&gt;iwork+5*bN,&amp;lierr));
+<a name="line342">342: </a><font color="#A020F0">#else</font>
+<a name="line343">343: </a>  PetscStackCallBLAS(<font color="#666666">"LAPACKsyevx"</font>,LAPACKsyevx_(<font color="#666666">"V"</font>,<font color="#666666">"A"</font>,<font color="#666666">"L"</font>,&amp;bN,pod-&gt;swork,&amp;bN,
+<a name="line344">344: </a>                                                &amp;reps,&amp;reps,&amp;idummy,&amp;idummy,
+<a name="line345">345: </a>                                                &amp;reps,&amp;idummy,pod-&gt;eigs,pod-&gt;eigv,&amp;bN,
+<a name="line346">346: </a>                                                pod-&gt;swork+bN*bN,&amp;pod-&gt;lwork,pod-&gt;rwork,pod-&gt;iwork,pod-&gt;iwork+5*bN,&amp;lierr));
+<a name="line347">347: </a><font color="#A020F0">#endif</font>
+<a name="line348">348: </a>  <font color="#4169E1">if</font> (lierr&lt;0) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error in SYEV Lapack routine: illegal argument %d"</font>,-(int)lierr);
+<a name="line349">349: </a>  <font color="#4169E1">else</font> <font color="#4169E1">if</font> (lierr) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"Error in SYEV Lapack routine: %d eigenvectors failed to converge"</font>,(int)lierr);
+
+<a name="line351">351: </a>  <font color="#B22222">/* dimension of lower dimensional system */</font>
+<a name="line352">352: </a>  pod-&gt;st = -1;
+<a name="line353">353: </a>  <font color="#4169E1">for</font> (i=0,toten=0;i&lt;pod-&gt;n;i++) {
+<a name="line354">354: </a>    pod-&gt;eigs[i] = <a href="../../../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(pod-&gt;eigs[i],0.0);
+<a name="line355">355: </a>    toten += pod-&gt;eigs[i];
+<a name="line356">356: </a>    <font color="#4169E1">if</font> (!pod-&gt;eigs[i]) pod-&gt;st = i;
+<a name="line357">357: </a>  }
+<a name="line358">358: </a>  pod-&gt;nen = 0;
+<a name="line359">359: </a>  <font color="#4169E1">for</font> (i=pod-&gt;n-1,parten=0;i&gt;pod-&gt;st &amp;&amp; toten &gt; 0;i--) {
+<a name="line360">360: </a>    pod-&gt;nen++;
+<a name="line361">361: </a>    parten += pod-&gt;eigs[i];
+<a name="line362">362: </a>    <font color="#4169E1">if</font> (parten + toten*pod-&gt;tol &gt;= toten) <font color="#4169E1">break</font>;
+<a name="line363">363: </a>  }
+<a name="line364">364: </a>  pod-&gt;st = pod-&gt;n - pod-&gt;nen;
+
+<a name="line366">366: </a>  <font color="#B22222">/* Compute eigv = V * S */</font>
+<a name="line367">367: </a>  <font color="#4169E1">for</font> (i=pod-&gt;st;i&lt;pod-&gt;n;i++) {
+<a name="line368">368: </a>    const <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> v = 1.0/PetscSqrtReal(pod-&gt;eigs[i]);
+<a name="line369">369: </a>    const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  st = pod-&gt;n*i;
+<a name="line370">370: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        j;
+
+<a name="line372">372: </a>    <font color="#4169E1">for</font> (j=0;j&lt;pod-&gt;n;j++) pod-&gt;eigv[st+j] *= v;
+<a name="line373">373: </a>  }
+
+<a name="line375">375: </a>  <font color="#B22222">/* compute S * V^T * X^T * A * X * V * S if needed */</font>
+<a name="line376">376: </a>  <font color="#4169E1">if</font> (pod-&gt;nen &amp;&amp; !pod-&gt;Aspd) {
+<a name="line377">377: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a> bNen,bMaxN;
+<a name="line378">378: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     st = pod-&gt;st*pod-&gt;n;
+<a name="line379">379: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(pod-&gt;nen,&amp;bNen);
+<a name="line380">380: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(pod-&gt;maxn,&amp;bMaxN);
+<a name="line381">381: </a>    PetscStackCallBLAS(<font color="#666666">"BLASgemm"</font>,BLASgemm_(<font color="#666666">"T"</font>,<font color="#666666">"N"</font>,&amp;bNen,&amp;bN,&amp;bN,&amp;one,pod-&gt;eigv+st,&amp;bN,pod-&gt;yhay,&amp;bMaxN,&amp;zero,pod-&gt;swork,&amp;bNen));
+<a name="line382">382: </a>    PetscStackCallBLAS(<font color="#666666">"BLASgemm"</font>,BLASgemm_(<font color="#666666">"N"</font>,<font color="#666666">"N"</font>,&amp;bNen,&amp;bNen,&amp;bN,&amp;one,pod-&gt;swork,&amp;bNen,pod-&gt;eigv+st,&amp;bN,&amp;zero,pod-&gt;low,&amp;bNen));
+<a name="line383">383: </a>  }
+
+<a name="line385">385: </a>  <font color="#4169E1">if</font> (pod-&gt;monitor) {
+<a name="line386">386: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"  KSPGuessPOD: basis %D, energy fractions = "</font>,pod-&gt;nen);
+<a name="line387">387: </a>    <font color="#4169E1">for</font> (i=pod-&gt;n-1;i&gt;=0;i--) {
+<a name="line388">388: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"%1.6e (%d) "</font>,pod-&gt;eigs[i]/toten,i &gt;= pod-&gt;st ? 1 : 0);
+<a name="line389">389: </a>    }
+<a name="line390">390: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"\n"</font>);
+<a name="line391">391: </a><font color="#A020F0">#if defined(PETSC_USE_DEBUG)</font>
+<a name="line392">392: </a>    <font color="#4169E1">for</font> (i=0;i&lt;pod-&gt;n;i++) {
+<a name="line393">393: </a>      <a href="../../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v;
+<a name="line394">394: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> j;
+<a name="line395">395: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a> bNen,ione = 1;
+
+<a name="line397">397: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(pod-&gt;xsnap[i],&amp;v);
+<a name="line398">398: </a>      <a href="../../../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(pod-&gt;xsnap[i],v);
+<a name="line399">399: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(pod-&gt;nen,&amp;bNen);
+<a name="line400">400: </a>      PetscStackCallBLAS(<font color="#666666">"BLASgemv"</font>,BLASgemv_(<font color="#666666">"T"</font>,&amp;bN,&amp;bNen,&amp;one,pod-&gt;eigv+pod-&gt;st*pod-&gt;n,&amp;bN,pod-&gt;corr+pod-&gt;maxn*i,&amp;ione,&amp;zero,pod-&gt;swork,&amp;ione));
+<a name="line401">401: </a>      PetscStackCallBLAS(<font color="#666666">"BLASgemv"</font>,BLASgemv_(<font color="#666666">"N"</font>,&amp;bN,&amp;bNen,&amp;one,pod-&gt;eigv+pod-&gt;st*pod-&gt;n,&amp;bN,pod-&gt;swork,&amp;ione,&amp;zero,pod-&gt;swork+pod-&gt;n,&amp;ione));
+<a name="line402">402: </a>      <font color="#4169E1">for</font> (j=0;j&lt;pod-&gt;n;j++) pod-&gt;swork[j] = -pod-&gt;swork[pod-&gt;n+j];
+<a name="line403">403: </a>      <a href="../../../../../../docs/manualpages/Vec/VecMAXPY.html#VecMAXPY">VecMAXPY</a>(v,pod-&gt;n,pod-&gt;swork,pod-&gt;xsnap);
+<a name="line404">404: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDot.html#VecDot">VecDot</a>(v,v,pod-&gt;swork);
+<a name="line405">405: </a>      <a href="../../../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(pod-&gt;swork,pod-&gt;swork + 1,1,<a href="../../../../../../docs/manualpages/Sys/MPIU_SCALAR.html#MPIU_SCALAR">MPIU_SCALAR</a>,MPIU_SUM,<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess));
+<a name="line406">406: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),<font color="#666666">"  Error projection %D: %g (expected lower than %g)\n"</font>,i,(double)<a href="../../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(pod-&gt;swork[1]),(double)(toten-parten));
+<a name="line407">407: </a>      <a href="../../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;v);
+<a name="line408">408: </a>    }
+<a name="line409">409: </a><font color="#A020F0">#endif</font>
+<a name="line410">410: </a>  }
+<a name="line411">411: </a>  <font color="#B22222">/* new tip */</font>
+<a name="line412">412: </a>  pod-&gt;curr = (pod-&gt;curr+1)%pod-&gt;maxn;
+<a name="line413">413: </a>  <font color="#4169E1">return</font>(0);
+<a name="line414">414: </a>}
+
+<a name="line416">416: </a><strong><font color="#4169E1"><a name="KSPGuessSetFromOptions_POD"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPGuessSetFromOptions_POD(<a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a> guess)</font></strong>
+<a name="line417">417: </a>{
+<a name="line418">418: </a>  KSPGuessPOD    *pod = (KSPGuessPOD *)guess-&gt;data;
+
+<a name="line422">422: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsBegin.html#PetscOptionsBegin">PetscOptionsBegin</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess),((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)guess)-&gt;prefix,<font color="#666666">"POD initial guess options"</font>,<font color="#666666">"<a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a>"</font>);
+<a name="line423">423: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-ksp_guess_pod_size"</font>,<font color="#666666">"Number of snapshots"</font>,NULL,pod-&gt;maxn,&amp;pod-&gt;maxn,NULL);
+<a name="line424">424: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-ksp_guess_pod_monitor"</font>,<font color="#666666">"Monitor initial guess generator"</font>,NULL,pod-&gt;monitor,&amp;pod-&gt;monitor,NULL);
+<a name="line425">425: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-ksp_guess_pod_tol"</font>,<font color="#666666">"Tolerance to retain eigenvectors"</font>,NULL,pod-&gt;tol,&amp;pod-&gt;tol,NULL);
+<a name="line426">426: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-ksp_guess_pod_Ainner"</font>,<font color="#666666">"Use the operator as inner product (must be SPD)"</font>,NULL,pod-&gt;Aspd,&amp;pod-&gt;Aspd,NULL);
+<a name="line427">427: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsEnd.html#PetscOptionsEnd">PetscOptionsEnd</a>();
+<a name="line428">428: </a>  <font color="#4169E1">return</font>(0);
+<a name="line429">429: </a>}
+
+<a name="line431">431: </a><strong><font color="#4169E1"><a name="KSPGuessView_POD"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPGuessView_POD(<a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a> guess,<a href="../../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line432">432: </a>{
+<a name="line433">433: </a>  KSPGuessPOD    *pod = (KSPGuessPOD*)guess-&gt;data;
+<a name="line434">434: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      isascii;
+
+<a name="line438">438: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../../../docs/manualpages/Viewer/PETSCVIEWERASCII.html#PETSCVIEWERASCII">PETSCVIEWERASCII</a>,&amp;isascii);
+<a name="line439">439: </a>  <font color="#4169E1">if</font> (isascii) {
+<a name="line440">440: </a>    <a href="../../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"Max size %D, tolerance %g, Ainner %d\n"</font>,pod-&gt;maxn,pod-&gt;tol,pod-&gt;Aspd);
+<a name="line441">441: </a>  }
+<a name="line442">442: </a>  <font color="#4169E1">return</font>(0);
+<a name="line443">443: </a>}
+
+<a name="line445">445: </a><font color="#B22222">/*</font>
+<a name="line446">446: </a><font color="#B22222">    KSPGUESSPOD - Implements a proper orthogonal decomposition based Galerkin scheme for repeated linear system solves.</font>
+
+<a name="line448">448: </a><font color="#B22222">  The initial guess is obtained by solving a small and dense linear system, obtained by Galerkin projection on a lower dimensional space generated by the previous solutions.</font>
+<a name="line449">449: </a><font color="#B22222">  The number of solutions to be retained and the energy tolerance to construct the lower dimensional basis can be specified at command line by -ksp_guess_pod_tol &lt;real&gt; and -ksp_guess_pod_size &lt;int&gt;.</font>
+
+<a name="line451">451: </a><font color="#B22222">  References:</font>
+<a name="line452">452: </a><font color="#B22222">.   1. - http://www.math.uni-konstanz.de/numerik/personen/volkwein/teaching/POD-Book.pdf </font>
+
+<a name="line454">454: </a><font color="#B22222">    Level: intermediate</font>
+
+<a name="line456">456: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a>, <a href="../../../../../../docs/manualpages/KSP/KSPGuessType.html#KSPGuessType">KSPGuessType</a>, <a href="../../../../../../docs/manualpages/KSP/KSPGuessCreate.html#KSPGuessCreate">KSPGuessCreate</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPSetGuess.html#KSPSetGuess">KSPSetGuess</a>(), <a href="../../../../../../docs/manualpages/KSP/KSPGetGuess.html#KSPGetGuess">KSPGetGuess</a>()</font>
+<a name="line457">457: </a><font color="#B22222">@*/</font>
+<a name="line458">458: </a><strong><font color="#4169E1"><a name="KSPGuessCreate_POD"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> KSPGuessCreate_POD(<a href="../../../../../../docs/manualpages/KSP/KSPGuess.html#KSPGuess">KSPGuess</a> guess)</font></strong>
+<a name="line459">459: </a>{
+<a name="line460">460: </a>  KSPGuessPOD    *pod;
+
+<a name="line464">464: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(guess,&amp;pod);
+<a name="line465">465: </a>  pod-&gt;maxn   = 10;
+<a name="line466">466: </a>  pod-&gt;tol    = PETSC_MACHINE_EPSILON;
+<a name="line467">467: </a>  guess-&gt;data = pod;
+
+<a name="line469">469: </a>  guess-&gt;ops-&gt;setfromoptions = KSPGuessSetFromOptions_POD;
+<a name="line470">470: </a>  guess-&gt;ops-&gt;destroy        = KSPGuessDestroy_POD;
+<a name="line471">471: </a>  guess-&gt;ops-&gt;setup          = KSPGuessSetUp_POD;
+<a name="line472">472: </a>  guess-&gt;ops-&gt;view           = KSPGuessView_POD;
+<a name="line473">473: </a>  guess-&gt;ops-&gt;reset          = KSPGuessReset_POD;
+<a name="line474">474: </a>  guess-&gt;ops-&gt;update         = KSPGuessUpdate_POD;
+<a name="line475">475: </a>  guess-&gt;ops-&gt;formguess      = KSPGuessFormGuess_POD;
+<a name="line476">476: </a>  <font color="#4169E1">return</font>(0);
+<a name="line477">477: </a>}
+</pre>
+</body>
+
+</html>

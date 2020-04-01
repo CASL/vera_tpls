@@ -1,0 +1,1134 @@
+<center><a href="plexexodusii.c">Actual source code: plexexodusii.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/dm/impls/plex/plexexodusii.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:02:13+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/dm/impls/plex/plexexodusii.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><strong><font color="#228B22">#define PETSCDM_DLL</font></strong>
+<a name="line2">  2: </a> #include <A href="../../../../include/petsc/private/dmpleximpl.h.html">&lt;petsc/private/dmpleximpl.h&gt;</A>
+
+<a name="line4">  4: </a><font color="#A020F0">#if defined(PETSC_HAVE_EXODUSII)</font>
+<a name="line5">  5: </a><font color="#A020F0">#include &lt;netcdf.h&gt;</font>
+<a name="line6">  6: </a><font color="#A020F0">#include &lt;exodusII.h&gt;</font>
+<a name="line7">  7: </a><font color="#A020F0">#endif</font>
+
+<a name="line9">  9: </a><font color="#A020F0">#if defined(PETSC_HAVE_EXODUSII)</font>
+<a name="line10"> 10: </a><font color="#B22222">/*</font>
+<a name="line11"> 11: </a><font color="#B22222">  EXOGetVarIndex - Locate a result in an exodus file based on its name</font>
+
+<a name="line13"> 13: </a><font color="#B22222">  Not collective</font>
+
+<a name="line15"> 15: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line16"> 16: </a><font color="#B22222">+ exoid    - the exodus id of a file (obtained from ex_open or ex_create for instance)</font>
+<a name="line17"> 17: </a><font color="#B22222">. obj_type - the type of entity for instance EX_NODAL, EX_ELEM_BLOCK</font>
+<a name="line18"> 18: </a><font color="#B22222">- name     - the name of the result</font>
+
+<a name="line20"> 20: </a><font color="#B22222">  Output Parameters:</font>
+<a name="line21"> 21: </a><font color="#B22222">. varIndex - the location in the exodus file of the result</font>
+
+<a name="line23"> 23: </a><font color="#B22222">  Notes:</font>
+<a name="line24"> 24: </a><font color="#B22222">  The exodus variable index is obtained by comparing name and the</font>
+<a name="line25"> 25: </a><font color="#B22222">  names of zonal variables declared in the exodus file. For instance if name is "V"</font>
+<a name="line26"> 26: </a><font color="#B22222">  the location in the exodus file will be the first match of "V", "V_X", "V_XX", "V_1", or "V_11"</font>
+<a name="line27"> 27: </a><font color="#B22222">  amongst all variables of type obj_type.</font>
+
+<a name="line29"> 29: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line31"> 31: </a><font color="#B22222">.seealso: EXOGetVarIndex(),DMPlexView_ExodusII_Internal(),VecViewPlex_ExodusII_Nodal_Internal(),VecLoadNodal_PlexEXO(),VecLoadZonal_PlexEXO()</font>
+<a name="line32"> 32: </a><font color="#B22222">*/</font>
+<a name="line33"> 33: </a><strong><font color="#4169E1"><a name="EXOGetVarIndex_Private"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> EXOGetVarIndex_Private(int exoid, ex_entity_type obj_type, const char name[], int *varIndex)</font></strong>
+<a name="line34"> 34: </a>{
+<a name="line35"> 35: </a>  int            num_vars, i, j;
+<a name="line36"> 36: </a>  char           ext_name[MAX_STR_LENGTH+1], var_name[MAX_STR_LENGTH+1];
+<a name="line37"> 37: </a>  const int      num_suffix = 5;
+<a name="line38"> 38: </a>  char          *suffix[5];
+<a name="line39"> 39: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flg;
+
+<a name="line43"> 43: </a>  suffix[0] = (char *) <font color="#666666">""</font>;
+<a name="line44"> 44: </a>  suffix[1] = (char *) <font color="#666666">"_X"</font>;
+<a name="line45"> 45: </a>  suffix[2] = (char *) <font color="#666666">"_XX"</font>;
+<a name="line46"> 46: </a>  suffix[3] = (char *) <font color="#666666">"_1"</font>;
+<a name="line47"> 47: </a>  suffix[4] = (char *) <font color="#666666">"_11"</font>;
+
+<a name="line49"> 49: </a>  *varIndex = 0;
+<a name="line50"> 50: </a>  PetscStackCallStandard(ex_get_variable_param,(exoid, obj_type, &amp;num_vars));
+<a name="line51"> 51: </a>  <font color="#4169E1">for</font> (i = 0; i &lt; num_vars; ++i) {
+<a name="line52"> 52: </a>    PetscStackCallStandard(ex_get_variable_name,(exoid, obj_type, i+1, var_name));
+<a name="line53"> 53: </a>    <font color="#4169E1">for</font> (j = 0; j &lt; num_suffix; ++j){
+<a name="line54"> 54: </a>      <a href="../../../../docs/manualpages/Sys/PetscStrncpy.html#PetscStrncpy">PetscStrncpy</a>(ext_name, name, MAX_STR_LENGTH);
+<a name="line55"> 55: </a>      <a href="../../../../docs/manualpages/Sys/PetscStrlcat.html#PetscStrlcat">PetscStrlcat</a>(ext_name, suffix[j], MAX_STR_LENGTH);
+<a name="line56"> 56: </a>      <a href="../../../../docs/manualpages/Sys/PetscStrcasecmp.html#PetscStrcasecmp">PetscStrcasecmp</a>(ext_name, var_name, &amp;flg);
+<a name="line57"> 57: </a>      <font color="#4169E1">if</font> (flg) {
+<a name="line58"> 58: </a>        *varIndex = i+1;
+<a name="line59"> 59: </a>        <font color="#4169E1">return</font>(0);
+<a name="line60"> 60: </a>      }
+<a name="line61"> 61: </a>    }
+<a name="line62"> 62: </a>  }
+<a name="line63"> 63: </a>  <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_ARG_WRONG, <font color="#666666">"Unable to locate variable %s in ExodusII file."</font>, name);
+<a name="line64"> 64: </a> <a href="../../../../docs/manualpages/Sys/PetscFunctionReturn.html#PetscFunctionReturn">PetscFunctionReturn</a>(-1);
+<a name="line65"> 65: </a>}
+
+<a name="line67"> 67: </a><font color="#B22222">/*</font>
+<a name="line68"> 68: </a><font color="#B22222">  DMPlexView_ExodusII_Internal - Write a <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> to disk in exodus format</font>
+
+<a name="line70"> 70: </a><font color="#B22222">  Collective on dm</font>
+
+<a name="line72"> 72: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line73"> 73: </a><font color="#B22222">+ dm  - The dm to be written</font>
+<a name="line74"> 74: </a><font color="#B22222">. exoid - the exodus id of a file (obtained from ex_open or ex_create for instance)</font>
+<a name="line75"> 75: </a><font color="#B22222">- degree - the degree of the interpolation space</font>
+
+<a name="line77"> 77: </a><font color="#B22222">  Notes:</font>
+<a name="line78"> 78: </a><font color="#B22222">  Not all <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> can be written to disk this way. For instance, exodus assume that element blocks (mapped to "Cell sets" labels)</font>
+<a name="line79"> 79: </a><font color="#B22222">  consists of sequentially numbered cells. If this is not the case, the exodus file will be corrupted.</font>
+
+<a name="line81"> 81: </a><font color="#B22222">  If the dm has been distributed and exoid points to different files on each MPI rank, only the "local" part of the <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a></font>
+<a name="line82"> 82: </a><font color="#B22222">  (including "ghost" cells and vertices) will be written. If all exoid points to the same file, the resulting file will</font>
+<a name="line83"> 83: </a><font color="#B22222">  probably be corrupted.</font>
+
+<a name="line85"> 85: </a><font color="#B22222">  DMPlex only represents geometry while most post-processing software expect that a mesh also provides information</font>
+<a name="line86"> 86: </a><font color="#B22222">  on the discretization space. This function assumes that the file represents Lagrange finite elements of order 1 or 2.</font>
+<a name="line87"> 87: </a><font color="#B22222">  It should be extended to use <a href="../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> objects.</font>
+
+<a name="line89"> 89: </a><font color="#B22222">  This function will only handle TRI, TET, QUAD and HEX cells.</font>
+<a name="line90"> 90: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line92"> 92: </a><font color="#B22222">.seealso: EXOGetVarIndex_Private(), VecViewPlex_ExodusII_Nodal_Internal(), VecLoadNodal_PlexEXO(), VecViewZonal_PlexEXO(), VecLoadZonal_PlexEXO()</font>
+<a name="line93"> 93: </a><font color="#B22222">*/</font>
+<a name="line94"> 94: </a><strong><font color="#4169E1"><a name="DMPlexView_ExodusII_Internal"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> DMPlexView_ExodusII_Internal(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm, int exoid, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> degree)</font></strong>
+<a name="line95"> 95: </a>{
+<a name="line96"> 96: </a>  <font color="#4169E1">enum</font> ElemType {TRI, QUAD, TET, HEX};
+<a name="line97"> 97: </a>  <a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>        comm;
+<a name="line98"> 98: </a>  <font color="#B22222">/* Connectivity Variables */</font>
+<a name="line99"> 99: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        cellsNotInConnectivity;
+<a name="line100">100: </a>  <font color="#B22222">/* Cell Sets */</font>
+<a name="line101">101: </a>  <a href="../../../../docs/manualpages/DM/DMLabel.html#DMLabel">DMLabel</a>         csLabel;
+<a name="line102">102: </a>  <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>              csIS;
+<a name="line103">103: </a>  const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *csIdx;
+<a name="line104">104: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        num_cs, cs;
+<a name="line105">105: </a>  <font color="#4169E1">enum</font> ElemType  *type;
+<a name="line106">106: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       hasLabel;
+<a name="line107">107: </a>  <font color="#B22222">/* Coordinate Variables */</font>
+<a name="line108">108: </a>  <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>              cdm;
+<a name="line109">109: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSection.html#PetscSection">PetscSection</a>    section;
+<a name="line110">110: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>             coord;
+<a name="line111">111: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>      **nodes;
+<a name="line112">112: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        depth, d, dim, skipCells = 0;
+<a name="line113">113: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        pStart, pEnd, p, cStart, cEnd, numCells, vStart, vEnd, numVertices, eStart, eEnd, numEdges, fStart, fEnd, numFaces, numNodes;
+<a name="line114">114: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        num_vs, num_fs;
+<a name="line115">115: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>     rank, size;
+<a name="line116">116: </a>  const char     *dmName;
+<a name="line117">117: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        nodesTriP1[4]  = {3,0,0,0};
+<a name="line118">118: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        nodesTriP2[4]  = {3,3,0,0};
+<a name="line119">119: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        nodesQuadP1[4] = {4,0,0,0};
+<a name="line120">120: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        nodesQuadP2[4] = {4,4,0,1};
+<a name="line121">121: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        nodesTetP1[4]  = {4,0,0,0};
+<a name="line122">122: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        nodesTetP2[4]  = {4,6,0,0};
+<a name="line123">123: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        nodesHexP1[4]  = {8,0,0,0};
+<a name="line124">124: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        nodesHexP2[4]  = {8,12,6,1};
+<a name="line125">125: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line128">128: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)dm, &amp;comm);
+<a name="line129">129: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(comm, &amp;rank);
+<a name="line130">130: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm, &amp;size);
+<a name="line131">131: </a>  <font color="#B22222">/* --- Get <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> info --- */</font>
+<a name="line132">132: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetName.html#PetscObjectGetName">PetscObjectGetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) dm, &amp;dmName);
+<a name="line133">133: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetDepth.html#DMPlexGetDepth">DMPlexGetDepth</a>(dm, &amp;depth);
+<a name="line134">134: </a>  <a href="../../../../docs/manualpages/DM/DMGetDimension.html#DMGetDimension">DMGetDimension</a>(dm, &amp;dim);
+<a name="line135">135: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetChart.html#DMPlexGetChart">DMPlexGetChart</a>(dm, &amp;pStart, &amp;pEnd);
+<a name="line136">136: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetHeightStratum.html#DMPlexGetHeightStratum">DMPlexGetHeightStratum</a>(dm, 0, &amp;cStart, &amp;cEnd);
+<a name="line137">137: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetHeightStratum.html#DMPlexGetHeightStratum">DMPlexGetHeightStratum</a>(dm, 1, &amp;fStart, &amp;fEnd);
+<a name="line138">138: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetDepthStratum.html#DMPlexGetDepthStratum">DMPlexGetDepthStratum</a>(dm, 1, &amp;eStart, &amp;eEnd);
+<a name="line139">139: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetDepthStratum.html#DMPlexGetDepthStratum">DMPlexGetDepthStratum</a>(dm, 0, &amp;vStart, &amp;vEnd);
+<a name="line140">140: </a>  numCells    = cEnd - cStart;
+<a name="line141">141: </a>  numEdges    = eEnd - eStart;
+<a name="line142">142: </a>  numVertices = vEnd - vStart;
+<a name="line143">143: </a>  <font color="#4169E1">if</font> (depth == 3) {numFaces = fEnd - fStart;}
+<a name="line144">144: </a>  <font color="#4169E1">else</font>            {numFaces = 0;}
+<a name="line145">145: </a>  <a href="../../../../docs/manualpages/DM/DMGetLabelSize.html#DMGetLabelSize">DMGetLabelSize</a>(dm, <font color="#666666">"Cell Sets"</font>, &amp;num_cs);
+<a name="line146">146: </a>  <a href="../../../../docs/manualpages/DM/DMGetLabelSize.html#DMGetLabelSize">DMGetLabelSize</a>(dm, <font color="#666666">"Vertex Sets"</font>, &amp;num_vs);
+<a name="line147">147: </a>  <a href="../../../../docs/manualpages/DM/DMGetLabelSize.html#DMGetLabelSize">DMGetLabelSize</a>(dm, <font color="#666666">"Face Sets"</font>, &amp;num_fs);
+<a name="line148">148: </a>  <a href="../../../../docs/manualpages/DM/DMGetCoordinatesLocal.html#DMGetCoordinatesLocal">DMGetCoordinatesLocal</a>(dm, &amp;coord);
+<a name="line149">149: </a>  <a href="../../../../docs/manualpages/DM/DMGetCoordinateDM.html#DMGetCoordinateDM">DMGetCoordinateDM</a>(dm, &amp;cdm);
+<a name="line150">150: </a>  <font color="#4169E1">if</font> (num_cs &gt; 0) {
+<a name="line151">151: </a>    <a href="../../../../docs/manualpages/DM/DMGetLabel.html#DMGetLabel">DMGetLabel</a>(dm, <font color="#666666">"Cell Sets"</font>, &amp;csLabel);
+<a name="line152">152: </a>    <a href="../../../../docs/manualpages/DMLABEL/DMLabelGetValueIS.html#DMLabelGetValueIS">DMLabelGetValueIS</a>(csLabel, &amp;csIS);
+<a name="line153">153: </a>    <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(csIS, &amp;csIdx);
+<a name="line154">154: </a>  }
+<a name="line155">155: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(num_cs, &amp;nodes);
+<a name="line156">156: </a>  <font color="#B22222">/* Set element type for each block and compute total number of nodes */</font>
+<a name="line157">157: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(num_cs, &amp;type);
+<a name="line158">158: </a>  numNodes = numVertices;
+<a name="line159">159: </a>  <font color="#4169E1">if</font> (degree == 2) {numNodes += numEdges;}
+<a name="line160">160: </a>  cellsNotInConnectivity = numCells;
+<a name="line161">161: </a>  <font color="#4169E1">for</font> (cs = 0; cs &lt; num_cs; ++cs) {
+<a name="line162">162: </a>    <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>              stratumIS;
+<a name="line163">163: </a>    const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *cells;
+<a name="line164">164: </a>    <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *xyz = NULL;
+<a name="line165">165: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        csSize, closureSize;
+
+<a name="line167">167: </a>    <a href="../../../../docs/manualpages/DMLABEL/DMLabelGetStratumIS.html#DMLabelGetStratumIS">DMLabelGetStratumIS</a>(csLabel, csIdx[cs], &amp;stratumIS);
+<a name="line168">168: </a>    <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(stratumIS, &amp;cells);
+<a name="line169">169: </a>    <a href="../../../../docs/manualpages/IS/ISGetSize.html#ISGetSize">ISGetSize</a>(stratumIS, &amp;csSize);
+<a name="line170">170: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexVecGetClosure.html#DMPlexVecGetClosure">DMPlexVecGetClosure</a>(cdm, NULL, coord, cells[0], &amp;closureSize, &amp;xyz);
+<a name="line171">171: </a>    <font color="#4169E1">switch</font> (dim) {
+<a name="line172">172: </a>      <font color="#4169E1">case</font> 2:
+<a name="line173">173: </a>        <font color="#4169E1">if</font>      (closureSize == 3*dim) {type[cs] = TRI;}
+<a name="line174">174: </a>        <font color="#4169E1">else</font> <font color="#4169E1">if</font> (closureSize == 4*dim) {type[cs] = QUAD;}
+<a name="line175">175: </a>        <font color="#4169E1">else</font> <a href="../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_ARG_OUTOFRANGE, <font color="#666666">"Number of vertices %D in dimension %D has no ExodusII type"</font>, closureSize/dim, dim);
+<a name="line176">176: </a>        <font color="#4169E1">break</font>;
+<a name="line177">177: </a>      <font color="#4169E1">case</font> 3:
+<a name="line178">178: </a>        <font color="#4169E1">if</font>      (closureSize == 4*dim) {type[cs] = TET;}
+<a name="line179">179: </a>        <font color="#4169E1">else</font> <font color="#4169E1">if</font> (closureSize == 8*dim) {type[cs] = HEX;}
+<a name="line180">180: </a>        <font color="#4169E1">else</font> <a href="../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_ARG_OUTOFRANGE, <font color="#666666">"Number of vertices %D in dimension %D has no ExodusII type"</font>, closureSize/dim, dim);
+<a name="line181">181: </a>        <font color="#4169E1">break</font>;
+<a name="line182">182: </a><strong><font color="#FF0000">      default:</font></strong> <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_ARG_OUTOFRANGE, <font color="#666666">"Dimension %D not handled by ExodusII viewer"</font>, dim);
+<a name="line183">183: </a>    }
+<a name="line184">184: </a>    <font color="#4169E1">if</font> ((degree == 2) &amp;&amp; (type[cs] == QUAD)) {numNodes += csSize;}
+<a name="line185">185: </a>    <font color="#4169E1">if</font> ((degree == 2) &amp;&amp; (type[cs] == HEX))  {numNodes += csSize; numNodes += numFaces;}
+<a name="line186">186: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexVecRestoreClosure.html#DMPlexVecRestoreClosure">DMPlexVecRestoreClosure</a>(cdm, NULL, coord, cells[0], &amp;closureSize, &amp;xyz);
+<a name="line187">187: </a>    <font color="#B22222">/* Set nodes and Element type */</font>
+<a name="line188">188: </a>    <font color="#4169E1">if</font> (type[cs] == TRI) {
+<a name="line189">189: </a>      <font color="#4169E1">if</font>      (degree == 1) nodes[cs] = nodesTriP1;
+<a name="line190">190: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (degree == 2) nodes[cs] = nodesTriP2;
+<a name="line191">191: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type[cs] == QUAD) {
+<a name="line192">192: </a>      <font color="#4169E1">if</font>      (degree == 1) nodes[cs] = nodesQuadP1;
+<a name="line193">193: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (degree == 2) nodes[cs] = nodesQuadP2;
+<a name="line194">194: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type[cs] == TET) {
+<a name="line195">195: </a>      <font color="#4169E1">if</font>      (degree == 1) nodes[cs] = nodesTetP1;
+<a name="line196">196: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (degree == 2) nodes[cs] = nodesTetP2;
+<a name="line197">197: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type[cs] == HEX) {
+<a name="line198">198: </a>      <font color="#4169E1">if</font>      (degree == 1) nodes[cs] = nodesHexP1;
+<a name="line199">199: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (degree == 2) nodes[cs] = nodesHexP2;
+<a name="line200">200: </a>    }
+<a name="line201">201: </a>    <font color="#B22222">/* Compute the number of cells not in the connectivity table */</font>
+<a name="line202">202: </a>    cellsNotInConnectivity -= nodes[cs][3]*csSize;
+
+<a name="line204">204: </a>    <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(stratumIS, &amp;cells);
+<a name="line205">205: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;stratumIS);
+<a name="line206">206: </a>  }
+<a name="line207">207: </a>  <font color="#4169E1">if</font> (num_cs &gt; 0) {PetscStackCallStandard(ex_put_init,(exoid, dmName, dim, numNodes, numCells, num_cs, num_vs, num_fs));}
+<a name="line208">208: </a>  <font color="#B22222">/* --- Connectivity --- */</font>
+<a name="line209">209: </a>  <font color="#4169E1">for</font> (cs = 0; cs &lt; num_cs; ++cs) {
+<a name="line210">210: </a>    <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>              stratumIS;
+<a name="line211">211: </a>    const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *cells;
+<a name="line212">212: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *connect, off = 0;
+<a name="line213">213: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        edgesInClosure = 0, facesInClosure = 0, verticesInClosure = 0;
+<a name="line214">214: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        csSize, c, connectSize, closureSize;
+<a name="line215">215: </a>    char           *elem_type = NULL;
+<a name="line216">216: </a>    char            elem_type_tri3[]  = <font color="#666666">"TRI3"</font>,  elem_type_quad4[] = <font color="#666666">"QUAD4"</font>;
+<a name="line217">217: </a>    char            elem_type_tri6[]  = <font color="#666666">"TRI6"</font>,  elem_type_quad9[] = <font color="#666666">"QUAD9"</font>;
+<a name="line218">218: </a>    char            elem_type_tet4[]  = <font color="#666666">"TET4"</font>,  elem_type_hex8[]  = <font color="#666666">"HEX8"</font>;
+<a name="line219">219: </a>    char            elem_type_tet10[] = <font color="#666666">"TET10"</font>, elem_type_hex27[] = <font color="#666666">"HEX27"</font>;
+
+<a name="line221">221: </a>    <a href="../../../../docs/manualpages/DMLABEL/DMLabelGetStratumIS.html#DMLabelGetStratumIS">DMLabelGetStratumIS</a>(csLabel, csIdx[cs], &amp;stratumIS);
+<a name="line222">222: </a>    <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(stratumIS, &amp;cells);
+<a name="line223">223: </a>    <a href="../../../../docs/manualpages/IS/ISGetSize.html#ISGetSize">ISGetSize</a>(stratumIS, &amp;csSize);
+<a name="line224">224: </a>    <font color="#B22222">/* Set Element type */</font>
+<a name="line225">225: </a>    <font color="#4169E1">if</font> (type[cs] == TRI) {
+<a name="line226">226: </a>      <font color="#4169E1">if</font>      (degree == 1) elem_type = elem_type_tri3;
+<a name="line227">227: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (degree == 2) elem_type = elem_type_tri6;
+<a name="line228">228: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type[cs] == QUAD) {
+<a name="line229">229: </a>      <font color="#4169E1">if</font>      (degree == 1) elem_type = elem_type_quad4;
+<a name="line230">230: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (degree == 2) elem_type = elem_type_quad9;
+<a name="line231">231: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type[cs] == TET) {
+<a name="line232">232: </a>      <font color="#4169E1">if</font>      (degree == 1) elem_type = elem_type_tet4;
+<a name="line233">233: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (degree == 2) elem_type = elem_type_tet10;
+<a name="line234">234: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (type[cs] == HEX) {
+<a name="line235">235: </a>      <font color="#4169E1">if</font>      (degree == 1) elem_type = elem_type_hex8;
+<a name="line236">236: </a>      <font color="#4169E1">else</font> <font color="#4169E1">if</font> (degree == 2) elem_type = elem_type_hex27;
+<a name="line237">237: </a>    }
+<a name="line238">238: </a>    connectSize = nodes[cs][0] + nodes[cs][1] + nodes[cs][2] + nodes[cs][3];
+<a name="line239">239: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(<a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(27,connectSize)*csSize, &amp;connect);
+<a name="line240">240: </a>    PetscStackCallStandard(ex_put_block,(exoid, EX_ELEM_BLOCK, csIdx[cs], elem_type, csSize, connectSize, 0, 0, 1));
+<a name="line241">241: </a>    <font color="#B22222">/* Find number of vertices, edges, and faces in the closure */</font>
+<a name="line242">242: </a>    verticesInClosure = nodes[cs][0];
+<a name="line243">243: </a>    <font color="#4169E1">if</font> (depth &gt; 1) {
+<a name="line244">244: </a>      <font color="#4169E1">if</font> (dim == 2) {
+<a name="line245">245: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetConeSize.html#DMPlexGetConeSize">DMPlexGetConeSize</a>(dm, cells[0], &amp;edgesInClosure);
+<a name="line246">246: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (dim == 3) {
+<a name="line247">247: </a>        <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *closure = NULL;
+
+<a name="line249">249: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetConeSize.html#DMPlexGetConeSize">DMPlexGetConeSize</a>(dm, cells[0], &amp;facesInClosure);
+<a name="line250">250: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetTransitiveClosure.html#DMPlexGetTransitiveClosure">DMPlexGetTransitiveClosure</a>(dm, cells[0], <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>, &amp;closureSize, &amp;closure);
+<a name="line251">251: </a>        edgesInClosure = closureSize - facesInClosure - 1 - verticesInClosure;
+<a name="line252">252: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexRestoreTransitiveClosure.html#DMPlexRestoreTransitiveClosure">DMPlexRestoreTransitiveClosure</a>(dm, cells[0], <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>, &amp;closureSize, &amp;closure);
+<a name="line253">253: </a>      }
+<a name="line254">254: </a>    }
+<a name="line255">255: </a>    <font color="#B22222">/* Get connectivity for each cell */</font>
+<a name="line256">256: </a>    <font color="#4169E1">for</font> (c = 0; c &lt; csSize; ++c) {
+<a name="line257">257: </a>      <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *closure = NULL;
+<a name="line258">258: </a>      <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>  temp, i;
+
+<a name="line260">260: </a>      <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetTransitiveClosure.html#DMPlexGetTransitiveClosure">DMPlexGetTransitiveClosure</a>(dm, cells[c], <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>, &amp;closureSize, &amp;closure);
+<a name="line261">261: </a>      <font color="#4169E1">for</font> (i = 0; i &lt; connectSize; ++i) {
+<a name="line262">262: </a>        <font color="#4169E1">if</font> (i &lt; nodes[cs][0]) {<font color="#B22222">/* Vertices */</font>
+<a name="line263">263: </a>          connect[i+off] = closure[(i+edgesInClosure+facesInClosure+1)*2] + 1;
+<a name="line264">264: </a>          connect[i+off] -= cellsNotInConnectivity;
+<a name="line265">265: </a>        } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (i &lt; nodes[cs][0]+nodes[cs][1]) { <font color="#B22222">/* Edges */</font>
+<a name="line266">266: </a>          connect[i+off] = closure[(i-verticesInClosure+facesInClosure+1)*2] + 1;
+<a name="line267">267: </a>          <font color="#4169E1">if</font> (nodes[cs][2] == 0) connect[i+off] -= numFaces;
+<a name="line268">268: </a>          connect[i+off] -= cellsNotInConnectivity;
+<a name="line269">269: </a>        } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (i &lt; nodes[cs][0]+nodes[cs][1]+nodes[cs][3]){ <font color="#B22222">/* Cells */</font>
+<a name="line270">270: </a>          connect[i+off] = closure[0] + 1;
+<a name="line271">271: </a>          connect[i+off] -= skipCells;
+<a name="line272">272: </a>        } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (i &lt; nodes[cs][0]+nodes[cs][1]+nodes[cs][3]+nodes[cs][2]){ <font color="#B22222">/* Faces */</font>
+<a name="line273">273: </a>          connect[i+off] = closure[(i-edgesInClosure-verticesInClosure)*2] + 1;
+<a name="line274">274: </a>          connect[i+off] -= cellsNotInConnectivity;
+<a name="line275">275: </a>        } <font color="#4169E1">else</font> {
+<a name="line276">276: </a>          connect[i+off] = -1;
+<a name="line277">277: </a>        }
+<a name="line278">278: </a>      }
+<a name="line279">279: </a>      <font color="#B22222">/* Tetrahedra are inverted */</font>
+<a name="line280">280: </a>      <font color="#4169E1">if</font> (type[cs] == TET) {
+<a name="line281">281: </a>        temp = connect[0+off]; connect[0+off] = connect[1+off]; connect[1+off] = temp;
+<a name="line282">282: </a>        <font color="#4169E1">if</font> (degree == 2) {
+<a name="line283">283: </a>          temp = connect[5+off]; connect[5+off] = connect[6+off]; connect[6+off] = temp;
+<a name="line284">284: </a>          temp = connect[7+off]; connect[7+off] = connect[8+off]; connect[8+off] = temp;
+<a name="line285">285: </a>        }
+<a name="line286">286: </a>      }
+<a name="line287">287: </a>      <font color="#B22222">/* Hexahedra are inverted */</font>
+<a name="line288">288: </a>      <font color="#4169E1">if</font> (type[cs] == HEX) {
+<a name="line289">289: </a>        temp = connect[1+off]; connect[1+off] = connect[3+off]; connect[3+off] = temp;
+<a name="line290">290: </a>        <font color="#4169E1">if</font> (degree == 2) {
+<a name="line291">291: </a>          temp = connect[8+off];  connect[8+off]  = connect[11+off]; connect[11+off] = temp;
+<a name="line292">292: </a>          temp = connect[9+off];  connect[9+off]  = connect[10+off]; connect[10+off] = temp;
+<a name="line293">293: </a>          temp = connect[16+off]; connect[16+off] = connect[17+off]; connect[17+off] = temp;
+<a name="line294">294: </a>          temp = connect[18+off]; connect[18+off] = connect[19+off]; connect[19+off] = temp;
+
+<a name="line296">296: </a>          temp = connect[12+off]; connect[12+off] = connect[16+off]; connect[16+off] = temp;
+<a name="line297">297: </a>          temp = connect[13+off]; connect[13+off] = connect[17+off]; connect[17+off] = temp;
+<a name="line298">298: </a>          temp = connect[14+off]; connect[14+off] = connect[18+off]; connect[18+off] = temp;
+<a name="line299">299: </a>          temp = connect[15+off]; connect[15+off] = connect[19+off]; connect[19+off] = temp;
+
+<a name="line301">301: </a>          temp = connect[23+off]; connect[23+off] = connect[26+off]; connect[26+off] = temp;
+<a name="line302">302: </a>          temp = connect[24+off]; connect[24+off] = connect[25+off]; connect[25+off] = temp;
+<a name="line303">303: </a>          temp = connect[25+off]; connect[25+off] = connect[26+off]; connect[26+off] = temp;
+<a name="line304">304: </a>        }
+<a name="line305">305: </a>      }
+<a name="line306">306: </a>      off += connectSize;
+<a name="line307">307: </a>      <a href="../../../../docs/manualpages/DMPLEX/DMPlexRestoreTransitiveClosure.html#DMPlexRestoreTransitiveClosure">DMPlexRestoreTransitiveClosure</a>(dm, cells[c], <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>, &amp;closureSize, &amp;closure);
+<a name="line308">308: </a>    }
+<a name="line309">309: </a>    PetscStackCallStandard(ex_put_conn,(exoid, EX_ELEM_BLOCK, csIdx[cs], connect, 0, 0));
+<a name="line310">310: </a>    skipCells += (nodes[cs][3] == 0)*csSize;
+<a name="line311">311: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(connect);
+<a name="line312">312: </a>    <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(stratumIS, &amp;cells);
+<a name="line313">313: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;stratumIS);
+<a name="line314">314: </a>  }
+<a name="line315">315: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(type);
+<a name="line316">316: </a>  <font color="#B22222">/* --- Coordinates --- */</font>
+<a name="line317">317: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSectionCreate.html#PetscSectionCreate">PetscSectionCreate</a>(comm, &amp;section);
+<a name="line318">318: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetChart.html#PetscSectionSetChart">PetscSectionSetChart</a>(section, pStart, pEnd);
+<a name="line319">319: </a>  <font color="#4169E1">for</font> (d = 0; d &lt; depth; ++d) {
+<a name="line320">320: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetDepthStratum.html#DMPlexGetDepthStratum">DMPlexGetDepthStratum</a>(dm, d, &amp;pStart, &amp;pEnd);
+<a name="line321">321: </a>    <font color="#4169E1">for</font> (p = pStart; p &lt; pEnd; ++p) {
+<a name="line322">322: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetDof.html#PetscSectionSetDof">PetscSectionSetDof</a>(section, p, nodes[0][d] &gt; 0);
+<a name="line323">323: </a>    }
+<a name="line324">324: </a>  }
+<a name="line325">325: </a>  <font color="#4169E1">for</font> (cs = 0; cs &lt; num_cs; ++cs) {
+<a name="line326">326: </a>    <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>              stratumIS;
+<a name="line327">327: </a>    const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *cells;
+<a name="line328">328: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        csSize, c;
+
+<a name="line330">330: </a>    <a href="../../../../docs/manualpages/DMLABEL/DMLabelGetStratumIS.html#DMLabelGetStratumIS">DMLabelGetStratumIS</a>(csLabel, csIdx[cs], &amp;stratumIS);
+<a name="line331">331: </a>    <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(stratumIS, &amp;cells);
+<a name="line332">332: </a>    <a href="../../../../docs/manualpages/IS/ISGetSize.html#ISGetSize">ISGetSize</a>(stratumIS, &amp;csSize);
+<a name="line333">333: </a>    <font color="#4169E1">for</font> (c = 0; c &lt; csSize; ++c) {
+<a name="line334">334: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetDof.html#PetscSectionSetDof">PetscSectionSetDof</a>(section, cells[c], nodes[cs][3] &gt; 0);
+<a name="line335">335: </a>    }
+<a name="line336">336: </a>    <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(stratumIS, &amp;cells);
+<a name="line337">337: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;stratumIS);
+<a name="line338">338: </a>  }
+<a name="line339">339: </a>  <font color="#4169E1">if</font> (num_cs &gt; 0) {
+<a name="line340">340: </a>    <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(csIS, &amp;csIdx);
+<a name="line341">341: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;csIS);
+<a name="line342">342: </a>  }
+<a name="line343">343: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(nodes);
+<a name="line344">344: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetUp.html#PetscSectionSetUp">PetscSectionSetUp</a>(section);
+<a name="line345">345: </a>  <font color="#4169E1">if</font> (numNodes &gt; 0) {
+<a name="line346">346: </a>    const char  *coordNames[3] = {<font color="#666666">"x"</font>, <font color="#666666">"y"</font>, <font color="#666666">"z"</font>};
+<a name="line347">347: </a>    <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *coords, *closure;
+<a name="line348">348: </a>    <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   *cval;
+<a name="line349">349: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     hasDof, n = 0;
+
+<a name="line351">351: </a>    <font color="#B22222">/* There can't be more than 24 values in the closure of a point for the coord section */</font>
+<a name="line352">352: </a>    <a href="../../../../docs/manualpages/Sys/PetscCalloc3.html#PetscCalloc3">PetscCalloc3</a>(numNodes*3, &amp;coords, dim, &amp;cval, 24, &amp;closure);
+<a name="line353">353: </a>    <a href="../../../../docs/manualpages/DM/DMGetCoordinatesLocal.html#DMGetCoordinatesLocal">DMGetCoordinatesLocal</a>(dm, &amp;coord);
+<a name="line354">354: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetChart.html#DMPlexGetChart">DMPlexGetChart</a>(dm, &amp;pStart, &amp;pEnd);
+<a name="line355">355: </a>    <font color="#4169E1">for</font> (p = pStart; p &lt; pEnd; ++p) {
+<a name="line356">356: </a>      <a href="../../../../docs/manualpages/PetscSection/PetscSectionGetDof.html#PetscSectionGetDof">PetscSectionGetDof</a>(section, p, &amp;hasDof);
+<a name="line357">357: </a>      <font color="#4169E1">if</font> (hasDof) {
+<a name="line358">358: </a>        <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> closureSize = 24, j;
+
+<a name="line360">360: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexVecGetClosure.html#DMPlexVecGetClosure">DMPlexVecGetClosure</a>(cdm, NULL, coord, p, &amp;closureSize, &amp;closure);
+<a name="line361">361: </a>        <font color="#4169E1">for</font> (d = 0; d &lt; dim; ++d) {
+<a name="line362">362: </a>          cval[d] = 0.0;
+<a name="line363">363: </a>          <font color="#4169E1">for</font> (j = 0; j &lt; closureSize/dim; j++) cval[d] += closure[j*dim+d];
+<a name="line364">364: </a>          coords[d*numNodes+n] = cval[d] * dim / closureSize;
+<a name="line365">365: </a>        }
+<a name="line366">366: </a>        ++n;
+<a name="line367">367: </a>      }
+<a name="line368">368: </a>    }
+<a name="line369">369: </a>    PetscStackCallStandard(ex_put_coord,(exoid, &amp;coords[0*numNodes], &amp;coords[1*numNodes], &amp;coords[2*numNodes]));
+<a name="line370">370: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(coords, cval, closure);
+<a name="line371">371: </a>    PetscStackCallStandard(ex_put_coord_names,(exoid, (char **) coordNames));
+<a name="line372">372: </a>  }
+<a name="line373">373: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSectionDestroy.html#PetscSectionDestroy">PetscSectionDestroy</a>(&amp;section);
+<a name="line374">374: </a>  <font color="#B22222">/* --- Node Sets/Vertex Sets --- */</font>
+<a name="line375">375: </a>  <a href="../../../../docs/manualpages/DM/DMHasLabel.html#DMHasLabel">DMHasLabel</a>(dm, <font color="#666666">"Vertex Sets"</font>, &amp;hasLabel);
+<a name="line376">376: </a>  <font color="#4169E1">if</font> (hasLabel) {
+<a name="line377">377: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        i, vs, vsSize;
+<a name="line378">378: </a>    const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *vsIdx, *vertices;
+<a name="line379">379: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *nodeList;
+<a name="line380">380: </a>    <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>              vsIS, stratumIS;
+<a name="line381">381: </a>    <a href="../../../../docs/manualpages/DM/DMLabel.html#DMLabel">DMLabel</a>         vsLabel;
+<a name="line382">382: </a>    <a href="../../../../docs/manualpages/DM/DMGetLabel.html#DMGetLabel">DMGetLabel</a>(dm, <font color="#666666">"Vertex Sets"</font>, &amp;vsLabel);
+<a name="line383">383: </a>    <a href="../../../../docs/manualpages/DMLABEL/DMLabelGetValueIS.html#DMLabelGetValueIS">DMLabelGetValueIS</a>(vsLabel, &amp;vsIS);
+<a name="line384">384: </a>    <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(vsIS, &amp;vsIdx);
+<a name="line385">385: </a>    <font color="#4169E1">for</font> (vs=0; vs&lt;num_vs; ++vs) {
+<a name="line386">386: </a>      <a href="../../../../docs/manualpages/DMLABEL/DMLabelGetStratumIS.html#DMLabelGetStratumIS">DMLabelGetStratumIS</a>(vsLabel, vsIdx[vs], &amp;stratumIS);
+<a name="line387">387: </a>      <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(stratumIS, &amp;vertices);
+<a name="line388">388: </a>      <a href="../../../../docs/manualpages/IS/ISGetSize.html#ISGetSize">ISGetSize</a>(stratumIS, &amp;vsSize);
+<a name="line389">389: </a>      <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(vsSize, &amp;nodeList);
+<a name="line390">390: </a>      <font color="#4169E1">for</font> (i=0; i&lt;vsSize; ++i) {
+<a name="line391">391: </a>        nodeList[i] = vertices[i] - skipCells + 1;
+<a name="line392">392: </a>      }
+<a name="line393">393: </a>      PetscStackCallStandard(ex_put_set_param,(exoid, EX_NODE_SET, vsIdx[vs], vsSize, 0));
+<a name="line394">394: </a>      PetscStackCallStandard(ex_put_set,(exoid, EX_NODE_SET, vsIdx[vs], nodeList, NULL));
+<a name="line395">395: </a>      <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(stratumIS, &amp;vertices);
+<a name="line396">396: </a>      <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;stratumIS);
+<a name="line397">397: </a>      <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(nodeList);
+<a name="line398">398: </a>    }
+<a name="line399">399: </a>    <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(vsIS, &amp;vsIdx);
+<a name="line400">400: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;vsIS);
+<a name="line401">401: </a>  }
+<a name="line402">402: </a>  <font color="#B22222">/* --- Side Sets/Face Sets --- */</font>
+<a name="line403">403: </a>  <a href="../../../../docs/manualpages/DM/DMHasLabel.html#DMHasLabel">DMHasLabel</a>(dm, <font color="#666666">"Face Sets"</font>, &amp;hasLabel);
+<a name="line404">404: </a>  <font color="#4169E1">if</font> (hasLabel) {
+<a name="line405">405: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        i, j, fs, fsSize;
+<a name="line406">406: </a>    const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *fsIdx, *faces;
+<a name="line407">407: </a>    <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>              fsIS, stratumIS;
+<a name="line408">408: </a>    <a href="../../../../docs/manualpages/DM/DMLabel.html#DMLabel">DMLabel</a>         fsLabel;
+<a name="line409">409: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        numPoints, *points;
+<a name="line410">410: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        elem_list_size = 0;
+<a name="line411">411: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       *elem_list, *elem_ind, *side_list;
+
+<a name="line413">413: </a>    <a href="../../../../docs/manualpages/DM/DMGetLabel.html#DMGetLabel">DMGetLabel</a>(dm, <font color="#666666">"Face Sets"</font>, &amp;fsLabel);
+<a name="line414">414: </a>    <font color="#B22222">/* Compute size of Node List and Element List */</font>
+<a name="line415">415: </a>    <a href="../../../../docs/manualpages/DMLABEL/DMLabelGetValueIS.html#DMLabelGetValueIS">DMLabelGetValueIS</a>(fsLabel, &amp;fsIS);
+<a name="line416">416: </a>    <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(fsIS, &amp;fsIdx);
+<a name="line417">417: </a>    <font color="#4169E1">for</font> (fs=0; fs&lt;num_fs; ++fs) {
+<a name="line418">418: </a>      <a href="../../../../docs/manualpages/DMLABEL/DMLabelGetStratumIS.html#DMLabelGetStratumIS">DMLabelGetStratumIS</a>(fsLabel, fsIdx[fs], &amp;stratumIS);
+<a name="line419">419: </a>      <a href="../../../../docs/manualpages/IS/ISGetSize.html#ISGetSize">ISGetSize</a>(stratumIS, &amp;fsSize);
+<a name="line420">420: </a>      elem_list_size += fsSize;
+<a name="line421">421: </a>      <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;stratumIS);
+<a name="line422">422: </a>    }
+<a name="line423">423: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc3.html#PetscMalloc3">PetscMalloc3</a>(num_fs, &amp;elem_ind,
+<a name="line424">424: </a>                        elem_list_size, &amp;elem_list,
+<a name="line425">425: </a>                        elem_list_size, &amp;side_list);
+<a name="line426">426: </a>    elem_ind[0] = 0;
+<a name="line427">427: </a>    <font color="#4169E1">for</font> (fs=0; fs&lt;num_fs; ++fs) {
+<a name="line428">428: </a>      <a href="../../../../docs/manualpages/DMLABEL/DMLabelGetStratumIS.html#DMLabelGetStratumIS">DMLabelGetStratumIS</a>(fsLabel, fsIdx[fs], &amp;stratumIS);
+<a name="line429">429: </a>      <a href="../../../../docs/manualpages/IS/ISGetIndices.html#ISGetIndices">ISGetIndices</a>(stratumIS, &amp;faces);
+<a name="line430">430: </a>      <a href="../../../../docs/manualpages/IS/ISGetSize.html#ISGetSize">ISGetSize</a>(stratumIS, &amp;fsSize);
+<a name="line431">431: </a>      <font color="#B22222">/* Set Parameters */</font>
+<a name="line432">432: </a>      PetscStackCallStandard(ex_put_set_param,(exoid, EX_SIDE_SET, fsIdx[fs], fsSize, 0));
+<a name="line433">433: </a>      <font color="#B22222">/* Indices */</font>
+<a name="line434">434: </a>      <font color="#4169E1">if</font> (fs&lt;num_fs-1) {
+<a name="line435">435: </a>        elem_ind[fs+1] = elem_ind[fs] + fsSize;
+<a name="line436">436: </a>      }
+
+<a name="line438">438: </a>      <font color="#4169E1">for</font> (i=0; i&lt;fsSize; ++i) {
+<a name="line439">439: </a>        <font color="#B22222">/* Element List */</font>
+<a name="line440">440: </a>        points = NULL;
+<a name="line441">441: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetTransitiveClosure.html#DMPlexGetTransitiveClosure">DMPlexGetTransitiveClosure</a>(dm, faces[i], <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>, &amp;numPoints, &amp;points);
+<a name="line442">442: </a>        elem_list[elem_ind[fs] + i] = points[2] +1;
+<a name="line443">443: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexRestoreTransitiveClosure.html#DMPlexRestoreTransitiveClosure">DMPlexRestoreTransitiveClosure</a>(dm, faces[i], <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>, &amp;numPoints, &amp;points);
+
+<a name="line445">445: </a>        <font color="#B22222">/* Side List */</font>
+<a name="line446">446: </a>        points = NULL;
+<a name="line447">447: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetTransitiveClosure.html#DMPlexGetTransitiveClosure">DMPlexGetTransitiveClosure</a>(dm, elem_list[elem_ind[fs] + i]-1, <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>, &amp;numPoints, &amp;points);
+<a name="line448">448: </a>        <font color="#4169E1">for</font> (j=1; j&lt;numPoints; ++j) {
+<a name="line449">449: </a>          <font color="#4169E1">if</font> (points[j*2]==faces[i]) {<font color="#4169E1">break</font>;}
+<a name="line450">450: </a>        }
+<a name="line451">451: </a>        <font color="#B22222">/* Convert HEX sides */</font>
+<a name="line452">452: </a>        <font color="#4169E1">if</font> (numPoints == 27) {
+<a name="line453">453: </a>          <font color="#4169E1">if</font>      (j == 1) {j = 5;}
+<a name="line454">454: </a>          <font color="#4169E1">else</font> <font color="#4169E1">if</font> (j == 2) {j = 6;}
+<a name="line455">455: </a>          <font color="#4169E1">else</font> <font color="#4169E1">if</font> (j == 3) {j = 1;}
+<a name="line456">456: </a>          <font color="#4169E1">else</font> <font color="#4169E1">if</font> (j == 4) {j = 3;}
+<a name="line457">457: </a>          <font color="#4169E1">else</font> <font color="#4169E1">if</font> (j == 5) {j = 2;}
+<a name="line458">458: </a>          <font color="#4169E1">else</font> <font color="#4169E1">if</font> (j == 6) {j = 4;}
+<a name="line459">459: </a>        }
+<a name="line460">460: </a>        <font color="#B22222">/* Convert TET sides */</font>
+<a name="line461">461: </a>        <font color="#4169E1">if</font> (numPoints == 15) {
+<a name="line462">462: </a>          --j;
+<a name="line463">463: </a>          <font color="#4169E1">if</font> (j == 0) {j = 4;}
+<a name="line464">464: </a>        }
+<a name="line465">465: </a>        side_list[elem_ind[fs] + i] = j;
+<a name="line466">466: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexRestoreTransitiveClosure.html#DMPlexRestoreTransitiveClosure">DMPlexRestoreTransitiveClosure</a>(dm, elem_list[elem_ind[fs] + i]-1, <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>, &amp;numPoints, &amp;points);
+
+<a name="line468">468: </a>      }
+<a name="line469">469: </a>      <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(stratumIS, &amp;faces);
+<a name="line470">470: </a>      <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;stratumIS);
+<a name="line471">471: </a>    }
+<a name="line472">472: </a>    <a href="../../../../docs/manualpages/IS/ISRestoreIndices.html#ISRestoreIndices">ISRestoreIndices</a>(fsIS, &amp;fsIdx);
+<a name="line473">473: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;fsIS);
+
+<a name="line475">475: </a>    <font color="#B22222">/* Put side sets */</font>
+<a name="line476">476: </a>    <font color="#4169E1">for</font> (fs=0; fs&lt;num_fs; ++fs) {
+<a name="line477">477: </a>      PetscStackCallStandard(ex_put_set,(exoid, EX_SIDE_SET, fsIdx[fs], &amp;elem_list[elem_ind[fs]], &amp;side_list[elem_ind[fs]]));
+<a name="line478">478: </a>    }
+<a name="line479">479: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(elem_ind,elem_list,side_list);
+<a name="line480">480: </a>  }
+<a name="line481">481: </a>  <font color="#4169E1">return</font>(0);
+<a name="line482">482: </a>}
+
+<a name="line484">484: </a><font color="#B22222">/*</font>
+<a name="line485">485: </a><font color="#B22222">  VecViewPlex_ExodusII_Nodal_Internal - Write a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> corresponding to a nodal field to an exodus file</font>
+
+<a name="line487">487: </a><font color="#B22222">  Collective on v</font>
+
+<a name="line489">489: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line490">490: </a><font color="#B22222">+ v  - The vector to be written</font>
+<a name="line491">491: </a><font color="#B22222">. exoid - the exodus id of a file (obtained from ex_open or ex_create for instance)</font>
+<a name="line492">492: </a><font color="#B22222">- step - the time step to write at (exodus steps are numbered starting from 1)</font>
+
+<a name="line494">494: </a><font color="#B22222">  Notes:</font>
+<a name="line495">495: </a><font color="#B22222">  The exodus result nodal variable index is obtained by comparing the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> name and the</font>
+<a name="line496">496: </a><font color="#B22222">  names of nodal variables declared in the exodus file. For instance for a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> named "V"</font>
+<a name="line497">497: </a><font color="#B22222">  the location in the exodus file will be the first match of "V", "V_X", "V_XX", "V_1", or "V_11"</font>
+<a name="line498">498: </a><font color="#B22222">  amongst all nodal variables.</font>
+
+<a name="line500">500: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line502">502: </a><font color="#B22222">.seealso: EXOGetVarIndex_Private(),DMPlexView_ExodusII_Internal(),VecLoadNodal_PlexEXO(),VecViewZonal_PlexEXO(),VecLoadZonal_PlexEXO()</font>
+<a name="line503">503: </a><font color="#B22222">@*/</font>
+<a name="line504">504: </a><strong><font color="#4169E1"><a name="VecViewPlex_ExodusII_Nodal_Internal"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecViewPlex_ExodusII_Nodal_Internal(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v, int exoid, int step)</font></strong>
+<a name="line505">505: </a>{
+<a name="line506">506: </a>  <a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>         comm;
+<a name="line507">507: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>      size;
+<a name="line508">508: </a>  <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>               dm;
+<a name="line509">509: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>              vNatural, vComp;
+<a name="line510">510: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *varray;
+<a name="line511">511: </a>  const char      *vecname;
+<a name="line512">512: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>         xs, xe, bs;
+<a name="line513">513: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>        useNatural;
+<a name="line514">514: </a>  int              offset;
+<a name="line515">515: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>   ierr;
+
+<a name="line518">518: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) v, &amp;comm);
+<a name="line519">519: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm, &amp;size);
+<a name="line520">520: </a>  <a href="../../../../docs/manualpages/DM/VecGetDM.html#VecGetDM">VecGetDM</a>(v, &amp;dm);
+<a name="line521">521: </a>  <a href="../../../../docs/manualpages/DM/DMGetUseNatural.html#DMGetUseNatural">DMGetUseNatural</a>(dm, &amp;useNatural);
+<a name="line522">522: </a>  useNatural = useNatural &amp;&amp; size &gt; 1 ? <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line523">523: </a>  <font color="#4169E1">if</font> (useNatural) {
+<a name="line524">524: </a>    <a href="../../../../docs/manualpages/DM/DMGetGlobalVector.html#DMGetGlobalVector">DMGetGlobalVector</a>(dm, &amp;vNatural);
+<a name="line525">525: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexGlobalToNaturalBegin.html#DMPlexGlobalToNaturalBegin">DMPlexGlobalToNaturalBegin</a>(dm, v, vNatural);
+<a name="line526">526: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexGlobalToNaturalEnd.html#DMPlexGlobalToNaturalEnd">DMPlexGlobalToNaturalEnd</a>(dm, v, vNatural);
+<a name="line527">527: </a>  } <font color="#4169E1">else</font> {
+<a name="line528">528: </a>    vNatural = v;
+<a name="line529">529: </a>  }
+<a name="line530">530: </a>  <font color="#B22222">/* Get the location of the variable in the exodus file */</font>
+<a name="line531">531: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetName.html#PetscObjectGetName">PetscObjectGetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) v, &amp;vecname);
+<a name="line532">532: </a>  EXOGetVarIndex_Private(exoid, EX_NODAL, vecname, &amp;offset);
+<a name="line533">533: </a>  <font color="#4169E1">if</font> (!offset) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(comm, PETSC_ERR_FILE_UNEXPECTED, <font color="#666666">"Cannot locate nodal variable %s in exodus file\n"</font>, vecname);
+<a name="line534">534: </a>  <font color="#B22222">/* Write local chunk of the result in the exodus file</font>
+<a name="line535">535: </a><font color="#B22222">     exodus stores each component of a vector-valued field as a separate variable.</font>
+<a name="line536">536: </a><font color="#B22222">     We assume that they are stored sequentially */</font>
+<a name="line537">537: </a>  <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(vNatural, &amp;xs, &amp;xe);
+<a name="line538">538: </a>  <a href="../../../../docs/manualpages/Vec/VecGetBlockSize.html#VecGetBlockSize">VecGetBlockSize</a>(vNatural, &amp;bs);
+<a name="line539">539: </a>  <font color="#4169E1">if</font> (bs == 1) {
+<a name="line540">540: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(vNatural, &amp;varray);
+<a name="line541">541: </a>    PetscStackCallStandard(ex_put_partial_var,(exoid, step, EX_NODAL, offset, 1, xs+1, xe-xs, varray));
+<a name="line542">542: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(vNatural, &amp;varray);
+<a name="line543">543: </a>  } <font color="#4169E1">else</font> {
+<a name="line544">544: </a>    <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>       compIS;
+<a name="line545">545: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> c;
+
+<a name="line547">547: </a>    <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, (xe-xs)/bs, xs, bs, &amp;compIS);
+<a name="line548">548: </a>    <font color="#4169E1">for</font> (c = 0; c &lt; bs; ++c) {
+<a name="line549">549: </a>      <a href="../../../../docs/manualpages/IS/ISStrideSetStride.html#ISStrideSetStride">ISStrideSetStride</a>(compIS, (xe-xs)/bs, xs+c, bs);
+<a name="line550">550: </a>      <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(vNatural, compIS, &amp;vComp);
+<a name="line551">551: </a>      <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(vComp, &amp;varray);
+<a name="line552">552: </a>      PetscStackCallStandard(ex_put_partial_var,(exoid, step, EX_NODAL, offset+c, 1, xs/bs+1, (xe-xs)/bs, varray));
+<a name="line553">553: </a>      <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(vComp, &amp;varray);
+<a name="line554">554: </a>      <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(vNatural, compIS, &amp;vComp);
+<a name="line555">555: </a>    }
+<a name="line556">556: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;compIS);
+<a name="line557">557: </a>  }
+<a name="line558">558: </a>  <font color="#4169E1">if</font> (useNatural) {<a href="../../../../docs/manualpages/DM/DMRestoreGlobalVector.html#DMRestoreGlobalVector">DMRestoreGlobalVector</a>(dm, &amp;vNatural);}
+<a name="line559">559: </a>  <font color="#4169E1">return</font>(0);
+<a name="line560">560: </a>}
+
+<a name="line562">562: </a><font color="#B22222">/*</font>
+<a name="line563">563: </a><font color="#B22222">  VecLoadPlex_ExodusII_Nodal_Internal - Read a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> corresponding to a nodal field from an exodus file</font>
+
+<a name="line565">565: </a><font color="#B22222">  Collective on v</font>
+
+<a name="line567">567: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line568">568: </a><font color="#B22222">+ v  - The vector to be written</font>
+<a name="line569">569: </a><font color="#B22222">. exoid - the exodus id of a file (obtained from ex_open or ex_create for instance)</font>
+<a name="line570">570: </a><font color="#B22222">- step - the time step to read at (exodus steps are numbered starting from 1)</font>
+
+<a name="line572">572: </a><font color="#B22222">  Notes:</font>
+<a name="line573">573: </a><font color="#B22222">  The exodus result nodal variable index is obtained by comparing the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> name and the</font>
+<a name="line574">574: </a><font color="#B22222">  names of nodal variables declared in the exodus file. For instance for a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> named "V"</font>
+<a name="line575">575: </a><font color="#B22222">  the location in the exodus file will be the first match of "V", "V_X", "V_XX", "V_1", or "V_11"</font>
+<a name="line576">576: </a><font color="#B22222">  amongst all nodal variables.</font>
+
+<a name="line578">578: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line580">580: </a><font color="#B22222">.seealso: EXOGetVarIndex_Private(), DMPlexView_ExodusII_Internal(), VecViewPlex_ExodusII_Nodal_Internal(), VecViewZonal_PlexEXO(), VecLoadZonal_PlexEXO()</font>
+<a name="line581">581: </a><font color="#B22222">*/</font>
+<a name="line582">582: </a><strong><font color="#4169E1"><a name="VecLoadPlex_ExodusII_Nodal_Internal"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecLoadPlex_ExodusII_Nodal_Internal(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v, int exoid, int step)</font></strong>
+<a name="line583">583: </a>{
+<a name="line584">584: </a>  <a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>       comm;
+<a name="line585">585: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+<a name="line586">586: </a>  <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>             dm;
+<a name="line587">587: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            vNatural, vComp;
+<a name="line588">588: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>   *varray;
+<a name="line589">589: </a>  const char    *vecname;
+<a name="line590">590: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       xs, xe, bs;
+<a name="line591">591: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      useNatural;
+<a name="line592">592: </a>  int            offset;
+
+<a name="line596">596: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) v, &amp;comm);
+<a name="line597">597: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm, &amp;size);
+<a name="line598">598: </a>  <a href="../../../../docs/manualpages/DM/VecGetDM.html#VecGetDM">VecGetDM</a>(v,&amp;dm);
+<a name="line599">599: </a>  <a href="../../../../docs/manualpages/DM/DMGetUseNatural.html#DMGetUseNatural">DMGetUseNatural</a>(dm, &amp;useNatural);
+<a name="line600">600: </a>  useNatural = useNatural &amp;&amp; size &gt; 1 ? <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line601">601: </a>  <font color="#4169E1">if</font> (useNatural) {<a href="../../../../docs/manualpages/DM/DMGetGlobalVector.html#DMGetGlobalVector">DMGetGlobalVector</a>(dm,&amp;vNatural);}
+<a name="line602">602: </a>  <font color="#4169E1">else</font>            {vNatural = v;}
+<a name="line603">603: </a>  <font color="#B22222">/* Get the location of the variable in the exodus file */</font>
+<a name="line604">604: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetName.html#PetscObjectGetName">PetscObjectGetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) v, &amp;vecname);
+<a name="line605">605: </a>  EXOGetVarIndex_Private(exoid, EX_NODAL, vecname, &amp;offset);
+<a name="line606">606: </a>  <font color="#4169E1">if</font> (!offset) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(comm, PETSC_ERR_FILE_UNEXPECTED, <font color="#666666">"Cannot locate nodal variable %s in exodus file"</font>, vecname);
+<a name="line607">607: </a>  <font color="#B22222">/* Read local chunk from the file */</font>
+<a name="line608">608: </a>  <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(vNatural, &amp;xs, &amp;xe);
+<a name="line609">609: </a>  <a href="../../../../docs/manualpages/Vec/VecGetBlockSize.html#VecGetBlockSize">VecGetBlockSize</a>(vNatural, &amp;bs);
+<a name="line610">610: </a>  <font color="#4169E1">if</font> (bs == 1) {
+<a name="line611">611: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(vNatural, &amp;varray);
+<a name="line612">612: </a>    PetscStackCallStandard(ex_get_partial_var,(exoid, step, EX_NODAL, offset, 1, xs+1, xe-xs, varray));
+<a name="line613">613: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(vNatural, &amp;varray);
+<a name="line614">614: </a>  } <font color="#4169E1">else</font> {
+<a name="line615">615: </a>    <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>       compIS;
+<a name="line616">616: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> c;
+
+<a name="line618">618: </a>    <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, (xe-xs)/bs, xs, bs, &amp;compIS);
+<a name="line619">619: </a>    <font color="#4169E1">for</font> (c = 0; c &lt; bs; ++c) {
+<a name="line620">620: </a>      <a href="../../../../docs/manualpages/IS/ISStrideSetStride.html#ISStrideSetStride">ISStrideSetStride</a>(compIS, (xe-xs)/bs, xs+c, bs);
+<a name="line621">621: </a>      <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(vNatural, compIS, &amp;vComp);
+<a name="line622">622: </a>      <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(vComp, &amp;varray);
+<a name="line623">623: </a>      PetscStackCallStandard(ex_get_partial_var,(exoid, step, EX_NODAL, offset+c, 1, xs/bs+1, (xe-xs)/bs, varray));
+<a name="line624">624: </a>      <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(vComp, &amp;varray);
+<a name="line625">625: </a>      <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(vNatural, compIS, &amp;vComp);
+<a name="line626">626: </a>    }
+<a name="line627">627: </a>    <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;compIS);
+<a name="line628">628: </a>  }
+<a name="line629">629: </a>  <font color="#4169E1">if</font> (useNatural) {
+<a name="line630">630: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexNaturalToGlobalBegin.html#DMPlexNaturalToGlobalBegin">DMPlexNaturalToGlobalBegin</a>(dm, vNatural, v);
+<a name="line631">631: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexNaturalToGlobalEnd.html#DMPlexNaturalToGlobalEnd">DMPlexNaturalToGlobalEnd</a>(dm, vNatural, v);
+<a name="line632">632: </a>    <a href="../../../../docs/manualpages/DM/DMRestoreGlobalVector.html#DMRestoreGlobalVector">DMRestoreGlobalVector</a>(dm, &amp;vNatural);
+<a name="line633">633: </a>  }
+<a name="line634">634: </a>  <font color="#4169E1">return</font>(0);
+<a name="line635">635: </a>}
+
+<a name="line637">637: </a><font color="#B22222">/*</font>
+<a name="line638">638: </a><font color="#B22222">  VecViewPlex_ExodusII_Zonal_Internal - Write a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> corresponding to a zonal (cell based) field to an exodus file</font>
+
+<a name="line640">640: </a><font color="#B22222">  Collective on v</font>
+
+<a name="line642">642: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line643">643: </a><font color="#B22222">+ v  - The vector to be written</font>
+<a name="line644">644: </a><font color="#B22222">. exoid - the exodus id of a file (obtained from ex_open or ex_create for instance)</font>
+<a name="line645">645: </a><font color="#B22222">- step - the time step to write at (exodus steps are numbered starting from 1)</font>
+
+<a name="line647">647: </a><font color="#B22222">  Notes:</font>
+<a name="line648">648: </a><font color="#B22222">  The exodus result zonal variable index is obtained by comparing the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> name and the</font>
+<a name="line649">649: </a><font color="#B22222">  names of zonal variables declared in the exodus file. For instance for a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> named "V"</font>
+<a name="line650">650: </a><font color="#B22222">  the location in the exodus file will be the first match of "V", "V_X", "V_XX", "V_1", or "V_11"</font>
+<a name="line651">651: </a><font color="#B22222">  amongst all zonal variables.</font>
+
+<a name="line653">653: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line655">655: </a><font color="#B22222">.seealso: EXOGetVarIndex_Private(),DMPlexView_ExodusII_Internal(),VecViewPlex_ExodusII_Nodal_Internal(),VecLoadPlex_ExodusII_Nodal_Internal(),VecLoadPlex_ExodusII_Zonal_Internal()</font>
+<a name="line656">656: </a><font color="#B22222">*/</font>
+<a name="line657">657: </a><strong><font color="#4169E1"><a name="VecViewPlex_ExodusII_Zonal_Internal"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecViewPlex_ExodusII_Zonal_Internal(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v, int exoid, int step)</font></strong>
+<a name="line658">658: </a>{
+<a name="line659">659: </a>  <a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>          comm;
+<a name="line660">660: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>       size;
+<a name="line661">661: </a>  <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>                dm;
+<a name="line662">662: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>               vNatural, vComp;
+<a name="line663">663: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *varray;
+<a name="line664">664: </a>  const char       *vecname;
+<a name="line665">665: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          xs, xe, bs;
+<a name="line666">666: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         useNatural;
+<a name="line667">667: </a>  int               offset;
+<a name="line668">668: </a>  <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>                compIS;
+<a name="line669">669: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>         *csSize, *csID;
+<a name="line670">670: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          numCS, set, csxs = 0;
+<a name="line671">671: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+<a name="line674">674: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v, &amp;comm);
+<a name="line675">675: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm, &amp;size);
+<a name="line676">676: </a>  <a href="../../../../docs/manualpages/DM/VecGetDM.html#VecGetDM">VecGetDM</a>(v, &amp;dm);
+<a name="line677">677: </a>  <a href="../../../../docs/manualpages/DM/DMGetUseNatural.html#DMGetUseNatural">DMGetUseNatural</a>(dm, &amp;useNatural);
+<a name="line678">678: </a>  useNatural = useNatural &amp;&amp; size &gt; 1 ? <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line679">679: </a>  <font color="#4169E1">if</font> (useNatural) {
+<a name="line680">680: </a>    <a href="../../../../docs/manualpages/DM/DMGetGlobalVector.html#DMGetGlobalVector">DMGetGlobalVector</a>(dm, &amp;vNatural);
+<a name="line681">681: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexGlobalToNaturalBegin.html#DMPlexGlobalToNaturalBegin">DMPlexGlobalToNaturalBegin</a>(dm, v, vNatural);
+<a name="line682">682: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexGlobalToNaturalEnd.html#DMPlexGlobalToNaturalEnd">DMPlexGlobalToNaturalEnd</a>(dm, v, vNatural);
+<a name="line683">683: </a>  } <font color="#4169E1">else</font> {
+<a name="line684">684: </a>    vNatural = v;
+<a name="line685">685: </a>  }
+<a name="line686">686: </a>  <font color="#B22222">/* Get the location of the variable in the exodus file */</font>
+<a name="line687">687: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetName.html#PetscObjectGetName">PetscObjectGetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) v, &amp;vecname);
+<a name="line688">688: </a>  EXOGetVarIndex_Private(exoid, EX_ELEM_BLOCK, vecname, &amp;offset);
+<a name="line689">689: </a>  <font color="#4169E1">if</font> (!offset) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(comm, PETSC_ERR_FILE_UNEXPECTED, <font color="#666666">"Cannot locate zonal variable %s in exodus file\n"</font>, vecname);
+<a name="line690">690: </a>  <font color="#B22222">/* Write local chunk of the result in the exodus file</font>
+<a name="line691">691: </a><font color="#B22222">     exodus stores each component of a vector-valued field as a separate variable.</font>
+<a name="line692">692: </a><font color="#B22222">     We assume that they are stored sequentially</font>
+<a name="line693">693: </a><font color="#B22222">     Zonal variables are accessed one element block at a time, so we loop through the cell sets,</font>
+<a name="line694">694: </a><font color="#B22222">     but once the vector has been reordered to natural size, we cannot use the label informations</font>
+<a name="line695">695: </a><font color="#B22222">     to figure out what to save where. */</font>
+<a name="line696">696: </a>  numCS = ex_inquire_int(exoid, EX_INQ_ELEM_BLK);
+<a name="line697">697: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(numCS, &amp;csID, numCS, &amp;csSize);
+<a name="line698">698: </a>  PetscStackCallStandard(ex_get_ids,(exoid, EX_ELEM_BLOCK, csID));
+<a name="line699">699: </a>  <font color="#4169E1">for</font> (set = 0; set &lt; numCS; ++set) {
+<a name="line700">700: </a>    ex_block block;
+
+<a name="line702">702: </a>    block.id   = csID[set];
+<a name="line703">703: </a>    block.type = EX_ELEM_BLOCK;
+<a name="line704">704: </a>    PetscStackCallStandard(ex_get_block_param,(exoid, &amp;block));
+<a name="line705">705: </a>    csSize[set] = block.num_entry;
+<a name="line706">706: </a>  }
+<a name="line707">707: </a>  <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(vNatural, &amp;xs, &amp;xe);
+<a name="line708">708: </a>  <a href="../../../../docs/manualpages/Vec/VecGetBlockSize.html#VecGetBlockSize">VecGetBlockSize</a>(vNatural, &amp;bs);
+<a name="line709">709: </a>  <font color="#4169E1">if</font> (bs &gt; 1) {<a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(comm, (xe-xs)/bs, xs, bs, &amp;compIS);}
+<a name="line710">710: </a>  <font color="#4169E1">for</font> (set = 0; set &lt; numCS; set++) {
+<a name="line711">711: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> csLocalSize, c;
+
+<a name="line713">713: </a>    <font color="#B22222">/* range of indices for set setID[set]: csxs:csxs + csSize[set]-1</font>
+<a name="line714">714: </a><font color="#B22222">       local slice of zonal values:         xs/bs,xm/bs-1</font>
+<a name="line715">715: </a><font color="#B22222">       intersection:                        max(xs/bs,csxs),min(xm/bs-1,csxs + csSize[set]-1) */</font>
+<a name="line716">716: </a>    csLocalSize = <a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(0, <a href="../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(xe/bs, csxs+csSize[set]) - <a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(xs/bs, csxs));
+<a name="line717">717: </a>    <font color="#4169E1">if</font> (bs == 1) {
+<a name="line718">718: </a>      <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(vNatural, &amp;varray);
+<a name="line719">719: </a>      PetscStackCallStandard(ex_put_partial_var,(exoid, step, EX_ELEM_BLOCK, offset, csID[set], <a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(xs-csxs, 0)+1, csLocalSize, &amp;varray[<a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(0, csxs-xs)]));
+<a name="line720">720: </a>      <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(vNatural, &amp;varray);
+<a name="line721">721: </a>    } <font color="#4169E1">else</font> {
+<a name="line722">722: </a>      <font color="#4169E1">for</font> (c = 0; c &lt; bs; ++c) {
+<a name="line723">723: </a>        <a href="../../../../docs/manualpages/IS/ISStrideSetStride.html#ISStrideSetStride">ISStrideSetStride</a>(compIS, (xe-xs)/bs, xs+c, bs);
+<a name="line724">724: </a>        <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(vNatural, compIS, &amp;vComp);
+<a name="line725">725: </a>        <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(vComp, &amp;varray);
+<a name="line726">726: </a>        PetscStackCallStandard(ex_put_partial_var,(exoid, step, EX_ELEM_BLOCK, offset+c, csID[set], <a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(xs/bs-csxs, 0)+1, csLocalSize, &amp;varray[<a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(0, csxs-xs/bs)]));
+<a name="line727">727: </a>        <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(vComp, &amp;varray);
+<a name="line728">728: </a>        <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(vNatural, compIS, &amp;vComp);
+<a name="line729">729: </a>      }
+<a name="line730">730: </a>    }
+<a name="line731">731: </a>    csxs += csSize[set];
+<a name="line732">732: </a>  }
+<a name="line733">733: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(csID, csSize);
+<a name="line734">734: </a>  <font color="#4169E1">if</font> (bs &gt; 1) {<a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;compIS);}
+<a name="line735">735: </a>  <font color="#4169E1">if</font> (useNatural) {<a href="../../../../docs/manualpages/DM/DMRestoreGlobalVector.html#DMRestoreGlobalVector">DMRestoreGlobalVector</a>(dm,&amp;vNatural);}
+<a name="line736">736: </a>  <font color="#4169E1">return</font>(0);
+<a name="line737">737: </a>}
+
+<a name="line739">739: </a><font color="#B22222">/*</font>
+<a name="line740">740: </a><font color="#B22222">  VecLoadPlex_ExodusII_Zonal_Internal - Read a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> corresponding to a zonal (cell based) field from an exodus file</font>
+
+<a name="line742">742: </a><font color="#B22222">  Collective on v</font>
+
+<a name="line744">744: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line745">745: </a><font color="#B22222">+ v  - The vector to be written</font>
+<a name="line746">746: </a><font color="#B22222">. exoid - the exodus id of a file (obtained from ex_open or ex_create for instance)</font>
+<a name="line747">747: </a><font color="#B22222">- step - the time step to read at (exodus steps are numbered starting from 1)</font>
+
+<a name="line749">749: </a><font color="#B22222">  Notes:</font>
+<a name="line750">750: </a><font color="#B22222">  The exodus result zonal variable index is obtained by comparing the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> name and the</font>
+<a name="line751">751: </a><font color="#B22222">  names of zonal variables declared in the exodus file. For instance for a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> named "V"</font>
+<a name="line752">752: </a><font color="#B22222">  the location in the exodus file will be the first match of "V", "V_X", "V_XX", "V_1", or "V_11"</font>
+<a name="line753">753: </a><font color="#B22222">  amongst all zonal variables.</font>
+
+<a name="line755">755: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line757">757: </a><font color="#B22222">.seealso: EXOGetVarIndex_Private(), DMPlexView_ExodusII_Internal(), VecViewPlex_ExodusII_Nodal_Internal(), VecLoadPlex_ExodusII_Nodal_Internal(), VecLoadPlex_ExodusII_Zonal_Internal()</font>
+<a name="line758">758: </a><font color="#B22222">*/</font>
+<a name="line759">759: </a><strong><font color="#4169E1"><a name="VecLoadPlex_ExodusII_Zonal_Internal"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecLoadPlex_ExodusII_Zonal_Internal(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v, int exoid, int step)</font></strong>
+<a name="line760">760: </a>{
+<a name="line761">761: </a>  <a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>          comm;
+<a name="line762">762: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>       size;
+<a name="line763">763: </a>  <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>                dm;
+<a name="line764">764: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>               vNatural, vComp;
+<a name="line765">765: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>      *varray;
+<a name="line766">766: </a>  const char       *vecname;
+<a name="line767">767: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          xs, xe, bs;
+<a name="line768">768: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         useNatural;
+<a name="line769">769: </a>  int               offset;
+<a name="line770">770: </a>  <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>                compIS;
+<a name="line771">771: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>         *csSize, *csID;
+<a name="line772">772: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          numCS, set, csxs = 0;
+<a name="line773">773: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+<a name="line776">776: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,&amp;comm);
+<a name="line777">777: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm, &amp;size);
+<a name="line778">778: </a>  <a href="../../../../docs/manualpages/DM/VecGetDM.html#VecGetDM">VecGetDM</a>(v, &amp;dm);
+<a name="line779">779: </a>  <a href="../../../../docs/manualpages/DM/DMGetUseNatural.html#DMGetUseNatural">DMGetUseNatural</a>(dm, &amp;useNatural);
+<a name="line780">780: </a>  useNatural = useNatural &amp;&amp; size &gt; 1 ? <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line781">781: </a>  <font color="#4169E1">if</font> (useNatural) {<a href="../../../../docs/manualpages/DM/DMGetGlobalVector.html#DMGetGlobalVector">DMGetGlobalVector</a>(dm,&amp;vNatural);}
+<a name="line782">782: </a>  <font color="#4169E1">else</font>            {vNatural = v;}
+<a name="line783">783: </a>  <font color="#B22222">/* Get the location of the variable in the exodus file */</font>
+<a name="line784">784: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetName.html#PetscObjectGetName">PetscObjectGetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) v, &amp;vecname);
+<a name="line785">785: </a>  EXOGetVarIndex_Private(exoid, EX_ELEM_BLOCK, vecname, &amp;offset);
+<a name="line786">786: </a>  <font color="#4169E1">if</font> (!offset) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(comm, PETSC_ERR_FILE_UNEXPECTED, <font color="#666666">"Cannot locate zonal variable %s in exodus file\n"</font>, vecname);
+<a name="line787">787: </a>  <font color="#B22222">/* Read local chunk of the result in the exodus file</font>
+<a name="line788">788: </a><font color="#B22222">     exodus stores each component of a vector-valued field as a separate variable.</font>
+<a name="line789">789: </a><font color="#B22222">     We assume that they are stored sequentially</font>
+<a name="line790">790: </a><font color="#B22222">     Zonal variables are accessed one element block at a time, so we loop through the cell sets,</font>
+<a name="line791">791: </a><font color="#B22222">     but once the vector has been reordered to natural size, we cannot use the label informations</font>
+<a name="line792">792: </a><font color="#B22222">     to figure out what to save where. */</font>
+<a name="line793">793: </a>  numCS = ex_inquire_int(exoid, EX_INQ_ELEM_BLK);
+<a name="line794">794: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(numCS, &amp;csID, numCS, &amp;csSize);
+<a name="line795">795: </a>  PetscStackCallStandard(ex_get_ids,(exoid, EX_ELEM_BLOCK, csID));
+<a name="line796">796: </a>  <font color="#4169E1">for</font> (set = 0; set &lt; numCS; ++set) {
+<a name="line797">797: </a>    ex_block block;
+
+<a name="line799">799: </a>    block.id   = csID[set];
+<a name="line800">800: </a>    block.type = EX_ELEM_BLOCK;
+<a name="line801">801: </a>    PetscStackCallStandard(ex_get_block_param,(exoid, &amp;block));
+<a name="line802">802: </a>    csSize[set] = block.num_entry;
+<a name="line803">803: </a>  }
+<a name="line804">804: </a>  <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(vNatural, &amp;xs, &amp;xe);
+<a name="line805">805: </a>  <a href="../../../../docs/manualpages/Vec/VecGetBlockSize.html#VecGetBlockSize">VecGetBlockSize</a>(vNatural, &amp;bs);
+<a name="line806">806: </a>  <font color="#4169E1">if</font> (bs &gt; 1) {<a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(comm, (xe-xs)/bs, xs, bs, &amp;compIS);}
+<a name="line807">807: </a>  <font color="#4169E1">for</font> (set = 0; set &lt; numCS; ++set) {
+<a name="line808">808: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> csLocalSize, c;
+
+<a name="line810">810: </a>    <font color="#B22222">/* range of indices for set setID[set]: csxs:csxs + csSize[set]-1</font>
+<a name="line811">811: </a><font color="#B22222">       local slice of zonal values:         xs/bs,xm/bs-1</font>
+<a name="line812">812: </a><font color="#B22222">       intersection:                        max(xs/bs,csxs),min(xm/bs-1,csxs + csSize[set]-1) */</font>
+<a name="line813">813: </a>    csLocalSize = <a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(0, <a href="../../../../docs/manualpages/Sys/PetscMin.html#PetscMin">PetscMin</a>(xe/bs, csxs+csSize[set]) - <a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(xs/bs, csxs));
+<a name="line814">814: </a>    <font color="#4169E1">if</font> (bs == 1) {
+<a name="line815">815: </a>      <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(vNatural, &amp;varray);
+<a name="line816">816: </a>      PetscStackCallStandard(ex_get_partial_var,(exoid, step, EX_ELEM_BLOCK, offset, csID[set], <a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(xs-csxs, 0)+1, csLocalSize, &amp;varray[<a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(0, csxs-xs)]));
+<a name="line817">817: </a>      <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(vNatural, &amp;varray);
+<a name="line818">818: </a>    } <font color="#4169E1">else</font> {
+<a name="line819">819: </a>      <font color="#4169E1">for</font> (c = 0; c &lt; bs; ++c) {
+<a name="line820">820: </a>        <a href="../../../../docs/manualpages/IS/ISStrideSetStride.html#ISStrideSetStride">ISStrideSetStride</a>(compIS, (xe-xs)/bs, xs+c, bs);
+<a name="line821">821: </a>        <a href="../../../../docs/manualpages/Vec/VecGetSubVector.html#VecGetSubVector">VecGetSubVector</a>(vNatural, compIS, &amp;vComp);
+<a name="line822">822: </a>        <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(vComp, &amp;varray);
+<a name="line823">823: </a>        PetscStackCallStandard(ex_get_partial_var,(exoid, step, EX_ELEM_BLOCK, offset+c, csID[set], <a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(xs/bs-csxs, 0)+1, csLocalSize, &amp;varray[<a href="../../../../docs/manualpages/Sys/PetscMax.html#PetscMax">PetscMax</a>(0, csxs-xs/bs)]));
+<a name="line824">824: </a>        <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(vComp, &amp;varray);
+<a name="line825">825: </a>        <a href="../../../../docs/manualpages/Vec/VecRestoreSubVector.html#VecRestoreSubVector">VecRestoreSubVector</a>(vNatural, compIS, &amp;vComp);
+<a name="line826">826: </a>      }
+<a name="line827">827: </a>    }
+<a name="line828">828: </a>    csxs += csSize[set];
+<a name="line829">829: </a>  }
+<a name="line830">830: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(csID, csSize);
+<a name="line831">831: </a>  <font color="#4169E1">if</font> (bs &gt; 1) {<a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;compIS);}
+<a name="line832">832: </a>  <font color="#4169E1">if</font> (useNatural) {
+<a name="line833">833: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexNaturalToGlobalBegin.html#DMPlexNaturalToGlobalBegin">DMPlexNaturalToGlobalBegin</a>(dm, vNatural, v);
+<a name="line834">834: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexNaturalToGlobalEnd.html#DMPlexNaturalToGlobalEnd">DMPlexNaturalToGlobalEnd</a>(dm, vNatural, v);
+<a name="line835">835: </a>    <a href="../../../../docs/manualpages/DM/DMRestoreGlobalVector.html#DMRestoreGlobalVector">DMRestoreGlobalVector</a>(dm, &amp;vNatural);
+<a name="line836">836: </a>  }
+<a name="line837">837: </a>  <font color="#4169E1">return</font>(0);
+<a name="line838">838: </a>}
+<a name="line839">839: </a><font color="#A020F0">#endif</font>
+
+<a name="line841">841: </a><font color="#B22222">/*@C</font>
+<a name="line842">842: </a><font color="#B22222">  <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateExodusFromFile.html#DMPlexCreateExodusFromFile">DMPlexCreateExodusFromFile</a> - Create a DMPlex mesh from an ExodusII file.</font>
+
+<a name="line844">844: </a><font color="#B22222">  Collective</font>
+
+<a name="line846">846: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line847">847: </a><font color="#B22222">+ comm  - The MPI communicator</font>
+<a name="line848">848: </a><font color="#B22222">. filename - The name of the ExodusII file</font>
+<a name="line849">849: </a><font color="#B22222">- interpolate - Create faces and edges in the mesh</font>
+
+<a name="line851">851: </a><font color="#B22222">  Output Parameter:</font>
+<a name="line852">852: </a><font color="#B22222">. dm  - The <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> object representing the mesh</font>
+
+<a name="line854">854: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line856">856: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/DMPLEX/DMPLEX.html#DMPLEX">DMPLEX</a>, <a href="../../../../docs/manualpages/DM/DMCreate.html#DMCreate">DMCreate</a>(), <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateExodus.html#DMPlexCreateExodus">DMPlexCreateExodus</a>()</font>
+<a name="line857">857: </a><font color="#B22222">@*/</font>
+<a name="line858">858: </a><strong><font color="#4169E1"><a name="DMPlexCreateExodusFromFile"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateExodusFromFile.html#DMPlexCreateExodusFromFile">DMPlexCreateExodusFromFile</a>(<a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm, const char filename[], <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> interpolate, <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> *dm)</font></strong>
+<a name="line859">859: </a>{
+<a name="line860">860: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    rank;
+<a name="line862">862: </a><font color="#A020F0">#if defined(PETSC_HAVE_EXODUSII)</font>
+<a name="line863">863: </a>  int   CPU_word_size = <font color="#4169E1">sizeof</font>(<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>), IO_word_size = 0, exoid = -1;
+<a name="line864">864: </a>  float version;
+<a name="line865">865: </a><font color="#A020F0">#endif</font>
+
+<a name="line869">869: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(comm, &amp;rank);
+<a name="line870">870: </a><font color="#A020F0">#if defined(PETSC_HAVE_EXODUSII)</font>
+<a name="line871">871: </a>  <font color="#4169E1">if</font> (!rank) {
+<a name="line872">872: </a>    exoid = ex_open(filename, EX_READ, &amp;CPU_word_size, &amp;IO_word_size, &amp;version);
+<a name="line873">873: </a>    <font color="#4169E1">if</font> (exoid &lt;= 0) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_LIB, <font color="#666666">"ex_open(\"%s\",...) did not return a valid file ID"</font>, filename);
+<a name="line874">874: </a>  }
+<a name="line875">875: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateExodus.html#DMPlexCreateExodus">DMPlexCreateExodus</a>(comm, exoid, interpolate, dm);
+<a name="line876">876: </a>  <font color="#4169E1">if</font> (!rank) {PetscStackCallStandard(ex_close,(exoid));}
+<a name="line877">877: </a><font color="#A020F0">#else</font>
+<a name="line878">878: </a>  <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(comm, PETSC_ERR_SUP, <font color="#666666">"This method requires ExodusII support. Reconfigure using --download-exodusii"</font>);
+<a name="line879">879: </a><font color="#A020F0">#endif</font>
+<a name="line880">880: </a>  <font color="#4169E1">return</font>(0);
+<a name="line881">881: </a>}
+
+<a name="line883">883: </a><font color="#B22222">/*@</font>
+<a name="line884">884: </a><font color="#B22222">  <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateExodus.html#DMPlexCreateExodus">DMPlexCreateExodus</a> - Create a DMPlex mesh from an ExodusII file ID.</font>
+
+<a name="line886">886: </a><font color="#B22222">  Collective</font>
+
+<a name="line888">888: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line889">889: </a><font color="#B22222">+ comm  - The MPI communicator</font>
+<a name="line890">890: </a><font color="#B22222">. exoid - The ExodusII id associated with a exodus file and obtained using ex_open</font>
+<a name="line891">891: </a><font color="#B22222">- interpolate - Create faces and edges in the mesh</font>
+
+<a name="line893">893: </a><font color="#B22222">  Output Parameter:</font>
+<a name="line894">894: </a><font color="#B22222">. dm  - The <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> object representing the mesh</font>
+
+<a name="line896">896: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line898">898: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/DMPLEX/DMPLEX.html#DMPLEX">DMPLEX</a>, <a href="../../../../docs/manualpages/DM/DMCreate.html#DMCreate">DMCreate</a>()</font>
+<a name="line899">899: </a><font color="#B22222">@*/</font>
+<a name="line900">900: </a><strong><font color="#4169E1"><a name="DMPlexCreateExodus"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/DMPLEX/DMPlexCreateExodus.html#DMPlexCreateExodus">DMPlexCreateExodus</a>(<a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> exoid, <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> interpolate, <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> *dm)</font></strong>
+<a name="line901">901: </a>{
+<a name="line902">902: </a><font color="#A020F0">#if defined(PETSC_HAVE_EXODUSII)</font>
+<a name="line903">903: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    num_proc, rank;
+<a name="line904">904: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSection.html#PetscSection">PetscSection</a>   coordSection;
+<a name="line905">905: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            coordinates;
+<a name="line906">906: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *coords;
+<a name="line907">907: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       coordSize, v;
+<a name="line909">909: </a>  <font color="#B22222">/* Read from ex_get_init() */</font>
+<a name="line910">910: </a>  char title[PETSC_MAX_PATH_LEN+1];
+<a name="line911">911: </a>  int  dim    = 0, numVertices = 0, numCells = 0, numHybridCells = 0;
+<a name="line912">912: </a>  int  num_cs = 0, num_vs = 0, num_fs = 0;
+<a name="line913">913: </a><font color="#A020F0">#endif</font>
+
+<a name="line916">916: </a><font color="#A020F0">#if defined(PETSC_HAVE_EXODUSII)</font>
+<a name="line917">917: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(comm, &amp;rank);
+<a name="line918">918: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm, &amp;num_proc);
+<a name="line919">919: </a>  <a href="../../../../docs/manualpages/DM/DMCreate.html#DMCreate">DMCreate</a>(comm, dm);
+<a name="line920">920: </a>  <a href="../../../../docs/manualpages/DM/DMSetType.html#DMSetType">DMSetType</a>(*dm, <a href="../../../../docs/manualpages/DMPLEX/DMPLEX.html#DMPLEX">DMPLEX</a>);
+<a name="line921">921: </a>  <font color="#B22222">/* Open EXODUS II file and read basic informations on rank 0, then broadcast to all processors */</font>
+<a name="line922">922: </a>  <font color="#4169E1">if</font> (!rank) {
+<a name="line923">923: </a>    <a href="../../../../docs/manualpages/Sys/PetscMemzero.html#PetscMemzero">PetscMemzero</a>(title,PETSC_MAX_PATH_LEN+1);
+<a name="line924">924: </a>    PetscStackCallStandard(ex_get_init,(exoid, title, &amp;dim, &amp;numVertices, &amp;numCells, &amp;num_cs, &amp;num_vs, &amp;num_fs));
+<a name="line925">925: </a>    <font color="#4169E1">if</font> (!num_cs) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Exodus file does not contain any cell set\n"</font>);
+<a name="line926">926: </a>  }
+<a name="line927">927: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Bcast.html#MPI_Bcast">MPI_Bcast</a>(title, PETSC_MAX_PATH_LEN+1, MPI_CHAR, 0, comm);
+<a name="line928">928: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Bcast.html#MPI_Bcast">MPI_Bcast</a>(&amp;dim, 1, MPI_INT, 0, comm);
+<a name="line929">929: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) *dm, title);
+<a name="line930">930: </a>  <a href="../../../../docs/manualpages/DM/DMSetDimension.html#DMSetDimension">DMSetDimension</a>(*dm, dim);
+<a name="line931">931: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexSetChart.html#DMPlexSetChart">DMPlexSetChart</a>(*dm, 0, numCells+numVertices);
+
+<a name="line933">933: </a>  <font color="#B22222">/* Read cell sets information */</font>
+<a name="line934">934: </a>  <font color="#4169E1">if</font> (!rank) {
+<a name="line935">935: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *cone;
+<a name="line936">936: </a>    int      c, cs, ncs, c_loc, v, v_loc;
+<a name="line937">937: </a>    <font color="#B22222">/* Read from ex_get_elem_blk_ids() */</font>
+<a name="line938">938: </a>    int *cs_id, *cs_order;
+<a name="line939">939: </a>    <font color="#B22222">/* Read from ex_get_elem_block() */</font>
+<a name="line940">940: </a>    char buffer[PETSC_MAX_PATH_LEN+1];
+<a name="line941">941: </a>    int  num_cell_in_set, num_vertex_per_cell, num_hybrid, num_attr;
+<a name="line942">942: </a>    <font color="#B22222">/* Read from ex_get_elem_conn() */</font>
+<a name="line943">943: </a>    int *cs_connect;
+
+<a name="line945">945: </a>    <font color="#B22222">/* Get cell sets IDs */</font>
+<a name="line946">946: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(num_cs, &amp;cs_id, num_cs, &amp;cs_order);
+<a name="line947">947: </a>    PetscStackCallStandard(ex_get_ids,(exoid, EX_ELEM_BLOCK, cs_id));
+<a name="line948">948: </a>    <font color="#B22222">/* Read the cell set connectivity table and build mesh topology</font>
+<a name="line949">949: </a><font color="#B22222">       EXO standard requires that cells in cell sets be numbered sequentially and be pairwise disjoint. */</font>
+<a name="line950">950: </a>    <font color="#B22222">/* Check for a hybrid mesh */</font>
+<a name="line951">951: </a>    <font color="#4169E1">for</font> (cs = 0, num_hybrid = 0; cs &lt; num_cs; ++cs) {
+<a name="line952">952: </a>      PetscStackCallStandard(ex_get_block,(exoid, EX_ELEM_BLOCK, cs_id[cs], buffer, &amp;num_cell_in_set,&amp;num_vertex_per_cell, 0, 0, &amp;num_attr));
+<a name="line953">953: </a>      <font color="#4169E1">switch</font> (dim) {
+<a name="line954">954: </a>        <font color="#4169E1">case</font> 3:
+<a name="line955">955: </a>        <font color="#4169E1">switch</font> (num_vertex_per_cell) {
+<a name="line956">956: </a>          <font color="#4169E1">case</font> 6:
+<a name="line957">957: </a>            cs_order[cs] = cs;
+<a name="line958">958: </a>            numHybridCells += num_cell_in_set;
+<a name="line959">959: </a>            ++num_hybrid;
+<a name="line960">960: </a>          <font color="#4169E1">break</font>;
+<a name="line961">961: </a><strong><font color="#FF0000">          default:</font></strong>
+<a name="line962">962: </a>            <font color="#4169E1">for</font> (c = cs; c &gt; cs-num_hybrid; --c) cs_order[c] = cs_order[c-1];
+<a name="line963">963: </a>            cs_order[cs-num_hybrid] = cs;
+<a name="line964">964: </a>        }
+<a name="line965">965: </a>        <font color="#4169E1">break</font>;
+<a name="line966">966: </a><strong><font color="#FF0000">      default:</font></strong>
+<a name="line967">967: </a>        <font color="#4169E1">for</font> (c = cs; c &gt; cs-num_hybrid; --c) cs_order[c] = cs_order[c-1];
+<a name="line968">968: </a>        cs_order[cs-num_hybrid] = cs;
+<a name="line969">969: </a>      }
+<a name="line970">970: </a>    }
+<a name="line971">971: </a>    <font color="#4169E1">if</font> (num_hybrid) {<a href="../../../../docs/manualpages/DMPLEX/DMPlexSetHybridBounds.html#DMPlexSetHybridBounds">DMPlexSetHybridBounds</a>(*dm, numCells-numHybridCells, <a href="../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>, <a href="../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>, <a href="../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>);}
+<a name="line972">972: </a>    <font color="#B22222">/* First set sizes */</font>
+<a name="line973">973: </a>    <font color="#4169E1">for</font> (ncs = 0, c = 0; ncs &lt; num_cs; ++ncs) {
+<a name="line974">974: </a>      const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> cs = cs_order[ncs];
+<a name="line975">975: </a>      PetscStackCallStandard(ex_get_block,(exoid, EX_ELEM_BLOCK, cs_id[cs], buffer, &amp;num_cell_in_set,&amp;num_vertex_per_cell, 0, 0, &amp;num_attr));
+<a name="line976">976: </a>      <font color="#4169E1">for</font> (c_loc = 0; c_loc &lt; num_cell_in_set; ++c_loc, ++c) {
+<a name="line977">977: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexSetConeSize.html#DMPlexSetConeSize">DMPlexSetConeSize</a>(*dm, c, num_vertex_per_cell);
+<a name="line978">978: </a>      }
+<a name="line979">979: </a>    }
+<a name="line980">980: </a>    <a href="../../../../docs/manualpages/DM/DMSetUp.html#DMSetUp">DMSetUp</a>(*dm);
+<a name="line981">981: </a>    <font color="#4169E1">for</font> (ncs = 0, c = 0; ncs &lt; num_cs; ++ncs) {
+<a name="line982">982: </a>      const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> cs = cs_order[ncs];
+<a name="line983">983: </a>      PetscStackCallStandard(ex_get_block,(exoid, EX_ELEM_BLOCK, cs_id[cs], buffer, &amp;num_cell_in_set, &amp;num_vertex_per_cell, 0, 0, &amp;num_attr));
+<a name="line984">984: </a>      <a href="../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(num_vertex_per_cell*num_cell_in_set,&amp;cs_connect,num_vertex_per_cell,&amp;cone);
+<a name="line985">985: </a>      PetscStackCallStandard(ex_get_conn,(exoid, EX_ELEM_BLOCK, cs_id[cs], cs_connect,NULL,NULL));
+<a name="line986">986: </a>      <font color="#B22222">/* EXO uses Fortran-based indexing, DMPlex uses C-style and numbers cell first then vertices. */</font>
+<a name="line987">987: </a>      <font color="#4169E1">for</font> (c_loc = 0, v = 0; c_loc &lt; num_cell_in_set; ++c_loc, ++c) {
+<a name="line988">988: </a>        <font color="#4169E1">for</font> (v_loc = 0; v_loc &lt; num_vertex_per_cell; ++v_loc, ++v) {
+<a name="line989">989: </a>          cone[v_loc] = cs_connect[v]+numCells-1;
+<a name="line990">990: </a>        }
+<a name="line991">991: </a>        <font color="#4169E1">if</font> (dim == 3) {
+<a name="line992">992: </a>          <font color="#B22222">/* Tetrahedra are inverted */</font>
+<a name="line993">993: </a>          <font color="#4169E1">if</font> (num_vertex_per_cell == 4) {
+<a name="line994">994: </a>            <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> tmp = cone[0];
+<a name="line995">995: </a>            cone[0] = cone[1];
+<a name="line996">996: </a>            cone[1] = tmp;
+<a name="line997">997: </a>          }
+<a name="line998">998: </a>          <font color="#B22222">/* Hexahedra are inverted */</font>
+<a name="line999">999: </a>          <font color="#4169E1">if</font> (num_vertex_per_cell == 8) {
+<a name="line1000">1000: </a>            <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> tmp = cone[1];
+<a name="line1001">1001: </a>            cone[1] = cone[3];
+<a name="line1002">1002: </a>            cone[3] = tmp;
+<a name="line1003">1003: </a>          }
+<a name="line1004">1004: </a>        }
+<a name="line1005">1005: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexSetCone.html#DMPlexSetCone">DMPlexSetCone</a>(*dm, c, cone);
+<a name="line1006">1006: </a>        <a href="../../../../docs/manualpages/DM/DMSetLabelValue.html#DMSetLabelValue">DMSetLabelValue</a>(*dm, <font color="#666666">"Cell Sets"</font>, c, cs_id[cs]);
+<a name="line1007">1007: </a>      }
+<a name="line1008">1008: </a>      <a href="../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(cs_connect,cone);
+<a name="line1009">1009: </a>    }
+<a name="line1010">1010: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(cs_id, cs_order);
+<a name="line1011">1011: </a>  }
+<a name="line1012">1012: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexSymmetrize.html#DMPlexSymmetrize">DMPlexSymmetrize</a>(*dm);
+<a name="line1013">1013: </a>  <a href="../../../../docs/manualpages/DMPLEX/DMPlexStratify.html#DMPlexStratify">DMPlexStratify</a>(*dm);
+<a name="line1014">1014: </a>  <font color="#4169E1">if</font> (interpolate) {
+<a name="line1015">1015: </a>    <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> idm;
+
+<a name="line1017">1017: </a>    <a href="../../../../docs/manualpages/DMPLEX/DMPlexInterpolate.html#DMPlexInterpolate">DMPlexInterpolate</a>(*dm, &amp;idm);
+<a name="line1018">1018: </a>    <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(dm);
+<a name="line1019">1019: </a>    *dm  = idm;
+<a name="line1020">1020: </a>  }
+
+<a name="line1022">1022: </a>  <font color="#B22222">/* Create vertex set label */</font>
+<a name="line1023">1023: </a>  <font color="#4169E1">if</font> (!rank &amp;&amp; (num_vs &gt; 0)) {
+<a name="line1024">1024: </a>    int vs, v;
+<a name="line1025">1025: </a>    <font color="#B22222">/* Read from ex_get_node_set_ids() */</font>
+<a name="line1026">1026: </a>    int *vs_id;
+<a name="line1027">1027: </a>    <font color="#B22222">/* Read from ex_get_node_set_param() */</font>
+<a name="line1028">1028: </a>    int num_vertex_in_set;
+<a name="line1029">1029: </a>    <font color="#B22222">/* Read from ex_get_node_set() */</font>
+<a name="line1030">1030: </a>    int *vs_vertex_list;
+
+<a name="line1032">1032: </a>    <font color="#B22222">/* Get vertex set ids */</font>
+<a name="line1033">1033: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(num_vs, &amp;vs_id);
+<a name="line1034">1034: </a>    PetscStackCallStandard(ex_get_ids,(exoid, EX_NODE_SET, vs_id));
+<a name="line1035">1035: </a>    <font color="#4169E1">for</font> (vs = 0; vs &lt; num_vs; ++vs) {
+<a name="line1036">1036: </a>      PetscStackCallStandard(ex_get_set_param,(exoid, EX_NODE_SET, vs_id[vs], &amp;num_vertex_in_set, NULL));
+<a name="line1037">1037: </a>      <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(num_vertex_in_set, &amp;vs_vertex_list);
+<a name="line1038">1038: </a>      PetscStackCallStandard(ex_get_set,(exoid, EX_NODE_SET, vs_id[vs], vs_vertex_list, NULL));
+<a name="line1039">1039: </a>      <font color="#4169E1">for</font> (v = 0; v &lt; num_vertex_in_set; ++v) {
+<a name="line1040">1040: </a>        <a href="../../../../docs/manualpages/DM/DMSetLabelValue.html#DMSetLabelValue">DMSetLabelValue</a>(*dm, <font color="#666666">"Vertex Sets"</font>, vs_vertex_list[v]+numCells-1, vs_id[vs]);
+<a name="line1041">1041: </a>      }
+<a name="line1042">1042: </a>      <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vs_vertex_list);
+<a name="line1043">1043: </a>    }
+<a name="line1044">1044: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(vs_id);
+<a name="line1045">1045: </a>  }
+<a name="line1046">1046: </a>  <font color="#B22222">/* Read coordinates */</font>
+<a name="line1047">1047: </a>  <a href="../../../../docs/manualpages/DM/DMGetCoordinateSection.html#DMGetCoordinateSection">DMGetCoordinateSection</a>(*dm, &amp;coordSection);
+<a name="line1048">1048: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetNumFields.html#PetscSectionSetNumFields">PetscSectionSetNumFields</a>(coordSection, 1);
+<a name="line1049">1049: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetFieldComponents.html#PetscSectionSetFieldComponents">PetscSectionSetFieldComponents</a>(coordSection, 0, dim);
+<a name="line1050">1050: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetChart.html#PetscSectionSetChart">PetscSectionSetChart</a>(coordSection, numCells, numCells + numVertices);
+<a name="line1051">1051: </a>  <font color="#4169E1">for</font> (v = numCells; v &lt; numCells+numVertices; ++v) {
+<a name="line1052">1052: </a>    <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetDof.html#PetscSectionSetDof">PetscSectionSetDof</a>(coordSection, v, dim);
+<a name="line1053">1053: </a>    <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetFieldDof.html#PetscSectionSetFieldDof">PetscSectionSetFieldDof</a>(coordSection, v, 0, dim);
+<a name="line1054">1054: </a>  }
+<a name="line1055">1055: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSectionSetUp.html#PetscSectionSetUp">PetscSectionSetUp</a>(coordSection);
+<a name="line1056">1056: </a>  <a href="../../../../docs/manualpages/PetscSection/PetscSectionGetStorageSize.html#PetscSectionGetStorageSize">PetscSectionGetStorageSize</a>(coordSection, &amp;coordSize);
+<a name="line1057">1057: </a>  <a href="../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, &amp;coordinates);
+<a name="line1058">1058: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) coordinates, <font color="#666666">"coordinates"</font>);
+<a name="line1059">1059: </a>  <a href="../../../../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a>(coordinates, coordSize, <a href="../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>);
+<a name="line1060">1060: </a>  <a href="../../../../docs/manualpages/Vec/VecSetBlockSize.html#VecSetBlockSize">VecSetBlockSize</a>(coordinates, dim);
+<a name="line1061">1061: </a>  <a href="../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(coordinates,<a href="../../../../docs/manualpages/Vec/VECSTANDARD.html#VECSTANDARD">VECSTANDARD</a>);
+<a name="line1062">1062: </a>  <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(coordinates, &amp;coords);
+<a name="line1063">1063: </a>  <font color="#4169E1">if</font> (!rank) {
+<a name="line1064">1064: </a>    <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *x, *y, *z;
+
+<a name="line1066">1066: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc3.html#PetscMalloc3">PetscMalloc3</a>(numVertices,&amp;x,numVertices,&amp;y,numVertices,&amp;z);
+<a name="line1067">1067: </a>    PetscStackCallStandard(ex_get_coord,(exoid, x, y, z));
+<a name="line1068">1068: </a>    <font color="#4169E1">if</font> (dim &gt; 0) {
+<a name="line1069">1069: </a>      <font color="#4169E1">for</font> (v = 0; v &lt; numVertices; ++v) coords[v*dim+0] = x[v];
+<a name="line1070">1070: </a>    }
+<a name="line1071">1071: </a>    <font color="#4169E1">if</font> (dim &gt; 1) {
+<a name="line1072">1072: </a>      <font color="#4169E1">for</font> (v = 0; v &lt; numVertices; ++v) coords[v*dim+1] = y[v];
+<a name="line1073">1073: </a>    }
+<a name="line1074">1074: </a>    <font color="#4169E1">if</font> (dim &gt; 2) {
+<a name="line1075">1075: </a>      <font color="#4169E1">for</font> (v = 0; v &lt; numVertices; ++v) coords[v*dim+2] = z[v];
+<a name="line1076">1076: </a>    }
+<a name="line1077">1077: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(x,y,z);
+<a name="line1078">1078: </a>  }
+<a name="line1079">1079: </a>  <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(coordinates, &amp;coords);
+<a name="line1080">1080: </a>  <a href="../../../../docs/manualpages/DM/DMSetCoordinatesLocal.html#DMSetCoordinatesLocal">DMSetCoordinatesLocal</a>(*dm, coordinates);
+<a name="line1081">1081: </a>  <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;coordinates);
+
+<a name="line1083">1083: </a>  <font color="#B22222">/* Create side set label */</font>
+<a name="line1084">1084: </a>  <font color="#4169E1">if</font> (!rank &amp;&amp; interpolate &amp;&amp; (num_fs &gt; 0)) {
+<a name="line1085">1085: </a>    int fs, f, voff;
+<a name="line1086">1086: </a>    <font color="#B22222">/* Read from ex_get_side_set_ids() */</font>
+<a name="line1087">1087: </a>    int *fs_id;
+<a name="line1088">1088: </a>    <font color="#B22222">/* Read from ex_get_side_set_param() */</font>
+<a name="line1089">1089: </a>    int num_side_in_set;
+<a name="line1090">1090: </a>    <font color="#B22222">/* Read from ex_get_side_set_node_list() */</font>
+<a name="line1091">1091: </a>    int *fs_vertex_count_list, *fs_vertex_list;
+<a name="line1092">1092: </a>    <font color="#B22222">/* Read side set labels */</font>
+<a name="line1093">1093: </a>    char fs_name[MAX_STR_LENGTH+1];
+
+<a name="line1095">1095: </a>    <font color="#B22222">/* Get side set ids */</font>
+<a name="line1096">1096: </a>    <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(num_fs, &amp;fs_id);
+<a name="line1097">1097: </a>    PetscStackCallStandard(ex_get_ids,(exoid, EX_SIDE_SET, fs_id));
+<a name="line1098">1098: </a>    <font color="#4169E1">for</font> (fs = 0; fs &lt; num_fs; ++fs) {
+<a name="line1099">1099: </a>      PetscStackCallStandard(ex_get_set_param,(exoid, EX_SIDE_SET, fs_id[fs], &amp;num_side_in_set, NULL));
+<a name="line1100">1100: </a>      <a href="../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(num_side_in_set,&amp;fs_vertex_count_list,num_side_in_set*4,&amp;fs_vertex_list);
+<a name="line1101">1101: </a>      PetscStackCallStandard(ex_get_side_set_node_list,(exoid, fs_id[fs], fs_vertex_count_list, fs_vertex_list));
+<a name="line1102">1102: </a>      <font color="#B22222">/* Get the specific name associated with this side set ID. */</font>
+<a name="line1103">1103: </a>      int fs_name_err = ex_get_name(exoid, EX_SIDE_SET, fs_id[fs], fs_name);
+<a name="line1104">1104: </a>      <font color="#4169E1">for</font> (f = 0, voff = 0; f &lt; num_side_in_set; ++f) {
+<a name="line1105">1105: </a>        const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *faces   = NULL;
+<a name="line1106">1106: </a>        <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       faceSize = fs_vertex_count_list[f], numFaces;
+<a name="line1107">1107: </a>        <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       faceVertices[4], v;
+
+<a name="line1109">1109: </a>        <font color="#4169E1">if</font> (faceSize &gt; 4) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"ExodusII side cannot have %d &gt; 4 vertices"</font>, faceSize);
+<a name="line1110">1110: </a>        <font color="#4169E1">for</font> (v = 0; v &lt; faceSize; ++v, ++voff) {
+<a name="line1111">1111: </a>          faceVertices[v] = fs_vertex_list[voff]+numCells-1;
+<a name="line1112">1112: </a>        }
+<a name="line1113">1113: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexGetFullJoin.html#DMPlexGetFullJoin">DMPlexGetFullJoin</a>(*dm, faceSize, faceVertices, &amp;numFaces, &amp;faces);
+<a name="line1114">1114: </a>        <font color="#4169E1">if</font> (numFaces != 1) <a href="../../../../docs/manualpages/Sys/SETERRQ3.html#SETERRQ3">SETERRQ3</a>(comm, PETSC_ERR_ARG_WRONG, <font color="#666666">"Invalid ExodusII side %d in set %d maps to %d faces"</font>, f, fs, numFaces);
+<a name="line1115">1115: </a>        <a href="../../../../docs/manualpages/DM/DMSetLabelValue.html#DMSetLabelValue">DMSetLabelValue</a>(*dm, <font color="#666666">"Face Sets"</font>, faces[0], fs_id[fs]);
+<a name="line1116">1116: </a>        <font color="#B22222">/* Only add the label if one has been detected for this side set. */</font>
+<a name="line1117">1117: </a>        <font color="#4169E1">if</font> (!fs_name_err) {
+<a name="line1118">1118: </a>          <a href="../../../../docs/manualpages/DM/DMSetLabelValue.html#DMSetLabelValue">DMSetLabelValue</a>(*dm, fs_name, faces[0], fs_id[fs]);
+<a name="line1119">1119: </a>        }
+<a name="line1120">1120: </a>        <a href="../../../../docs/manualpages/DMPLEX/DMPlexRestoreJoin.html#DMPlexRestoreJoin">DMPlexRestoreJoin</a>(*dm, faceSize, faceVertices, &amp;numFaces, &amp;faces);
+<a name="line1121">1121: </a>      }
+<a name="line1122">1122: </a>      <a href="../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(fs_vertex_count_list,fs_vertex_list);
+<a name="line1123">1123: </a>    }
+<a name="line1124">1124: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(fs_id);
+<a name="line1125">1125: </a>  }
+<a name="line1126">1126: </a><font color="#A020F0">#else</font>
+<a name="line1127">1127: </a>  <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(comm, PETSC_ERR_SUP, <font color="#666666">"This method requires ExodusII support. Reconfigure using --download-exodusii"</font>);
+<a name="line1128">1128: </a><font color="#A020F0">#endif</font>
+<a name="line1129">1129: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1130">1130: </a>}
+</pre>
+</body>
+
+</html>

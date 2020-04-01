@@ -1,0 +1,1668 @@
+<center><a href="vector.c">Actual source code: vector.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/vec/vec/interface/vector.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:34:43+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/vec/vec/interface/vector.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a><font color="#B22222">/*</font>
+<a name="line2">  2: </a><font color="#B22222">     Provides the interface functions for vector operations that do NOT have <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>/<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> in the signature</font>
+<a name="line3">  3: </a><font color="#B22222">   These are the vector functions the user calls.</font>
+<a name="line4">  4: </a><font color="#B22222">*/</font>
+<a name="line5">  5: </a> #include <A href="../../../../include/petsc/private/vecimpl.h.html">&lt;petsc/private/vecimpl.h&gt;</A>
+
+<a name="line7">  7: </a><font color="#B22222">/* Logging support */</font>
+<a name="line8">  8: </a><a href="../../../../docs/manualpages/Sys/PetscClassId.html#PetscClassId">PetscClassId</a>  VEC_CLASSID;
+<a name="line9">  9: </a><a href="../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> VEC_View, VEC_Max, VEC_Min, VEC_Dot, VEC_MDot, VEC_TDot;
+<a name="line10"> 10: </a><a href="../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> VEC_Norm, VEC_Normalize, VEC_Scale, VEC_Copy, VEC_Set, VEC_AXPY, VEC_AYPX, VEC_WAXPY;
+<a name="line11"> 11: </a><a href="../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> VEC_MTDot, VEC_MAXPY, VEC_Swap, VEC_AssemblyBegin, VEC_ScatterBegin, VEC_ScatterEnd;
+<a name="line12"> 12: </a><a href="../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> VEC_AssemblyEnd, VEC_PointwiseMult, VEC_SetValues, VEC_Load;
+<a name="line13"> 13: </a><a href="../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> VEC_SetRandom, VEC_ReduceArithmetic, VEC_ReduceCommunication,VEC_ReduceBegin,VEC_ReduceEnd,VEC_Ops;
+<a name="line14"> 14: </a><a href="../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> VEC_DotNorm2, VEC_AXPBYPCZ;
+<a name="line15"> 15: </a><a href="../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> VEC_ViennaCLCopyFromGPU, VEC_ViennaCLCopyToGPU;
+<a name="line16"> 16: </a><a href="../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> VEC_CUDACopyFromGPU, VEC_CUDACopyToGPU;
+<a name="line17"> 17: </a><a href="../../../../docs/manualpages/Profiling/PetscLogEvent.html#PetscLogEvent">PetscLogEvent</a> VEC_CUDACopyFromGPUSome, VEC_CUDACopyToGPUSome;
+
+<a name="line19"> 19: </a><font color="#B22222">/*@</font>
+<a name="line20"> 20: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecStashGetInfo.html#VecStashGetInfo">VecStashGetInfo</a> - Gets how many values are currently in the vector stash, i.e. need</font>
+<a name="line21"> 21: </a><font color="#B22222">       to be communicated to other processors during the <a href="../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a>/End() process</font>
+
+<a name="line23"> 23: </a><font color="#B22222">    Not collective</font>
+
+<a name="line25"> 25: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line26"> 26: </a><font color="#B22222">.   vec - the vector</font>
+
+<a name="line28"> 28: </a><font color="#B22222">   Output Parameters:</font>
+<a name="line29"> 29: </a><font color="#B22222">+   nstash   - the size of the stash</font>
+<a name="line30"> 30: </a><font color="#B22222">.   reallocs - the number of additional mallocs incurred.</font>
+<a name="line31"> 31: </a><font color="#B22222">.   bnstash   - the size of the block stash</font>
+<a name="line32"> 32: </a><font color="#B22222">-   breallocs - the number of additional mallocs incurred.in the block stash</font>
+
+<a name="line34"> 34: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line36"> 36: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a>(), <a href="../../../../docs/manualpages/Vec/VecAssemblyEnd.html#VecAssemblyEnd">VecAssemblyEnd</a>(), <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>, <a href="../../../../docs/manualpages/Vec/VecStashSetInitialSize.html#VecStashSetInitialSize">VecStashSetInitialSize</a>(), <a href="../../../../docs/manualpages/Vec/VecStashView.html#VecStashView">VecStashView</a>()</font>
+
+<a name="line38"> 38: </a><font color="#B22222">@*/</font>
+<a name="line39"> 39: </a><strong><font color="#4169E1"><a name="VecStashGetInfo"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecStashGetInfo.html#VecStashGetInfo">VecStashGetInfo</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *nstash,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *reallocs,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *bnstash,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *breallocs)</font></strong>
+<a name="line40"> 40: </a>{
+
+<a name="line44"> 44: </a>  VecStashGetInfo_Private(&amp;vec-&gt;stash,nstash,reallocs);
+<a name="line45"> 45: </a>  VecStashGetInfo_Private(&amp;vec-&gt;bstash,bnstash,breallocs);
+<a name="line46"> 46: </a>  <font color="#4169E1">return</font>(0);
+<a name="line47"> 47: </a>}
+
+<a name="line49"> 49: </a><font color="#B22222">/*@</font>
+<a name="line50"> 50: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecSetLocalToGlobalMapping.html#VecSetLocalToGlobalMapping">VecSetLocalToGlobalMapping</a> - Sets a local numbering to global numbering used</font>
+<a name="line51"> 51: </a><font color="#B22222">   by the routine <a href="../../../../docs/manualpages/Vec/VecSetValuesLocal.html#VecSetValuesLocal">VecSetValuesLocal</a>() to allow users to insert vector entries</font>
+<a name="line52"> 52: </a><font color="#B22222">   using a local (per-processor) numbering.</font>
+
+<a name="line54"> 54: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line56"> 56: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line57"> 57: </a><font color="#B22222">+  x - vector</font>
+<a name="line58"> 58: </a><font color="#B22222">-  mapping - mapping created with <a href="../../../../docs/manualpages/IS/ISLocalToGlobalMappingCreate.html#ISLocalToGlobalMappingCreate">ISLocalToGlobalMappingCreate</a>() or <a href="../../../../docs/manualpages/IS/ISLocalToGlobalMappingCreateIS.html#ISLocalToGlobalMappingCreateIS">ISLocalToGlobalMappingCreateIS</a>()</font>
+
+<a name="line60"> 60: </a><font color="#B22222">   Notes:</font>
+<a name="line61"> 61: </a><font color="#B22222">   All vectors obtained with <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>() from this vector inherit the same mapping.</font>
+
+<a name="line63"> 63: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line65"> 65: </a><font color="#B22222">seealso:  <a href="../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a>(), <a href="../../../../docs/manualpages/Vec/VecAssemblyEnd.html#VecAssemblyEnd">VecAssemblyEnd</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValuesLocal.html#VecSetValuesLocal">VecSetValuesLocal</a>(),</font>
+<a name="line66"> 66: </a><font color="#B22222">           <a href="../../../../docs/manualpages/Vec/VecSetLocalToGlobalMapping.html#VecSetLocalToGlobalMapping">VecSetLocalToGlobalMapping</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValuesBlockedLocal.html#VecSetValuesBlockedLocal">VecSetValuesBlockedLocal</a>()</font>
+<a name="line67"> 67: </a><font color="#B22222">@*/</font>
+<a name="line68"> 68: </a><strong><font color="#4169E1"><a name="VecSetLocalToGlobalMapping"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecSetLocalToGlobalMapping.html#VecSetLocalToGlobalMapping">VecSetLocalToGlobalMapping</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/IS/ISLocalToGlobalMapping.html#ISLocalToGlobalMapping">ISLocalToGlobalMapping</a> mapping)</font></strong>
+<a name="line69"> 69: </a>{
+
+
+<a name="line76"> 76: </a>  <font color="#4169E1">if</font> (x-&gt;ops-&gt;setlocaltoglobalmapping) {
+<a name="line77"> 77: </a>    (*x-&gt;ops-&gt;setlocaltoglobalmapping)(x,mapping);
+<a name="line78"> 78: </a>  } <font color="#4169E1">else</font> {
+<a name="line79"> 79: </a>    <a href="../../../../docs/manualpages/IS/PetscLayoutSetISLocalToGlobalMapping.html#PetscLayoutSetISLocalToGlobalMapping">PetscLayoutSetISLocalToGlobalMapping</a>(x-&gt;map,mapping);
+<a name="line80"> 80: </a>  }
+<a name="line81"> 81: </a>  <font color="#4169E1">return</font>(0);
+<a name="line82"> 82: </a>}
+
+<a name="line84"> 84: </a><font color="#B22222">/*@</font>
+<a name="line85"> 85: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecGetLocalToGlobalMapping.html#VecGetLocalToGlobalMapping">VecGetLocalToGlobalMapping</a> - Gets the local-to-global numbering set by <a href="../../../../docs/manualpages/Vec/VecSetLocalToGlobalMapping.html#VecSetLocalToGlobalMapping">VecSetLocalToGlobalMapping</a>()</font>
+
+<a name="line87"> 87: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line89"> 89: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line90"> 90: </a><font color="#B22222">.  X - the vector</font>
+
+<a name="line92"> 92: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line93"> 93: </a><font color="#B22222">.  mapping - the mapping</font>
+
+<a name="line95"> 95: </a><font color="#B22222">   Level: advanced</font>
+
+
+<a name="line98"> 98: </a><font color="#B22222">.seealso:  <a href="../../../../docs/manualpages/Vec/VecSetValuesLocal.html#VecSetValuesLocal">VecSetValuesLocal</a>()</font>
+<a name="line99"> 99: </a><font color="#B22222">@*/</font>
+<a name="line100">100: </a><strong><font color="#4169E1"><a name="VecGetLocalToGlobalMapping"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecGetLocalToGlobalMapping.html#VecGetLocalToGlobalMapping">VecGetLocalToGlobalMapping</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X,<a href="../../../../docs/manualpages/IS/ISLocalToGlobalMapping.html#ISLocalToGlobalMapping">ISLocalToGlobalMapping</a> *mapping)</font></strong>
+<a name="line101">101: </a>{
+<a name="line106">106: </a>  *mapping = X-&gt;map-&gt;mapping;
+<a name="line107">107: </a>  <font color="#4169E1">return</font>(0);
+<a name="line108">108: </a>}
+
+<a name="line110">110: </a><font color="#B22222">/*@</font>
+<a name="line111">111: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a> - Begins assembling the vector.  This routine should</font>
+<a name="line112">112: </a><font color="#B22222">   be called after completing all calls to <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>().</font>
+
+<a name="line114">114: </a><font color="#B22222">   Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line116">116: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line117">117: </a><font color="#B22222">.  vec - the vector</font>
+
+<a name="line119">119: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line121">121: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecAssemblyEnd.html#VecAssemblyEnd">VecAssemblyEnd</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>()</font>
+<a name="line122">122: </a><font color="#B22222">@*/</font>
+<a name="line123">123: </a><strong><font color="#4169E1"><a name="VecAssemblyBegin"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec)</font></strong>
+<a name="line124">124: </a>{
+
+<a name="line130">130: </a>  VecStashViewFromOptions(vec,NULL,<font color="#666666">"-vec_view_stash"</font>);
+<a name="line131">131: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_AssemblyBegin,vec,0,0,0);
+<a name="line132">132: </a>  <font color="#4169E1">if</font> (vec-&gt;ops-&gt;assemblybegin) {
+<a name="line133">133: </a>    (*vec-&gt;ops-&gt;assemblybegin)(vec);
+<a name="line134">134: </a>  }
+<a name="line135">135: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_AssemblyBegin,vec,0,0,0);
+<a name="line136">136: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec);
+<a name="line137">137: </a>  <font color="#4169E1">return</font>(0);
+<a name="line138">138: </a>}
+
+<a name="line140">140: </a><font color="#B22222">/*@</font>
+<a name="line141">141: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecAssemblyEnd.html#VecAssemblyEnd">VecAssemblyEnd</a> - Completes assembling the vector.  This routine should</font>
+<a name="line142">142: </a><font color="#B22222">   be called after <a href="../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a>().</font>
+
+<a name="line144">144: </a><font color="#B22222">   Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line146">146: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line147">147: </a><font color="#B22222">.  vec - the vector</font>
+
+<a name="line149">149: </a><font color="#B22222">   Options Database Keys:</font>
+<a name="line150">150: </a><font color="#B22222">+  -vec_view - Prints vector in ASCII format</font>
+<a name="line151">151: </a><font color="#B22222">.  -vec_view ::ascii_matlab - Prints vector in ASCII MATLAB format to stdout</font>
+<a name="line152">152: </a><font color="#B22222">.  -vec_view matlab:filename - Prints vector in MATLAB format to matlaboutput.mat</font>
+<a name="line153">153: </a><font color="#B22222">.  -vec_view draw - Activates vector viewing using drawing tools</font>
+<a name="line154">154: </a><font color="#B22222">.  -display &lt;name&gt; - Sets display name (default is host)</font>
+<a name="line155">155: </a><font color="#B22222">.  -draw_pause &lt;sec&gt; - Sets number of seconds to pause after display</font>
+<a name="line156">156: </a><font color="#B22222">-  -vec_view socket - Activates vector viewing using a socket</font>
+
+<a name="line158">158: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line160">160: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>()</font>
+<a name="line161">161: </a><font color="#B22222">@*/</font>
+<a name="line162">162: </a><strong><font color="#4169E1"><a name="VecAssemblyEnd"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecAssemblyEnd.html#VecAssemblyEnd">VecAssemblyEnd</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec)</font></strong>
+<a name="line163">163: </a>{
+
+<a name="line168">168: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_AssemblyEnd,vec,0,0,0);
+<a name="line170">170: </a>  <font color="#4169E1">if</font> (vec-&gt;ops-&gt;assemblyend) {
+<a name="line171">171: </a>    (*vec-&gt;ops-&gt;assemblyend)(vec);
+<a name="line172">172: </a>  }
+<a name="line173">173: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_AssemblyEnd,vec,0,0,0);
+<a name="line174">174: </a>  VecViewFromOptions(vec,NULL,<font color="#666666">"-vec_view"</font>);
+<a name="line175">175: </a>  <font color="#4169E1">return</font>(0);
+<a name="line176">176: </a>}
+
+<a name="line178">178: </a><font color="#B22222">/*@</font>
+<a name="line179">179: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecPointwiseMax.html#VecPointwiseMax">VecPointwiseMax</a> - Computes the componentwise maximum w_i = max(x_i, y_i).</font>
+
+<a name="line181">181: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line183">183: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line184">184: </a><font color="#B22222">.  x, y  - the vectors</font>
+
+<a name="line186">186: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line187">187: </a><font color="#B22222">.  w - the result</font>
+
+<a name="line189">189: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line191">191: </a><font color="#B22222">   Notes:</font>
+<a name="line192">192: </a><font color="#B22222">    any subset of the x, y, and w may be the same vector.</font>
+<a name="line193">193: </a><font color="#B22222">          For complex numbers compares only the real part</font>
+
+<a name="line195">195: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecPointwiseDivide.html#VecPointwiseDivide">VecPointwiseDivide</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMult.html#VecPointwiseMult">VecPointwiseMult</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMin.html#VecPointwiseMin">VecPointwiseMin</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMaxAbs.html#VecPointwiseMaxAbs">VecPointwiseMaxAbs</a>(), <a href="../../../../docs/manualpages/Vec/VecMaxPointwiseDivide.html#VecMaxPointwiseDivide">VecMaxPointwiseDivide</a>()</font>
+<a name="line196">196: </a><font color="#B22222">@*/</font>
+<a name="line197">197: </a><strong><font color="#4169E1"><a name="VecPointwiseMax"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecPointwiseMax.html#VecPointwiseMax">VecPointwiseMax</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> w,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line198">198: </a>{
+
+<a name="line210">210: </a>  VecCheckSameSize(w,1,x,2);
+<a name="line211">211: </a>  VecCheckSameSize(w,1,y,3);
+<a name="line212">212: </a>  (*w-&gt;ops-&gt;pointwisemax)(w,x,y);
+<a name="line213">213: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)w);
+<a name="line214">214: </a>  <font color="#4169E1">return</font>(0);
+<a name="line215">215: </a>}
+
+
+<a name="line218">218: </a><font color="#B22222">/*@</font>
+<a name="line219">219: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecPointwiseMin.html#VecPointwiseMin">VecPointwiseMin</a> - Computes the componentwise minimum w_i = min(x_i, y_i).</font>
+
+<a name="line221">221: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line223">223: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line224">224: </a><font color="#B22222">.  x, y  - the vectors</font>
+
+<a name="line226">226: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line227">227: </a><font color="#B22222">.  w - the result</font>
+
+<a name="line229">229: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line231">231: </a><font color="#B22222">   Notes:</font>
+<a name="line232">232: </a><font color="#B22222">    any subset of the x, y, and w may be the same vector.</font>
+<a name="line233">233: </a><font color="#B22222">          For complex numbers compares only the real part</font>
+
+<a name="line235">235: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecPointwiseDivide.html#VecPointwiseDivide">VecPointwiseDivide</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMult.html#VecPointwiseMult">VecPointwiseMult</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMin.html#VecPointwiseMin">VecPointwiseMin</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMaxAbs.html#VecPointwiseMaxAbs">VecPointwiseMaxAbs</a>(), <a href="../../../../docs/manualpages/Vec/VecMaxPointwiseDivide.html#VecMaxPointwiseDivide">VecMaxPointwiseDivide</a>()</font>
+<a name="line236">236: </a><font color="#B22222">@*/</font>
+<a name="line237">237: </a><strong><font color="#4169E1"><a name="VecPointwiseMin"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecPointwiseMin.html#VecPointwiseMin">VecPointwiseMin</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> w,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line238">238: </a>{
+
+<a name="line250">250: </a>  VecCheckSameSize(w,1,x,2);
+<a name="line251">251: </a>  VecCheckSameSize(w,1,y,3);
+<a name="line252">252: </a>  (*w-&gt;ops-&gt;pointwisemin)(w,x,y);
+<a name="line253">253: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)w);
+<a name="line254">254: </a>  <font color="#4169E1">return</font>(0);
+<a name="line255">255: </a>}
+
+<a name="line257">257: </a><font color="#B22222">/*@</font>
+<a name="line258">258: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecPointwiseMaxAbs.html#VecPointwiseMaxAbs">VecPointwiseMaxAbs</a> - Computes the componentwise maximum of the absolute values w_i = max(abs(x_i), abs(y_i)).</font>
+
+<a name="line260">260: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line262">262: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line263">263: </a><font color="#B22222">.  x, y  - the vectors</font>
+
+<a name="line265">265: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line266">266: </a><font color="#B22222">.  w - the result</font>
+
+<a name="line268">268: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line270">270: </a><font color="#B22222">   Notes:</font>
+<a name="line271">271: </a><font color="#B22222">    any subset of the x, y, and w may be the same vector.</font>
+
+<a name="line273">273: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecPointwiseDivide.html#VecPointwiseDivide">VecPointwiseDivide</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMult.html#VecPointwiseMult">VecPointwiseMult</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMin.html#VecPointwiseMin">VecPointwiseMin</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMax.html#VecPointwiseMax">VecPointwiseMax</a>(), <a href="../../../../docs/manualpages/Vec/VecMaxPointwiseDivide.html#VecMaxPointwiseDivide">VecMaxPointwiseDivide</a>()</font>
+<a name="line274">274: </a><font color="#B22222">@*/</font>
+<a name="line275">275: </a><strong><font color="#4169E1"><a name="VecPointwiseMaxAbs"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecPointwiseMaxAbs.html#VecPointwiseMaxAbs">VecPointwiseMaxAbs</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> w,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line276">276: </a>{
+
+<a name="line288">288: </a>  VecCheckSameSize(w,1,x,2);
+<a name="line289">289: </a>  VecCheckSameSize(w,1,y,3);
+<a name="line290">290: </a>  (*w-&gt;ops-&gt;pointwisemaxabs)(w,x,y);
+<a name="line291">291: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)w);
+<a name="line292">292: </a>  <font color="#4169E1">return</font>(0);
+<a name="line293">293: </a>}
+
+<a name="line295">295: </a><font color="#B22222">/*@</font>
+<a name="line296">296: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecPointwiseDivide.html#VecPointwiseDivide">VecPointwiseDivide</a> - Computes the componentwise division w = x/y.</font>
+
+<a name="line298">298: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line300">300: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line301">301: </a><font color="#B22222">.  x, y  - the vectors</font>
+
+<a name="line303">303: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line304">304: </a><font color="#B22222">.  w - the result</font>
+
+<a name="line306">306: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line308">308: </a><font color="#B22222">   Notes:</font>
+<a name="line309">309: </a><font color="#B22222">    any subset of the x, y, and w may be the same vector.</font>
+
+<a name="line311">311: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecPointwiseMult.html#VecPointwiseMult">VecPointwiseMult</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMax.html#VecPointwiseMax">VecPointwiseMax</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMin.html#VecPointwiseMin">VecPointwiseMin</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMaxAbs.html#VecPointwiseMaxAbs">VecPointwiseMaxAbs</a>(), <a href="../../../../docs/manualpages/Vec/VecMaxPointwiseDivide.html#VecMaxPointwiseDivide">VecMaxPointwiseDivide</a>()</font>
+<a name="line312">312: </a><font color="#B22222">@*/</font>
+<a name="line313">313: </a><strong><font color="#4169E1"><a name="VecPointwiseDivide"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecPointwiseDivide.html#VecPointwiseDivide">VecPointwiseDivide</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> w,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line314">314: </a>{
+
+<a name="line326">326: </a>  VecCheckSameSize(w,1,x,2);
+<a name="line327">327: </a>  VecCheckSameSize(w,1,y,3);
+<a name="line328">328: </a>  (*w-&gt;ops-&gt;pointwisedivide)(w,x,y);
+<a name="line329">329: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)w);
+<a name="line330">330: </a>  <font color="#4169E1">return</font>(0);
+<a name="line331">331: </a>}
+
+
+<a name="line334">334: </a><font color="#B22222">/*@</font>
+<a name="line335">335: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a> - Creates a new vector of the same type as an existing vector.</font>
+
+<a name="line337">337: </a><font color="#B22222">   Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line339">339: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line340">340: </a><font color="#B22222">.  v - a vector to mimic</font>
+
+<a name="line342">342: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line343">343: </a><font color="#B22222">.  newv - location to put new vector</font>
+
+<a name="line345">345: </a><font color="#B22222">   Notes:</font>
+<a name="line346">346: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>() DOES NOT COPY the vector entries, but rather allocates storage</font>
+<a name="line347">347: </a><font color="#B22222">   for the new vector.  Use <a href="../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>() to copy a vector.</font>
+
+<a name="line349">349: </a><font color="#B22222">   Use <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>() to free the space. Use <a href="../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>() to get several</font>
+<a name="line350">350: </a><font color="#B22222">   vectors.</font>
+
+<a name="line352">352: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line354">354: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(), <a href="../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(), <a href="../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(), <a href="../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>()</font>
+<a name="line355">355: </a><font color="#B22222">@*/</font>
+<a name="line356">356: </a><strong><font color="#4169E1"><a name="VecDuplicate"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *newv)</font></strong>
+<a name="line357">357: </a>{
+
+<a name="line364">364: </a>  (*v-&gt;ops-&gt;duplicate)(v,newv);
+<a name="line365">365: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)*newv);
+<a name="line366">366: </a>  <font color="#4169E1">return</font>(0);
+<a name="line367">367: </a>}
+
+<a name="line369">369: </a><font color="#B22222">/*@</font>
+<a name="line370">370: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a> - Destroys a vector.</font>
+
+<a name="line372">372: </a><font color="#B22222">   Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line374">374: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line375">375: </a><font color="#B22222">.  v  - the vector</font>
+
+<a name="line377">377: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line379">379: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(), <a href="../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>()</font>
+<a name="line380">380: </a><font color="#B22222">@*/</font>
+<a name="line381">381: </a><strong><font color="#4169E1"><a name="VecDestroy"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *v)</font></strong>
+<a name="line382">382: </a>{
+
+<a name="line386">386: </a>  <font color="#4169E1">if</font> (!*v) <font color="#4169E1">return</font>(0);
+<a name="line388">388: </a>  <font color="#4169E1">if</font> (--((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)(*v))-&gt;refct &gt; 0) {*v = 0; <font color="#4169E1">return</font>(0);}
+
+<a name="line390">390: </a>  PetscObjectSAWsViewOff((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)*v);
+<a name="line391">391: </a>  <font color="#B22222">/* destroy the internal part */</font>
+<a name="line392">392: </a>  <font color="#4169E1">if</font> ((*v)-&gt;ops-&gt;destroy) {
+<a name="line393">393: </a>    (*(*v)-&gt;ops-&gt;destroy)(*v);
+<a name="line394">394: </a>  }
+<a name="line395">395: </a>  <font color="#B22222">/* destroy the external/common part */</font>
+<a name="line396">396: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutDestroy.html#PetscLayoutDestroy">PetscLayoutDestroy</a>(&amp;(*v)-&gt;map);
+<a name="line397">397: </a>  <a href="../../../../docs/manualpages/Sys/PetscHeaderDestroy.html#PetscHeaderDestroy">PetscHeaderDestroy</a>(v);
+<a name="line398">398: </a>  <font color="#4169E1">return</font>(0);
+<a name="line399">399: </a>}
+
+<a name="line401">401: </a><font color="#B22222">/*@C</font>
+<a name="line402">402: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a> - Creates several vectors of the same type as an existing vector.</font>
+
+<a name="line404">404: </a><font color="#B22222">   Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line406">406: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line407">407: </a><font color="#B22222">+  m - the number of vectors to obtain</font>
+<a name="line408">408: </a><font color="#B22222">-  v - a vector to mimic</font>
+
+<a name="line410">410: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line411">411: </a><font color="#B22222">.  V - location to put pointer to array of vectors</font>
+
+<a name="line413">413: </a><font color="#B22222">   Notes:</font>
+<a name="line414">414: </a><font color="#B22222">   Use <a href="../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>() to free the space. Use <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>() to form a single</font>
+<a name="line415">415: </a><font color="#B22222">   vector.</font>
+
+<a name="line417">417: </a><font color="#B22222">   Fortran Note:</font>
+<a name="line418">418: </a><font color="#B22222">   The Fortran interface is slightly different from that given below, it</font>
+<a name="line419">419: </a><font color="#B22222">   requires one to pass in V a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> (integer) array of size at least m.</font>
+<a name="line420">420: </a><font color="#B22222">   See the Fortran chapter of the users manual and petsc/src/vec/vec/examples for details.</font>
+
+<a name="line422">422: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line424">424: </a><font color="#B22222">.seealso:  <a href="../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(), <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(), <a href="../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(), <a href="../../../../docs/manualpages/Vec/VecDuplicateVecsF90.html#VecDuplicateVecsF90">VecDuplicateVecsF90</a>()</font>
+<a name="line425">425: </a><font color="#B22222">@*/</font>
+<a name="line426">426: </a><strong><font color="#4169E1"><a name="VecDuplicateVecs"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> m,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *V[])</font></strong>
+<a name="line427">427: </a>{
+
+<a name="line434">434: </a>  (*v-&gt;ops-&gt;duplicatevecs)(v,m,V);
+<a name="line435">435: </a>  <font color="#4169E1">return</font>(0);
+<a name="line436">436: </a>}
+
+<a name="line438">438: </a><font color="#B22222">/*@C</font>
+<a name="line439">439: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a> - Frees a block of vectors obtained with <a href="../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>().</font>
+
+<a name="line441">441: </a><font color="#B22222">   Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line443">443: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line444">444: </a><font color="#B22222">+  vv - pointer to pointer to array of vector pointers, if NULL no vectors are destroyed</font>
+<a name="line445">445: </a><font color="#B22222">-  m - the number of vectors previously obtained, if zero no vectors are destroyed</font>
+
+<a name="line447">447: </a><font color="#B22222">   Fortran Note:</font>
+<a name="line448">448: </a><font color="#B22222">   The Fortran interface is slightly different from that given below.</font>
+<a name="line449">449: </a><font color="#B22222">   See the Fortran chapter of the users manual</font>
+
+<a name="line451">451: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line453">453: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecDuplicateVecs.html#VecDuplicateVecs">VecDuplicateVecs</a>(), VecDestroyVecsf90()</font>
+<a name="line454">454: </a><font color="#B22222">@*/</font>
+<a name="line455">455: </a><strong><font color="#4169E1"><a name="VecDestroyVecs"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecDestroyVecs.html#VecDestroyVecs">VecDestroyVecs</a>(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> m,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *vv[])</font></strong>
+<a name="line456">456: </a>{
+
+<a name="line461">461: </a>  <font color="#4169E1">if</font> (m &lt; 0) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Trying to destroy negative number of vectors %D"</font>,m);
+<a name="line462">462: </a>  <font color="#4169E1">if</font> (!m || !*vv) {*vv  = NULL; <font color="#4169E1">return</font>(0);}
+<a name="line465">465: </a>  (*(**vv)-&gt;ops-&gt;destroyvecs)(m,*vv);
+<a name="line466">466: </a>  *vv  = NULL;
+<a name="line467">467: </a>  <font color="#4169E1">return</font>(0);
+<a name="line468">468: </a>}
+
+<a name="line470">470: </a><font color="#B22222">/*@C</font>
+<a name="line471">471: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a> - Views a vector object.</font>
+
+<a name="line473">473: </a><font color="#B22222">   Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line475">475: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line476">476: </a><font color="#B22222">+  vec - the vector</font>
+<a name="line477">477: </a><font color="#B22222">-  viewer - an optional visualization context</font>
+
+<a name="line479">479: </a><font color="#B22222">   Notes:</font>
+<a name="line480">480: </a><font color="#B22222">   The available visualization contexts include</font>
+<a name="line481">481: </a><font color="#B22222">+     <a href="../../../../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_SELF.html#PETSC_VIEWER_STDOUT_SELF">PETSC_VIEWER_STDOUT_SELF</a> - for sequential vectors</font>
+<a name="line482">482: </a><font color="#B22222">.     <a href="../../../../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_WORLD.html#PETSC_VIEWER_STDOUT_WORLD">PETSC_VIEWER_STDOUT_WORLD</a> - for parallel vectors created on <a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a></font>
+<a name="line483">483: </a><font color="#B22222">-     <a href="../../../../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_.html#PETSC_VIEWER_STDOUT_">PETSC_VIEWER_STDOUT_</a>(comm) - for parallel vectors created on MPI communicator comm</font>
+
+<a name="line485">485: </a><font color="#B22222">   You can change the format the vector is printed using the</font>
+<a name="line486">486: </a><font color="#B22222">   option <a href="../../../../docs/manualpages/Viewer/PetscViewerPushFormat.html#PetscViewerPushFormat">PetscViewerPushFormat</a>().</font>
+
+<a name="line488">488: </a><font color="#B22222">   The user can open alternative viewers with</font>
+<a name="line489">489: </a><font color="#B22222">+    <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIOpen.html#PetscViewerASCIIOpen">PetscViewerASCIIOpen</a>() - Outputs vector to a specified file</font>
+<a name="line490">490: </a><font color="#B22222">.    <a href="../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>() - Outputs vector in binary to a</font>
+<a name="line491">491: </a><font color="#B22222">         specified file; corresponding input uses <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>()</font>
+<a name="line492">492: </a><font color="#B22222">.    <a href="../../../../docs/manualpages/Viewer/PetscViewerDrawOpen.html#PetscViewerDrawOpen">PetscViewerDrawOpen</a>() - Outputs vector to an X window display</font>
+<a name="line493">493: </a><font color="#B22222">.    <a href="../../../../docs/manualpages/Viewer/PetscViewerSocketOpen.html#PetscViewerSocketOpen">PetscViewerSocketOpen</a>() - Outputs vector to Socket viewer</font>
+<a name="line494">494: </a><font color="#B22222">-    <a href="../../../../docs/manualpages/Viewer/PetscViewerHDF5Open.html#PetscViewerHDF5Open">PetscViewerHDF5Open</a>() - Outputs vector to HDF5 file viewer </font>
+
+<a name="line496">496: </a><font color="#B22222">   The user can call <a href="../../../../docs/manualpages/Viewer/PetscViewerPushFormat.html#PetscViewerPushFormat">PetscViewerPushFormat</a>() to specify the output</font>
+<a name="line497">497: </a><font color="#B22222">   format of ASCII printed objects (when using <a href="../../../../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_SELF.html#PETSC_VIEWER_STDOUT_SELF">PETSC_VIEWER_STDOUT_SELF</a>,</font>
+<a name="line498">498: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_WORLD.html#PETSC_VIEWER_STDOUT_WORLD">PETSC_VIEWER_STDOUT_WORLD</a> and <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIOpen.html#PetscViewerASCIIOpen">PetscViewerASCIIOpen</a>).  Available formats include</font>
+<a name="line499">499: </a><font color="#B22222">+    <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_DEFAULT</a> - default, prints vector contents</font>
+<a name="line500">500: </a><font color="#B22222">.    <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_ASCII_MATLAB</a> - prints vector contents in MATLAB format</font>
+<a name="line501">501: </a><font color="#B22222">.    <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_ASCII_INDEX</a> - prints vector contents, including indices of vector elements</font>
+<a name="line502">502: </a><font color="#B22222">-    <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_ASCII_COMMON</a> - prints vector contents, using a</font>
+<a name="line503">503: </a><font color="#B22222">         format common among all vector types</font>
+
+<a name="line505">505: </a><font color="#B22222">   Notes:</font>
+<a name="line506">506: </a><font color="#B22222">    You can pass any number of vector objects, or other PETSc objects to the same viewer.</font>
+
+<a name="line508">508: </a><font color="#B22222">   Notes for binary viewer: </font>
+<a name="line509">509: </a><font color="#B22222">     If you pass multiple vectors to a binary viewer you can read them back in in the same order</font>
+<a name="line510">510: </a><font color="#B22222">     with <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>().</font>
+
+<a name="line512">512: </a><font color="#B22222">     If the blocksize of the vector is greater than one then you must provide a unique prefix to</font>
+<a name="line513">513: </a><font color="#B22222">     the vector with <a href="../../../../docs/manualpages/Sys/PetscObjectSetOptionsPrefix.html#PetscObjectSetOptionsPrefix">PetscObjectSetOptionsPrefix</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec,"uniqueprefix"); BEFORE calling <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>() on the</font>
+<a name="line514">514: </a><font color="#B22222">     vector to be stored and then set that same unique prefix on the vector that you pass to <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(). The blocksize</font>
+<a name="line515">515: </a><font color="#B22222">     information is stored in an ASCII file with the same name as the binary file plus a ".info" appended to the</font>
+<a name="line516">516: </a><font color="#B22222">     filename. If you copy the binary file, make sure you copy the associated .info file with it.</font>
+<a name="line517">517: </a><font color="#B22222">     </font>
+<a name="line518">518: </a><font color="#B22222">     See the manual page for <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>() on the exact format the binary viewer stores</font>
+<a name="line519">519: </a><font color="#B22222">     the values in the file.</font>
+
+
+<a name="line522">522: </a><font color="#B22222">   Notes for HDF5 Viewer: </font>
+<a name="line523">523: </a><font color="#B22222">     The name of the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> (given with <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>() is the name that is used</font>
+<a name="line524">524: </a><font color="#B22222">     for the object in the HDF5 file. If you wish to store the same <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> into multiple</font>
+<a name="line525">525: </a><font color="#B22222">     datasets in the same file (typically with different values), you must change its</font>
+<a name="line526">526: </a><font color="#B22222">     name each time before calling the <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(). To load the same vector,</font>
+<a name="line527">527: </a><font color="#B22222">     the name of the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> object passed to <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>() must be the same.</font>
+<a name="line528">528: </a><font color="#B22222"> </font>
+<a name="line529">529: </a><font color="#B22222">     If the block size of the vector is greater than 1 then it is used as the first dimension in the HDF5 array.</font>
+<a name="line530">530: </a><font color="#B22222">     If the function <a href="../../../../docs/manualpages/Viewer/PetscViewerHDF5SetBaseDimension2.html#PetscViewerHDF5SetBaseDimension2">PetscViewerHDF5SetBaseDimension2</a>()is called then even if the block size is one it will</font>
+<a name="line531">531: </a><font color="#B22222">     be used as the first dimension in the HDF5 array (that is the HDF5 array will always be two dimensional)</font>
+<a name="line532">532: </a><font color="#B22222">     See also <a href="../../../../docs/manualpages/Viewer/PetscViewerHDF5SetTimestep.html#PetscViewerHDF5SetTimestep">PetscViewerHDF5SetTimestep</a>() which adds an additional complication to reading and writing <a href="../../../../docs/manualpages/Vec/Vecs.html#Vecs">Vecs</a></font>
+<a name="line533">533: </a><font color="#B22222">     with the HDF5 viewer.</font>
+<a name="line534">534: </a><font color="#B22222">     </font>
+<a name="line535">535: </a><font color="#B22222">   Level: beginner</font>
+
+
+<a name="line538">538: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIOpen.html#PetscViewerASCIIOpen">PetscViewerASCIIOpen</a>(), <a href="../../../../docs/manualpages/Viewer/PetscViewerDrawOpen.html#PetscViewerDrawOpen">PetscViewerDrawOpen</a>(), <a href="../../../../docs/manualpages/Draw/PetscDrawLGCreate.html#PetscDrawLGCreate">PetscDrawLGCreate</a>(),</font>
+<a name="line539">539: </a><font color="#B22222">          <a href="../../../../docs/manualpages/Viewer/PetscViewerSocketOpen.html#PetscViewerSocketOpen">PetscViewerSocketOpen</a>(), <a href="../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(), <a href="../../../../docs/manualpages/Viewer/PetscViewerCreate.html#PetscViewerCreate">PetscViewerCreate</a>(),</font>
+<a name="line540">540: </a><font color="#B22222">          <a href="../../../../docs/manualpages/Sys/PetscRealView.html#PetscRealView">PetscRealView</a>(), <a href="../../../../docs/manualpages/Sys/PetscScalarView.html#PetscScalarView">PetscScalarView</a>(), <a href="../../../../docs/manualpages/Sys/PetscIntView.html#PetscIntView">PetscIntView</a>(), <a href="../../../../docs/manualpages/Viewer/PetscViewerHDF5SetTimestep.html#PetscViewerHDF5SetTimestep">PetscViewerHDF5SetTimestep</a>()</font>
+<a name="line541">541: </a><font color="#B22222">@*/</font>
+<a name="line542">542: </a><strong><font color="#4169E1"><a name="VecView"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec,<a href="../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line543">543: </a>{
+<a name="line544">544: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line545">545: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         iascii;
+<a name="line546">546: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PetscViewerFormat</a> format;
+<a name="line547">547: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>       size;
+
+<a name="line552">552: </a>  <font color="#4169E1">if</font> (!viewer) {
+<a name="line553">553: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIGetStdout.html#PetscViewerASCIIGetStdout">PetscViewerASCIIGetStdout</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec),&amp;viewer);
+<a name="line554">554: </a>  }
+<a name="line556">556: </a>  PetscViewerGetFormat(viewer,&amp;format);
+<a name="line557">557: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec),&amp;size);
+<a name="line558">558: </a>  <font color="#4169E1">if</font> (size == 1 &amp;&amp; format == <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_LOAD_BALANCE</a>) <font color="#4169E1">return</font>(0);
+
+<a name="line560">560: </a>  <font color="#4169E1">if</font> (vec-&gt;stash.n || vec-&gt;bstash.n) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Must call <a href="../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a>/End() before viewing this vector"</font>);
+
+<a name="line562">562: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_View,vec,viewer,0,0);
+<a name="line563">563: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../docs/manualpages/Viewer/PETSCVIEWERASCII.html#PETSCVIEWERASCII">PETSCVIEWERASCII</a>,&amp;iascii);
+<a name="line564">564: </a>  <font color="#4169E1">if</font> (iascii) {
+<a name="line565">565: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> rows,bs;
+
+<a name="line567">567: </a>    <a href="../../../../docs/manualpages/Sys/PetscObjectPrintClassNamePrefixType.html#PetscObjectPrintClassNamePrefixType">PetscObjectPrintClassNamePrefixType</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec,viewer);
+<a name="line568">568: </a>    <font color="#4169E1">if</font> (format == <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_ASCII_INFO</a> || format == <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_ASCII_INFO_DETAIL</a>) {
+<a name="line569">569: </a>      <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIPushTab.html#PetscViewerASCIIPushTab">PetscViewerASCIIPushTab</a>(viewer);
+<a name="line570">570: </a>      <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(vec,&amp;rows);
+<a name="line571">571: </a>      <a href="../../../../docs/manualpages/Vec/VecGetBlockSize.html#VecGetBlockSize">VecGetBlockSize</a>(vec,&amp;bs);
+<a name="line572">572: </a>      <font color="#4169E1">if</font> (bs != 1) {
+<a name="line573">573: </a>        <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"length=%D, bs=%D\n"</font>,rows,bs);
+<a name="line574">574: </a>      } <font color="#4169E1">else</font> {
+<a name="line575">575: </a>        <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"length=%D\n"</font>,rows);
+<a name="line576">576: </a>      }
+<a name="line577">577: </a>      <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIPopTab.html#PetscViewerASCIIPopTab">PetscViewerASCIIPopTab</a>(viewer);
+<a name="line578">578: </a>    }
+<a name="line579">579: </a>  }
+<a name="line580">580: </a>  <a href="../../../../docs/manualpages/Vec/VecLockReadPush.html#VecLockReadPush">VecLockReadPush</a>(vec);
+<a name="line581">581: </a>  <font color="#4169E1">if</font> ((format == <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_NATIVE</a> || format == <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_LOAD_BALANCE</a>) &amp;&amp; vec-&gt;ops-&gt;viewnative) {
+<a name="line582">582: </a>    (*vec-&gt;ops-&gt;viewnative)(vec,viewer);
+<a name="line583">583: </a>  } <font color="#4169E1">else</font> {
+<a name="line584">584: </a>    (*vec-&gt;ops-&gt;view)(vec,viewer);
+<a name="line585">585: </a>  }
+<a name="line586">586: </a>  <a href="../../../../docs/manualpages/Vec/VecLockReadPop.html#VecLockReadPop">VecLockReadPop</a>(vec);
+<a name="line587">587: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_View,vec,viewer,0,0);
+<a name="line588">588: </a>  <font color="#4169E1">return</font>(0);
+<a name="line589">589: </a>}
+
+<a name="line591">591: </a><font color="#A020F0">#if defined(PETSC_USE_DEBUG)</font>
+<a name="line592">592: </a><font color="#A020F0">#include &lt;../src/sys/totalview/tv_data_display.h&gt;</font>
+<a name="line593">593: </a><strong><font color="#4169E1"><a name="TV_display_type"></a>PETSC_UNUSED static int TV_display_type(const struct _p_Vec *v)</font></strong>
+<a name="line594">594: </a>{
+<a name="line595">595: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *values;
+<a name="line596">596: </a>  char              type[32];
+<a name="line597">597: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+
+<a name="line600">600: </a>  TV_add_row(<font color="#666666">"Local rows"</font>, <font color="#666666">"int"</font>, &amp;v-&gt;map-&gt;n);
+<a name="line601">601: </a>  TV_add_row(<font color="#666666">"Global rows"</font>, <font color="#666666">"int"</font>, &amp;v-&gt;map-&gt;N);
+<a name="line602">602: </a>  TV_add_row(<font color="#666666">"Typename"</font>, TV_ascii_string_type, ((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v)-&gt;type_name);
+<a name="line603">603: </a>  <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>((<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>)v,&amp;values);
+<a name="line604">604: </a>  <a href="../../../../docs/manualpages/Sys/PetscSNPrintf.html#PetscSNPrintf">PetscSNPrintf</a>(type,32,<font color="#666666">"double[%d]"</font>,v-&gt;map-&gt;n);
+<a name="line605">605: </a>  TV_add_row(<font color="#666666">"values"</font>,type, values);
+<a name="line606">606: </a>  <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>((<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>)v,&amp;values);
+<a name="line607">607: </a>  <font color="#4169E1">return</font> TV_format_OK;
+<a name="line608">608: </a>}
+<a name="line609">609: </a><font color="#A020F0">#endif</font>
+
+<a name="line611">611: </a><font color="#B22222">/*@</font>
+<a name="line612">612: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a> - Returns the global number of elements of the vector.</font>
+
+<a name="line614">614: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line616">616: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line617">617: </a><font color="#B22222">.  x - the vector</font>
+
+<a name="line619">619: </a><font color="#B22222">   Output Parameters:</font>
+<a name="line620">620: </a><font color="#B22222">.  size - the global length of the vector</font>
+
+<a name="line622">622: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line624">624: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>()</font>
+<a name="line625">625: </a><font color="#B22222">@*/</font>
+<a name="line626">626: </a><strong><font color="#4169E1"><a name="VecGetSize"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *size)</font></strong>
+<a name="line627">627: </a>{
+
+<a name="line634">634: </a>  (*x-&gt;ops-&gt;getsize)(x,size);
+<a name="line635">635: </a>  <font color="#4169E1">return</font>(0);
+<a name="line636">636: </a>}
+
+<a name="line638">638: </a><font color="#B22222">/*@</font>
+<a name="line639">639: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a> - Returns the number of elements of the vector stored</font>
+<a name="line640">640: </a><font color="#B22222">   in local memory. This routine may be implementation dependent, so use</font>
+<a name="line641">641: </a><font color="#B22222">   with care.</font>
+
+<a name="line643">643: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line645">645: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line646">646: </a><font color="#B22222">.  x - the vector</font>
+
+<a name="line648">648: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line649">649: </a><font color="#B22222">.  size - the length of the local piece of the vector</font>
+
+<a name="line651">651: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line653">653: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>()</font>
+<a name="line654">654: </a><font color="#B22222">@*/</font>
+<a name="line655">655: </a><strong><font color="#4169E1"><a name="VecGetLocalSize"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *size)</font></strong>
+<a name="line656">656: </a>{
+
+<a name="line663">663: </a>  (*x-&gt;ops-&gt;getlocalsize)(x,size);
+<a name="line664">664: </a>  <font color="#4169E1">return</font>(0);
+<a name="line665">665: </a>}
+
+<a name="line667">667: </a><font color="#B22222">/*@C</font>
+<a name="line668">668: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a> - Returns the range of indices owned by</font>
+<a name="line669">669: </a><font color="#B22222">   this processor, assuming that the vectors are laid out with the</font>
+<a name="line670">670: </a><font color="#B22222">   first n1 elements on the first processor, next n2 elements on the</font>
+<a name="line671">671: </a><font color="#B22222">   second, etc.  For certain parallel layouts this range may not be</font>
+<a name="line672">672: </a><font color="#B22222">   well defined.</font>
+
+<a name="line674">674: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line676">676: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line677">677: </a><font color="#B22222">.  x - the vector</font>
+
+<a name="line679">679: </a><font color="#B22222">   Output Parameters:</font>
+<a name="line680">680: </a><font color="#B22222">+  low - the first local element, pass in NULL if not interested</font>
+<a name="line681">681: </a><font color="#B22222">-  high - one more than the last local element, pass in NULL if not interested</font>
+
+<a name="line683">683: </a><font color="#B22222">   Note:</font>
+<a name="line684">684: </a><font color="#B22222">   The high argument is one more than the last element stored locally.</font>
+
+<a name="line686">686: </a><font color="#B22222">   Fortran: PETSC_NULL_INTEGER should be used instead of NULL</font>
+
+<a name="line688">688: </a><font color="#B22222">   Level: beginner</font>
+
+
+<a name="line691">691: </a><font color="#B22222">.seealso:   <a href="../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(), <a href="../../../../docs/manualpages/Mat/MatGetOwnershipRanges.html#MatGetOwnershipRanges">MatGetOwnershipRanges</a>(), <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRanges.html#VecGetOwnershipRanges">VecGetOwnershipRanges</a>()</font>
+<a name="line692">692: </a><font color="#B22222">@*/</font>
+<a name="line693">693: </a><strong><font color="#4169E1"><a name="VecGetOwnershipRange"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *low,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *high)</font></strong>
+<a name="line694">694: </a>{
+<a name="line700">700: </a>  <font color="#4169E1">if</font> (low)  *low  = x-&gt;map-&gt;rstart;
+<a name="line701">701: </a>  <font color="#4169E1">if</font> (high) *high = x-&gt;map-&gt;rend;
+<a name="line702">702: </a>  <font color="#4169E1">return</font>(0);
+<a name="line703">703: </a>}
+
+<a name="line705">705: </a><font color="#B22222">/*@C</font>
+<a name="line706">706: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRanges.html#VecGetOwnershipRanges">VecGetOwnershipRanges</a> - Returns the range of indices owned by EACH processor,</font>
+<a name="line707">707: </a><font color="#B22222">   assuming that the vectors are laid out with the</font>
+<a name="line708">708: </a><font color="#B22222">   first n1 elements on the first processor, next n2 elements on the</font>
+<a name="line709">709: </a><font color="#B22222">   second, etc.  For certain parallel layouts this range may not be</font>
+<a name="line710">710: </a><font color="#B22222">   well defined.</font>
+
+<a name="line712">712: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line714">714: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line715">715: </a><font color="#B22222">.  x - the vector</font>
+
+<a name="line717">717: </a><font color="#B22222">   Output Parameters:</font>
+<a name="line718">718: </a><font color="#B22222">.  range - array of length size+1 with the start and end+1 for each process</font>
+
+<a name="line720">720: </a><font color="#B22222">   Note:</font>
+<a name="line721">721: </a><font color="#B22222">   The high argument is one more than the last element stored locally.</font>
+
+<a name="line723">723: </a><font color="#B22222">   Fortran: You must PASS in an array of length size+1</font>
+
+<a name="line725">725: </a><font color="#B22222">   Level: beginner</font>
+
+
+<a name="line728">728: </a><font color="#B22222">.seealso:   <a href="../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(), <a href="../../../../docs/manualpages/Mat/MatGetOwnershipRanges.html#MatGetOwnershipRanges">MatGetOwnershipRanges</a>(), <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>()</font>
+<a name="line729">729: </a><font color="#B22222">@*/</font>
+<a name="line730">730: </a><strong><font color="#4169E1"><a name="VecGetOwnershipRanges"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRanges.html#VecGetOwnershipRanges">VecGetOwnershipRanges</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *ranges[])</font></strong>
+<a name="line731">731: </a>{
+
+<a name="line737">737: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutGetRanges.html#PetscLayoutGetRanges">PetscLayoutGetRanges</a>(x-&gt;map,ranges);
+<a name="line738">738: </a>  <font color="#4169E1">return</font>(0);
+<a name="line739">739: </a>}
+
+<a name="line741">741: </a><font color="#B22222">/*@</font>
+<a name="line742">742: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecSetOption.html#VecSetOption">VecSetOption</a> - Sets an option for controling a vector's behavior.</font>
+
+<a name="line744">744: </a><font color="#B22222">   Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line746">746: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line747">747: </a><font color="#B22222">+  x - the vector</font>
+<a name="line748">748: </a><font color="#B22222">.  op - the option</font>
+<a name="line749">749: </a><font color="#B22222">-  flag - turn the option on or off</font>
+
+<a name="line751">751: </a><font color="#B22222">   Supported Options:</font>
+<a name="line752">752: </a><font color="#B22222">+     VEC_IGNORE_OFF_PROC_ENTRIES, which causes <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>() to ignore</font>
+<a name="line753">753: </a><font color="#B22222">          entries destined to be stored on a separate processor. This can be used</font>
+<a name="line754">754: </a><font color="#B22222">          to eliminate the global reduction in the VecAssemblyXXXX() if you know</font>
+<a name="line755">755: </a><font color="#B22222">          that you have only used <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>() to set local elements</font>
+<a name="line756">756: </a><font color="#B22222">.     VEC_IGNORE_NEGATIVE_INDICES, which means you can pass negative indices</font>
+<a name="line757">757: </a><font color="#B22222">          in ix in calls to <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>() or <a href="../../../../docs/manualpages/Vec/VecGetValues.html#VecGetValues">VecGetValues</a>(). These rows are simply</font>
+<a name="line758">758: </a><font color="#B22222">          ignored.</font>
+<a name="line759">759: </a><font color="#B22222">-     VEC_SUBSET_OFF_PROC_ENTRIES, which causes <a href="../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a>() to assume that the off-process</font>
+<a name="line760">760: </a><font color="#B22222">          entries will always be a subset (possibly equal) of the off-process entries set on the</font>
+<a name="line761">761: </a><font color="#B22222">          first assembly which had a true VEC_SUBSET_OFF_PROC_ENTRIES and the vector has not</font>
+<a name="line762">762: </a><font color="#B22222">          changed this flag afterwards. If this assembly is not such first assembly, then this</font>
+<a name="line763">763: </a><font color="#B22222">          assembly can reuse the communication pattern setup in that first assembly, thus avoiding</font>
+<a name="line764">764: </a><font color="#B22222">          a global reduction. Subsequent assemblies setting off-process values should use the same</font>
+<a name="line765">765: </a><font color="#B22222">          <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">InsertMode</a> as the first assembly.</font>
+
+<a name="line767">767: </a><font color="#B22222">   Developer Note:</font>
+<a name="line768">768: </a><font color="#B22222">   The <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">InsertMode</a> restriction could be removed by packing the stash messages out of place.</font>
+
+<a name="line770">770: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line772">772: </a><font color="#B22222">@*/</font>
+<a name="line773">773: </a><strong><font color="#4169E1"><a name="VecSetOption"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecSetOption.html#VecSetOption">VecSetOption</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,VecOption op,<a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> flag)</font></strong>
+<a name="line774">774: </a>{
+
+<a name="line780">780: </a>  <font color="#4169E1">if</font> (x-&gt;ops-&gt;setoption) {
+<a name="line781">781: </a>    (*x-&gt;ops-&gt;setoption)(x,op,flag);
+<a name="line782">782: </a>  }
+<a name="line783">783: </a>  <font color="#4169E1">return</font>(0);
+<a name="line784">784: </a>}
+
+<a name="line786">786: </a><font color="#B22222">/* Default routines for obtaining and releasing; */</font>
+<a name="line787">787: </a><font color="#B22222">/* may be used by any implementation */</font>
+<a name="line788">788: </a><strong><font color="#4169E1"><a name="VecDuplicateVecs_Default"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecDuplicateVecs_Default(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> w,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> m,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *V[])</font></strong>
+<a name="line789">789: </a>{
+<a name="line791">791: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i;
+
+<a name="line796">796: </a>  <font color="#4169E1">if</font> (m &lt;= 0) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"m must be &gt; 0: m = %D"</font>,m);
+<a name="line797">797: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(m,V);
+<a name="line798">798: </a>  <font color="#4169E1">for</font> (i=0; i&lt;m; i++) {<a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(w,*V+i);}
+<a name="line799">799: </a>  <font color="#4169E1">return</font>(0);
+<a name="line800">800: </a>}
+
+<a name="line802">802: </a><strong><font color="#4169E1"><a name="VecDestroyVecs_Default"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecDestroyVecs_Default(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> m,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v[])</font></strong>
+<a name="line803">803: </a>{
+<a name="line805">805: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i;
+
+<a name="line809">809: </a>  <font color="#4169E1">for</font> (i=0; i&lt;m; i++) {<a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;v[i]);}
+<a name="line810">810: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(v);
+<a name="line811">811: </a>  <font color="#4169E1">return</font>(0);
+<a name="line812">812: </a>}
+
+<a name="line814">814: </a><font color="#B22222">/*@</font>
+<a name="line815">815: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a> - Resets a vector to use its default memory. Call this</font>
+<a name="line816">816: </a><font color="#B22222">   after the use of <a href="../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>().</font>
+
+<a name="line818">818: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line820">820: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line821">821: </a><font color="#B22222">.  vec - the vector</font>
+
+<a name="line823">823: </a><font color="#B22222">   Level: developer</font>
+
+<a name="line825">825: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(), <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(), <a href="../../../../docs/manualpages/Vec/VecReplaceArray.html#VecReplaceArray">VecReplaceArray</a>(), <a href="../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>()</font>
+
+<a name="line827">827: </a><font color="#B22222">@*/</font>
+<a name="line828">828: </a><strong><font color="#4169E1"><a name="VecResetArray"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec)</font></strong>
+<a name="line829">829: </a>{
+
+<a name="line835">835: </a>  <font color="#4169E1">if</font> (vec-&gt;ops-&gt;resetarray) {
+<a name="line836">836: </a>    (*vec-&gt;ops-&gt;resetarray)(vec);
+<a name="line837">837: </a>  } <font color="#4169E1">else</font> <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Cannot reset array in this type of vector"</font>);
+<a name="line838">838: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec);
+<a name="line839">839: </a>  <font color="#4169E1">return</font>(0);
+<a name="line840">840: </a>}
+
+<a name="line842">842: </a><font color="#B22222">/*@C</font>
+<a name="line843">843: </a><font color="#B22222">  <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a> - Loads a vector that has been stored in binary or HDF5 format</font>
+<a name="line844">844: </a><font color="#B22222">  with <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>().</font>
+
+<a name="line846">846: </a><font color="#B22222">  Collective on <a href="../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a></font>
+
+<a name="line848">848: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line849">849: </a><font color="#B22222">+ newvec - the newly loaded vector, this needs to have been created with <a href="../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>() or</font>
+<a name="line850">850: </a><font color="#B22222">           some related function before a call to <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>().</font>
+<a name="line851">851: </a><font color="#B22222">- viewer - binary file viewer, obtained from <a href="../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>() or</font>
+<a name="line852">852: </a><font color="#B22222">           HDF5 file viewer, obtained from <a href="../../../../docs/manualpages/Viewer/PetscViewerHDF5Open.html#PetscViewerHDF5Open">PetscViewerHDF5Open</a>()</font>
+
+<a name="line854">854: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line856">856: </a><font color="#B22222">  Notes:</font>
+<a name="line857">857: </a><font color="#B22222">  Defaults to the standard Seq or MPI <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>, if you want some other type of <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> call <a href="../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>()</font>
+<a name="line858">858: </a><font color="#B22222">  before calling this.</font>
+
+<a name="line860">860: </a><font color="#B22222">  The input file must contain the full global vector, as</font>
+<a name="line861">861: </a><font color="#B22222">  written by the routine <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>().</font>
+
+<a name="line863">863: </a><font color="#B22222">  If the type or size of newvec is not set before a call to <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>, PETSc</font>
+<a name="line864">864: </a><font color="#B22222">  sets the type and the local and global sizes. If type and/or</font>
+<a name="line865">865: </a><font color="#B22222">  sizes are already set, then the same are used.</font>
+
+<a name="line867">867: </a><font color="#B22222">  If using the binary viewer and the blocksize of the vector is greater than one then you must provide a unique prefix to</font>
+<a name="line868">868: </a><font color="#B22222">  the vector with <a href="../../../../docs/manualpages/Sys/PetscObjectSetOptionsPrefix.html#PetscObjectSetOptionsPrefix">PetscObjectSetOptionsPrefix</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec,"uniqueprefix"); BEFORE calling <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>() on the</font>
+<a name="line869">869: </a><font color="#B22222">  vector to be stored and then set that same unique prefix on the vector that you pass to <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(). The blocksize</font>
+<a name="line870">870: </a><font color="#B22222">  information is stored in an ASCII file with the same name as the binary file plus a ".info" appended to the</font>
+<a name="line871">871: </a><font color="#B22222">  filename. If you copy the binary file, make sure you copy the associated .info file with it.</font>
+
+<a name="line873">873: </a><font color="#B22222">  If using HDF5, you must assign the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> the same name as was used in the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+<a name="line874">874: </a><font color="#B22222">  that was stored in the file using <a href="../../../../docs/manualpages/Sys/PetscObjectSetName.html#PetscObjectSetName">PetscObjectSetName</a>(). Otherwise you will</font>
+<a name="line875">875: </a><font color="#B22222">  get the error message: "Cannot H5DOpen2() with <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> name NAMEOFOBJECT".</font>
+
+<a name="line877">877: </a><font color="#B22222">  If the HDF5 file contains a two dimensional array the first dimension is treated as the block size</font>
+<a name="line878">878: </a><font color="#B22222">  in loading the vector. Hence, for example, using Matlab notation h5create('vector.dat','/Test_Vec',[27 1]);</font>
+<a name="line879">879: </a><font color="#B22222">  will load a vector of size 27 and block size 27 thus resulting in all 27 entries being on the first process of</font>
+<a name="line880">880: </a><font color="#B22222">  vectors communicator and the rest of the processes having zero entries</font>
+
+<a name="line882">882: </a><font color="#B22222">  Notes for advanced users when using the binary viewer:</font>
+<a name="line883">883: </a><font color="#B22222">  Most users should not need to know the details of the binary storage</font>
+<a name="line884">884: </a><font color="#B22222">  format, since <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>() and <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>() completely hide these details.</font>
+<a name="line885">885: </a><font color="#B22222">  But for anyone who's interested, the standard binary vector storage</font>
+<a name="line886">886: </a><font color="#B22222">  format is</font>
+<a name="line887">887: </a><font color="#B22222">.vb</font>
+<a name="line888">888: </a><font color="#B22222">     <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    VEC_FILE_CLASSID</font>
+<a name="line889">889: </a><font color="#B22222">     <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    number of rows</font>
+<a name="line890">890: </a><font color="#B22222">     <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *values of all entries</font>
+<a name="line891">891: </a><font color="#B22222">.ve</font>
+
+<a name="line893">893: </a><font color="#B22222">   In addition, PETSc automatically uses byte swapping to work on all machines; the files</font>
+<a name="line894">894: </a><font color="#B22222">   are written ALWAYS using big-endian ordering. On small-endian machines the numbers</font>
+<a name="line895">895: </a><font color="#B22222">   are converted to the small-endian format when they are read in from the file.</font>
+<a name="line896">896: </a><font color="#B22222">   See <a href="../../../../docs/manualpages/Sys/PetscBinaryRead.html#PetscBinaryRead">PetscBinaryRead</a>() and <a href="../../../../docs/manualpages/Sys/PetscBinaryWrite.html#PetscBinaryWrite">PetscBinaryWrite</a>() to see how this may be done.</font>
+
+<a name="line898">898: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(), <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(), <a href="../../../../docs/manualpages/Mat/MatLoad.html#MatLoad">MatLoad</a>(), <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>()</font>
+<a name="line899">899: </a><font color="#B22222">@*/</font>
+<a name="line900">900: </a><strong><font color="#4169E1"><a name="VecLoad"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> newvec, <a href="../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line901">901: </a>{
+<a name="line902">902: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line903">903: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         isbinary,ishdf5,isadios,isadios2;
+<a name="line904">904: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PetscViewerFormat</a> format;
+
+<a name="line909">909: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../docs/manualpages/Viewer/PETSCVIEWERBINARY.html#PETSCVIEWERBINARY">PETSCVIEWERBINARY</a>,&amp;isbinary);
+<a name="line910">910: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../docs/manualpages/Viewer/PETSCVIEWERHDF5.html#PETSCVIEWERHDF5">PETSCVIEWERHDF5</a>,&amp;ishdf5);
+<a name="line911">911: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../docs/manualpages/Viewer/PETSCVIEWERADIOS.html#PETSCVIEWERADIOS">PETSCVIEWERADIOS</a>,&amp;isadios);
+<a name="line912">912: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../docs/manualpages/Viewer/PETSCVIEWERADIOS.html#PETSCVIEWERADIOS">PETSCVIEWERADIOS</a>,&amp;isadios2);
+<a name="line913">913: </a>  <font color="#4169E1">if</font> (!isbinary &amp;&amp; !ishdf5 &amp;&amp; !isadios &amp;&amp; !isadios2) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONG,<font color="#666666">"Invalid viewer; open viewer with <a href="../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>()"</font>);
+
+<a name="line915">915: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_Load,viewer,0,0,0);
+<a name="line916">916: </a>  <font color="#4169E1">if</font> (!((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)newvec)-&gt;type_name &amp;&amp; !newvec-&gt;ops-&gt;create) {
+<a name="line917">917: </a>    <a href="../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(newvec, <a href="../../../../docs/manualpages/Vec/VECSTANDARD.html#VECSTANDARD">VECSTANDARD</a>);
+<a name="line918">918: </a>  }
+<a name="line919">919: </a>  PetscViewerGetFormat(viewer,&amp;format);
+<a name="line920">920: </a>  <font color="#4169E1">if</font> (format == <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PETSC_VIEWER_NATIVE</a> &amp;&amp; newvec-&gt;ops-&gt;loadnative) {
+<a name="line921">921: </a>    (*newvec-&gt;ops-&gt;loadnative)(newvec,viewer);
+<a name="line922">922: </a>  } <font color="#4169E1">else</font> {
+<a name="line923">923: </a>    (*newvec-&gt;ops-&gt;load)(newvec,viewer);
+<a name="line924">924: </a>  }
+<a name="line925">925: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_Load,viewer,0,0,0);
+<a name="line926">926: </a>  <font color="#4169E1">return</font>(0);
+<a name="line927">927: </a>}
+
+
+<a name="line930">930: </a><font color="#B22222">/*@</font>
+<a name="line931">931: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecReciprocal.html#VecReciprocal">VecReciprocal</a> - Replaces each component of a vector by its reciprocal.</font>
+
+<a name="line933">933: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line935">935: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line936">936: </a><font color="#B22222">.  vec - the vector</font>
+
+<a name="line938">938: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line939">939: </a><font color="#B22222">.  vec - the vector reciprocal</font>
+
+<a name="line941">941: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line943">943: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecLog.html#VecLog">VecLog</a>(), <a href="../../../../docs/manualpages/Vec/VecExp.html#VecExp">VecExp</a>(), <a href="../../../../docs/manualpages/Vec/VecSqrtAbs.html#VecSqrtAbs">VecSqrtAbs</a>()</font>
+
+<a name="line945">945: </a><font color="#B22222">@*/</font>
+<a name="line946">946: </a><strong><font color="#4169E1"><a name="VecReciprocal"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecReciprocal.html#VecReciprocal">VecReciprocal</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec)</font></strong>
+<a name="line947">947: </a>{
+
+<a name="line953">953: </a>  <font color="#4169E1">if</font> (vec-&gt;stash.insertmode != <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">NOT_SET_VALUES</a>) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Not for unassembled vector"</font>);
+<a name="line954">954: </a>  <font color="#4169E1">if</font> (!vec-&gt;ops-&gt;reciprocal) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Vector does not support reciprocal operation"</font>);
+<a name="line955">955: </a>  (*vec-&gt;ops-&gt;reciprocal)(vec);
+<a name="line956">956: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec);
+<a name="line957">957: </a>  <font color="#4169E1">return</font>(0);
+<a name="line958">958: </a>}
+
+<a name="line960">960: </a><font color="#B22222">/*@C</font>
+<a name="line961">961: </a><font color="#B22222">    <a href="../../../../docs/manualpages/Vec/VecSetOperation.html#VecSetOperation">VecSetOperation</a> - Allows user to set a vector operation.</font>
+
+<a name="line963">963: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line965">965: </a><font color="#B22222">    Input Parameters:</font>
+<a name="line966">966: </a><font color="#B22222">+   vec - the vector</font>
+<a name="line967">967: </a><font color="#B22222">.   op - the name of the operation</font>
+<a name="line968">968: </a><font color="#B22222">-   f - the function that provides the operation.</font>
+
+<a name="line970">970: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line972">972: </a><font color="#B22222">    Usage:</font>
+<a name="line973">973: </a><font color="#B22222">$      <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> userview(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,<a href="../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>);</font>
+<a name="line974">974: </a><font color="#B22222">$      <a href="../../../../docs/manualpages/Vec/VecCreateMPI.html#VecCreateMPI">VecCreateMPI</a>(comm,m,M,&amp;x);</font>
+<a name="line975">975: </a><font color="#B22222">$      <a href="../../../../docs/manualpages/Vec/VecSetOperation.html#VecSetOperation">VecSetOperation</a>(x,VECOP_VIEW,(void(*)(void))userview);</font>
+
+<a name="line977">977: </a><font color="#B22222">    Notes:</font>
+<a name="line978">978: </a><font color="#B22222">    See the file include/petscvec.h for a complete list of matrix</font>
+<a name="line979">979: </a><font color="#B22222">    operations, which all have the form VECOP_&lt;OPERATION&gt;, where</font>
+<a name="line980">980: </a><font color="#B22222">    &lt;OPERATION&gt; is the name (in all capital letters) of the</font>
+<a name="line981">981: </a><font color="#B22222">    user interface routine (e.g., <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>() -&gt; VECOP_VIEW).</font>
+
+<a name="line983">983: </a><font color="#B22222">    This function is not currently available from Fortran.</font>
+
+<a name="line985">985: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(), <a href="../../../../docs/manualpages/Mat/MatShellSetOperation.html#MatShellSetOperation">MatShellSetOperation</a>()</font>
+<a name="line986">986: </a><font color="#B22222">@*/</font>
+<a name="line987">987: </a><strong><font color="#4169E1"><a name="VecSetOperation"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecSetOperation.html#VecSetOperation">VecSetOperation</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec,VecOperation op, void (*f)(void))</font></strong>
+<a name="line988">988: </a>{
+<a name="line991">991: </a>  <font color="#4169E1">if</font> (op == VECOP_VIEW &amp;&amp; !vec-&gt;ops-&gt;viewnative) {
+<a name="line992">992: </a>    vec-&gt;ops-&gt;viewnative = vec-&gt;ops-&gt;view;
+<a name="line993">993: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (op == VECOP_LOAD &amp;&amp; !vec-&gt;ops-&gt;loadnative) {
+<a name="line994">994: </a>    vec-&gt;ops-&gt;loadnative = vec-&gt;ops-&gt;load;
+<a name="line995">995: </a>  }
+<a name="line996">996: </a>  (((void(**)(void))vec-&gt;ops)[(int)op]) = f;
+<a name="line997">997: </a>  <font color="#4169E1">return</font>(0);
+<a name="line998">998: </a>}
+
+
+<a name="line1001">1001: </a><font color="#B22222">/*@</font>
+<a name="line1002">1002: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecStashSetInitialSize.html#VecStashSetInitialSize">VecStashSetInitialSize</a> - sets the sizes of the vec-stash, that is</font>
+<a name="line1003">1003: </a><font color="#B22222">   used during the assembly process to store values that belong to</font>
+<a name="line1004">1004: </a><font color="#B22222">   other processors.</font>
+
+<a name="line1006">1006: </a><font color="#B22222">   Not Collective, different processes can have different size stashes</font>
+
+<a name="line1008">1008: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line1009">1009: </a><font color="#B22222">+  vec   - the vector</font>
+<a name="line1010">1010: </a><font color="#B22222">.  size  - the initial size of the stash.</font>
+<a name="line1011">1011: </a><font color="#B22222">-  bsize - the initial size of the block-stash(if used).</font>
+
+<a name="line1013">1013: </a><font color="#B22222">   Options Database Keys:</font>
+<a name="line1014">1014: </a><font color="#B22222">+   -vecstash_initial_size &lt;size&gt; or &lt;size0,size1,...sizep-1&gt;</font>
+<a name="line1015">1015: </a><font color="#B22222">-   -vecstash_block_initial_size &lt;bsize&gt; or &lt;bsize0,bsize1,...bsizep-1&gt;</font>
+
+<a name="line1017">1017: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line1019">1019: </a><font color="#B22222">   Notes:</font>
+<a name="line1020">1020: </a><font color="#B22222">     The block-stash is used for values set with <a href="../../../../docs/manualpages/Vec/VecSetValuesBlocked.html#VecSetValuesBlocked">VecSetValuesBlocked</a>() while</font>
+<a name="line1021">1021: </a><font color="#B22222">     the stash is used for values set with <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>()</font>
+
+<a name="line1023">1023: </a><font color="#B22222">     Run with the option -info and look for output of the form</font>
+<a name="line1024">1024: </a><font color="#B22222">     VecAssemblyBegin_MPIXXX:Stash has MM entries, uses nn mallocs.</font>
+<a name="line1025">1025: </a><font color="#B22222">     to determine the appropriate value, MM, to use for size and</font>
+<a name="line1026">1026: </a><font color="#B22222">     VecAssemblyBegin_MPIXXX:Block-Stash has BMM entries, uses nn mallocs.</font>
+<a name="line1027">1027: </a><font color="#B22222">     to determine the value, BMM to use for bsize</font>
+
+
+<a name="line1030">1030: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecSetBlockSize.html#VecSetBlockSize">VecSetBlockSize</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValuesBlocked.html#VecSetValuesBlocked">VecSetValuesBlocked</a>(), <a href="../../../../docs/manualpages/Vec/VecStashView.html#VecStashView">VecStashView</a>()</font>
+
+<a name="line1032">1032: </a><font color="#B22222">@*/</font>
+<a name="line1033">1033: </a><strong><font color="#4169E1"><a name="VecStashSetInitialSize"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecStashSetInitialSize.html#VecStashSetInitialSize">VecStashSetInitialSize</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> size,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> bsize)</font></strong>
+<a name="line1034">1034: </a>{
+
+<a name="line1039">1039: </a>  VecStashSetInitialSize_Private(&amp;vec-&gt;stash,size);
+<a name="line1040">1040: </a>  VecStashSetInitialSize_Private(&amp;vec-&gt;bstash,bsize);
+<a name="line1041">1041: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1042">1042: </a>}
+
+<a name="line1044">1044: </a><font color="#B22222">/*@</font>
+<a name="line1045">1045: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecConjugate.html#VecConjugate">VecConjugate</a> - Conjugates a vector.</font>
+
+<a name="line1047">1047: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1049">1049: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line1050">1050: </a><font color="#B22222">.  x - the vector</font>
+
+<a name="line1052">1052: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line1054">1054: </a><font color="#B22222">@*/</font>
+<a name="line1055">1055: </a><strong><font color="#4169E1"><a name="VecConjugate"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecConjugate.html#VecConjugate">VecConjugate</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x)</font></strong>
+<a name="line1056">1056: </a>{
+<a name="line1057">1057: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+
+<a name="line1063">1063: </a>  <font color="#4169E1">if</font> (x-&gt;stash.insertmode != <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">NOT_SET_VALUES</a>) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Not for unassembled vector"</font>);
+<a name="line1064">1064: </a>  (*x-&gt;ops-&gt;conjugate)(x);
+<a name="line1065">1065: </a>  <font color="#B22222">/* we need to copy norms here */</font>
+<a name="line1066">1066: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x);
+<a name="line1067">1067: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1068">1068: </a><font color="#A020F0">#else</font>
+<a name="line1069">1069: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1070">1070: </a><font color="#A020F0">#endif</font>
+<a name="line1071">1071: </a>}
+
+<a name="line1073">1073: </a><font color="#B22222">/*@</font>
+<a name="line1074">1074: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecPointwiseMult.html#VecPointwiseMult">VecPointwiseMult</a> - Computes the componentwise multiplication w = x*y.</font>
+
+<a name="line1076">1076: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1078">1078: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line1079">1079: </a><font color="#B22222">.  x, y  - the vectors</font>
+
+<a name="line1081">1081: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line1082">1082: </a><font color="#B22222">.  w - the result</font>
+
+<a name="line1084">1084: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line1086">1086: </a><font color="#B22222">   Notes:</font>
+<a name="line1087">1087: </a><font color="#B22222">    any subset of the x, y, and w may be the same vector.</font>
+
+<a name="line1089">1089: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecPointwiseDivide.html#VecPointwiseDivide">VecPointwiseDivide</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMax.html#VecPointwiseMax">VecPointwiseMax</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMin.html#VecPointwiseMin">VecPointwiseMin</a>(), <a href="../../../../docs/manualpages/Vec/VecPointwiseMaxAbs.html#VecPointwiseMaxAbs">VecPointwiseMaxAbs</a>(), <a href="../../../../docs/manualpages/Vec/VecMaxPointwiseDivide.html#VecMaxPointwiseDivide">VecMaxPointwiseDivide</a>()</font>
+<a name="line1090">1090: </a><font color="#B22222">@*/</font>
+<a name="line1091">1091: </a><strong><font color="#4169E1"><a name="VecPointwiseMult"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecPointwiseMult.html#VecPointwiseMult">VecPointwiseMult</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> w, <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line1092">1092: </a>{
+
+<a name="line1104">1104: </a>  VecCheckSameSize(w,1,x,2);
+<a name="line1105">1105: </a>  VecCheckSameSize(w,2,y,3);
+<a name="line1106">1106: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_PointwiseMult,x,y,w,0);
+<a name="line1107">1107: </a>  (*w-&gt;ops-&gt;pointwisemult)(w,x,y);
+<a name="line1108">1108: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_PointwiseMult,x,y,w,0);
+<a name="line1109">1109: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)w);
+<a name="line1110">1110: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1111">1111: </a>}
+
+<a name="line1113">1113: </a><font color="#B22222">/*@</font>
+<a name="line1114">1114: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecSetRandom.html#VecSetRandom">VecSetRandom</a> - Sets all components of a vector to random numbers.</font>
+
+<a name="line1116">1116: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1118">1118: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line1119">1119: </a><font color="#B22222">+  x  - the vector</font>
+<a name="line1120">1120: </a><font color="#B22222">-  rctx - the random number context, formed by <a href="../../../../docs/manualpages/Sys/PetscRandomCreate.html#PetscRandomCreate">PetscRandomCreate</a>(), or NULL and</font>
+<a name="line1121">1121: </a><font color="#B22222">          it will create one internally.</font>
+
+<a name="line1123">1123: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line1124">1124: </a><font color="#B22222">.  x  - the vector</font>
+
+<a name="line1126">1126: </a><font color="#B22222">   Example of Usage:</font>
+<a name="line1127">1127: </a><font color="#B22222">.vb</font>
+<a name="line1128">1128: </a><font color="#B22222">     <a href="../../../../docs/manualpages/Sys/PetscRandomCreate.html#PetscRandomCreate">PetscRandomCreate</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;rctx);</font>
+<a name="line1129">1129: </a><font color="#B22222">     <a href="../../../../docs/manualpages/Vec/VecSetRandom.html#VecSetRandom">VecSetRandom</a>(x,rctx);</font>
+<a name="line1130">1130: </a><font color="#B22222">     <a href="../../../../docs/manualpages/Sys/PetscRandomDestroy.html#PetscRandomDestroy">PetscRandomDestroy</a>(rctx);</font>
+<a name="line1131">1131: </a><font color="#B22222">.ve</font>
+
+<a name="line1133">1133: </a><font color="#B22222">   Level: intermediate</font>
+
+
+<a name="line1136">1136: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>(), <a href="../../../../docs/manualpages/Sys/PetscRandomCreate.html#PetscRandomCreate">PetscRandomCreate</a>(), <a href="../../../../docs/manualpages/Sys/PetscRandomDestroy.html#PetscRandomDestroy">PetscRandomDestroy</a>()</font>
+<a name="line1137">1137: </a><font color="#B22222">@*/</font>
+<a name="line1138">1138: </a><strong><font color="#4169E1"><a name="VecSetRandom"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecSetRandom.html#VecSetRandom">VecSetRandom</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Sys/PetscRandom.html#PetscRandom">PetscRandom</a> rctx)</font></strong>
+<a name="line1139">1139: </a>{
+<a name="line1141">1141: </a>  <a href="../../../../docs/manualpages/Sys/PetscRandom.html#PetscRandom">PetscRandom</a>    randObj = NULL;
+
+<a name="line1147">1147: </a>  <font color="#4169E1">if</font> (x-&gt;stash.insertmode != <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">NOT_SET_VALUES</a>) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Not for unassembled vector"</font>);
+
+<a name="line1149">1149: </a>  <font color="#4169E1">if</font> (!rctx) {
+<a name="line1150">1150: </a>    <a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm;
+<a name="line1151">1151: </a>    <a href="../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x,&amp;comm);
+<a name="line1152">1152: </a>    <a href="../../../../docs/manualpages/Sys/PetscRandomCreate.html#PetscRandomCreate">PetscRandomCreate</a>(comm,&amp;randObj);
+<a name="line1153">1153: </a>    <a href="../../../../docs/manualpages/Sys/PetscRandomSetFromOptions.html#PetscRandomSetFromOptions">PetscRandomSetFromOptions</a>(randObj);
+<a name="line1154">1154: </a>    rctx = randObj;
+<a name="line1155">1155: </a>  }
+
+<a name="line1157">1157: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_SetRandom,x,rctx,0,0);
+<a name="line1158">1158: </a>  (*x-&gt;ops-&gt;setrandom)(x,rctx);
+<a name="line1159">1159: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_SetRandom,x,rctx,0,0);
+
+<a name="line1161">1161: </a>  <a href="../../../../docs/manualpages/Sys/PetscRandomDestroy.html#PetscRandomDestroy">PetscRandomDestroy</a>(&amp;randObj);
+<a name="line1162">1162: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x);
+<a name="line1163">1163: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1164">1164: </a>}
+
+<a name="line1166">1166: </a><font color="#B22222">/*@</font>
+<a name="line1167">1167: </a><font color="#B22222">  <a href="../../../../docs/manualpages/Vec/VecZeroEntries.html#VecZeroEntries">VecZeroEntries</a> - puts a 0.0 in each element of a vector</font>
+
+<a name="line1169">1169: </a><font color="#B22222">  Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1171">1171: </a><font color="#B22222">  Input Parameter:</font>
+<a name="line1172">1172: </a><font color="#B22222">. vec - The vector</font>
+
+<a name="line1174">1174: </a><font color="#B22222">  Level: beginner</font>
+
+<a name="line1176">1176: </a><font color="#B22222">  Developer Note: This routine does not need to exist since the exact functionality is obtained with</font>
+<a name="line1177">1177: </a><font color="#B22222">     <a href="../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(vec,0);  I guess someone added it to mirror the functionality of <a href="../../../../docs/manualpages/Mat/MatZeroEntries.html#MatZeroEntries">MatZeroEntries</a>() but <a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> is nothing</font>
+<a name="line1178">1178: </a><font color="#B22222">     like a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> (one is an operator and one is an element of a vector space, yeah yeah dual blah blah blah) so</font>
+<a name="line1179">1179: </a><font color="#B22222">     this routine should not exist.</font>
+
+<a name="line1181">1181: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(),  <a href="../../../../docs/manualpages/Vec/VecSetOptionsPrefix.html#VecSetOptionsPrefix">VecSetOptionsPrefix</a>(), <a href="../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>()</font>
+<a name="line1182">1182: </a><font color="#B22222">@*/</font>
+<a name="line1183">1183: </a><strong><font color="#4169E1"><a name="VecZeroEntries"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecZeroEntries.html#VecZeroEntries">VecZeroEntries</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec)</font></strong>
+<a name="line1184">1184: </a>{
+
+<a name="line1188">1188: </a>  <a href="../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(vec,0);
+<a name="line1189">1189: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1190">1190: </a>}
+
+<a name="line1192">1192: </a><font color="#B22222">/*</font>
+<a name="line1193">1193: </a><font color="#B22222">  VecSetTypeFromOptions_Private - Sets the type of vector from user options. Defaults to a PETSc sequential vector on one</font>
+<a name="line1194">1194: </a><font color="#B22222">  processor and a PETSc MPI vector on more than one processor.</font>
+
+<a name="line1196">1196: </a><font color="#B22222">  Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1198">1198: </a><font color="#B22222">  Input Parameter:</font>
+<a name="line1199">1199: </a><font color="#B22222">. vec - The vector</font>
+
+<a name="line1201">1201: </a><font color="#B22222">  Level: intermediate</font>
+
+<a name="line1203">1203: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>(), <a href="../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>()</font>
+<a name="line1204">1204: </a><font color="#B22222">*/</font>
+<a name="line1205">1205: </a><strong><font color="#4169E1"><a name="VecSetTypeFromOptions_Private"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecSetTypeFromOptions_Private(PetscOptionItems *PetscOptionsObject,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec)</font></strong>
+<a name="line1206">1206: </a>{
+<a name="line1207">1207: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      opt;
+<a name="line1208">1208: </a>  <a href="../../../../docs/manualpages/Vec/VecType.html#VecType">VecType</a>        defaultType;
+<a name="line1209">1209: </a>  char           typeName[256];
+<a name="line1210">1210: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+
+<a name="line1214">1214: </a>  <font color="#4169E1">if</font> (((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec)-&gt;type_name) defaultType = ((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec)-&gt;type_name;
+<a name="line1215">1215: </a>  <font color="#4169E1">else</font> {
+<a name="line1216">1216: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec), &amp;size);
+<a name="line1217">1217: </a>    <font color="#4169E1">if</font> (size &gt; 1) defaultType = <a href="../../../../docs/manualpages/Vec/VECMPI.html#VECMPI">VECMPI</a>;
+<a name="line1218">1218: </a>    <font color="#4169E1">else</font> defaultType = <a href="../../../../docs/manualpages/Vec/VECSEQ.html#VECSEQ">VECSEQ</a>;
+<a name="line1219">1219: </a>  }
+
+<a name="line1221">1221: </a>  <a href="../../../../docs/manualpages/Vec/VecRegisterAll.html#VecRegisterAll">VecRegisterAll</a>();
+<a name="line1222">1222: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsFList.html#PetscOptionsFList">PetscOptionsFList</a>(<font color="#666666">"-vec_type"</font>,<font color="#666666">"Vector type"</font>,<font color="#666666">"<a href="../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>"</font>,VecList,defaultType,typeName,256,&amp;opt);
+<a name="line1223">1223: </a>  <font color="#4169E1">if</font> (opt) {
+<a name="line1224">1224: </a>    <a href="../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(vec, typeName);
+<a name="line1225">1225: </a>  } <font color="#4169E1">else</font> {
+<a name="line1226">1226: </a>    <a href="../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(vec, defaultType);
+<a name="line1227">1227: </a>  }
+<a name="line1228">1228: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1229">1229: </a>}
+
+<a name="line1231">1231: </a><font color="#B22222">/*@</font>
+<a name="line1232">1232: </a><font color="#B22222">  <a href="../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a> - Configures the vector from the options database.</font>
+
+<a name="line1234">1234: </a><font color="#B22222">  Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1236">1236: </a><font color="#B22222">  Input Parameter:</font>
+<a name="line1237">1237: </a><font color="#B22222">. vec - The vector</font>
+
+<a name="line1239">1239: </a><font color="#B22222">  Notes:</font>
+<a name="line1240">1240: </a><font color="#B22222">    To see all options, run your program with the -help option, or consult the users manual.</font>
+<a name="line1241">1241: </a><font color="#B22222">          Must be called after <a href="../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>() but before the vector is used.</font>
+
+<a name="line1243">1243: </a><font color="#B22222">  Level: beginner</font>
+
+
+<a name="line1246">1246: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(), <a href="../../../../docs/manualpages/Vec/VecSetOptionsPrefix.html#VecSetOptionsPrefix">VecSetOptionsPrefix</a>()</font>
+<a name="line1247">1247: </a><font color="#B22222">@*/</font>
+<a name="line1248">1248: </a><strong><font color="#4169E1"><a name="VecSetFromOptions"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> vec)</font></strong>
+<a name="line1249">1249: </a>{
+
+
+<a name="line1255">1255: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectOptionsBegin.html#PetscObjectOptionsBegin">PetscObjectOptionsBegin</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec);
+<a name="line1256">1256: </a>  <font color="#B22222">/* Handle vector type options */</font>
+<a name="line1257">1257: </a>  VecSetTypeFromOptions_Private(PetscOptionsObject,vec);
+
+<a name="line1259">1259: </a>  <font color="#B22222">/* Handle specific vector options */</font>
+<a name="line1260">1260: </a>  <font color="#4169E1">if</font> (vec-&gt;ops-&gt;setfromoptions) {
+<a name="line1261">1261: </a>    (*vec-&gt;ops-&gt;setfromoptions)(PetscOptionsObject,vec);
+<a name="line1262">1262: </a>  }
+
+<a name="line1264">1264: </a>  <font color="#B22222">/* process any options handlers added with <a href="../../../../docs/manualpages/Sys/PetscObjectAddOptionsHandler.html#PetscObjectAddOptionsHandler">PetscObjectAddOptionsHandler</a>() */</font>
+<a name="line1265">1265: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectProcessOptionsHandlers.html#PetscObjectProcessOptionsHandlers">PetscObjectProcessOptionsHandlers</a>(PetscOptionsObject,(<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)vec);
+<a name="line1266">1266: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsEnd.html#PetscOptionsEnd">PetscOptionsEnd</a>();
+<a name="line1267">1267: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1268">1268: </a>}
+
+<a name="line1270">1270: </a><font color="#B22222">/*@</font>
+<a name="line1271">1271: </a><font color="#B22222">  <a href="../../../../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a> - Sets the local and global sizes, and checks to determine compatibility</font>
+
+<a name="line1273">1273: </a><font color="#B22222">  Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1275">1275: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line1276">1276: </a><font color="#B22222">+ v - the vector</font>
+<a name="line1277">1277: </a><font color="#B22222">. n - the local size (or <a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a> to have it set)</font>
+<a name="line1278">1278: </a><font color="#B22222">- N - the global size (or <a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>)</font>
+
+<a name="line1280">1280: </a><font color="#B22222">  Notes:</font>
+<a name="line1281">1281: </a><font color="#B22222">  n and N cannot be both <a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a></font>
+<a name="line1282">1282: </a><font color="#B22222">  If one processor calls this with N of <a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a> then all processors must, otherwise the program will hang.</font>
+
+<a name="line1284">1284: </a><font color="#B22222">  Level: intermediate</font>
+
+<a name="line1286">1286: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(), <a href="../../../../docs/manualpages/Sys/PetscSplitOwnership.html#PetscSplitOwnership">PetscSplitOwnership</a>()</font>
+<a name="line1287">1287: </a><font color="#B22222">@*/</font>
+<a name="line1288">1288: </a><strong><font color="#4169E1"><a name="VecSetSizes"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n, <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> N)</font></strong>
+<a name="line1289">1289: </a>{
+
+<a name="line1295">1295: </a>  <font color="#4169E1">if</font> (N &gt;= 0 &amp;&amp; n &gt; N) <a href="../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_INCOMP,<font color="#666666">"Local size %D cannot be larger than global size %D"</font>,n,N);
+<a name="line1296">1296: </a>  <font color="#4169E1">if</font> ((v-&gt;map-&gt;n &gt;= 0 || v-&gt;map-&gt;N &gt;= 0) &amp;&amp; (v-&gt;map-&gt;n != n || v-&gt;map-&gt;N != N)) <a href="../../../../docs/manualpages/Sys/SETERRQ4.html#SETERRQ4">SETERRQ4</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Cannot change/reset vector sizes to %D local %D global after previously setting them to %D local %D global"</font>,n,N,v-&gt;map-&gt;n,v-&gt;map-&gt;N);
+<a name="line1297">1297: </a>  v-&gt;map-&gt;n = n;
+<a name="line1298">1298: </a>  v-&gt;map-&gt;N = N;
+<a name="line1299">1299: </a>  <font color="#4169E1">if</font> (v-&gt;ops-&gt;create) {
+<a name="line1300">1300: </a>    (*v-&gt;ops-&gt;create)(v);
+<a name="line1301">1301: </a>    v-&gt;ops-&gt;create = 0;
+<a name="line1302">1302: </a>  }
+<a name="line1303">1303: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1304">1304: </a>}
+
+<a name="line1306">1306: </a><font color="#B22222">/*@</font>
+<a name="line1307">1307: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecSetBlockSize.html#VecSetBlockSize">VecSetBlockSize</a> - Sets the blocksize for future calls to <a href="../../../../docs/manualpages/Vec/VecSetValuesBlocked.html#VecSetValuesBlocked">VecSetValuesBlocked</a>()</font>
+<a name="line1308">1308: </a><font color="#B22222">   and <a href="../../../../docs/manualpages/Vec/VecSetValuesBlockedLocal.html#VecSetValuesBlockedLocal">VecSetValuesBlockedLocal</a>().</font>
+
+<a name="line1310">1310: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1312">1312: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line1313">1313: </a><font color="#B22222">+  v - the vector</font>
+<a name="line1314">1314: </a><font color="#B22222">-  bs - the blocksize</font>
+
+<a name="line1316">1316: </a><font color="#B22222">   Notes:</font>
+<a name="line1317">1317: </a><font color="#B22222">   All vectors obtained by <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>() inherit the same blocksize.</font>
+
+<a name="line1319">1319: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line1321">1321: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecSetValuesBlocked.html#VecSetValuesBlocked">VecSetValuesBlocked</a>(), <a href="../../../../docs/manualpages/Vec/VecSetLocalToGlobalMapping.html#VecSetLocalToGlobalMapping">VecSetLocalToGlobalMapping</a>(), <a href="../../../../docs/manualpages/Vec/VecGetBlockSize.html#VecGetBlockSize">VecGetBlockSize</a>()</font>
+
+<a name="line1323">1323: </a><font color="#B22222">@*/</font>
+<a name="line1324">1324: </a><strong><font color="#4169E1"><a name="VecSetBlockSize"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecSetBlockSize.html#VecSetBlockSize">VecSetBlockSize</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> bs)</font></strong>
+<a name="line1325">1325: </a>{
+
+<a name="line1330">1330: </a>  <font color="#4169E1">if</font> (bs &lt; 0 || bs == v-&gt;map-&gt;bs) <font color="#4169E1">return</font>(0);
+<a name="line1332">1332: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutSetBlockSize.html#PetscLayoutSetBlockSize">PetscLayoutSetBlockSize</a>(v-&gt;map,bs);
+<a name="line1333">1333: </a>  v-&gt;bstash.bs = bs; <font color="#B22222">/* use the same blocksize for the vec's block-stash */</font>
+<a name="line1334">1334: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1335">1335: </a>}
+
+<a name="line1337">1337: </a><font color="#B22222">/*@</font>
+<a name="line1338">1338: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecGetBlockSize.html#VecGetBlockSize">VecGetBlockSize</a> - Gets the blocksize for the vector, i.e. what is used for <a href="../../../../docs/manualpages/Vec/VecSetValuesBlocked.html#VecSetValuesBlocked">VecSetValuesBlocked</a>()</font>
+<a name="line1339">1339: </a><font color="#B22222">   and <a href="../../../../docs/manualpages/Vec/VecSetValuesBlockedLocal.html#VecSetValuesBlockedLocal">VecSetValuesBlockedLocal</a>().</font>
+
+<a name="line1341">1341: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line1343">1343: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line1344">1344: </a><font color="#B22222">.  v - the vector</font>
+
+<a name="line1346">1346: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line1347">1347: </a><font color="#B22222">.  bs - the blocksize</font>
+
+<a name="line1349">1349: </a><font color="#B22222">   Notes:</font>
+<a name="line1350">1350: </a><font color="#B22222">   All vectors obtained by <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>() inherit the same blocksize.</font>
+
+<a name="line1352">1352: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line1354">1354: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecSetValuesBlocked.html#VecSetValuesBlocked">VecSetValuesBlocked</a>(), <a href="../../../../docs/manualpages/Vec/VecSetLocalToGlobalMapping.html#VecSetLocalToGlobalMapping">VecSetLocalToGlobalMapping</a>(), <a href="../../../../docs/manualpages/Vec/VecSetBlockSize.html#VecSetBlockSize">VecSetBlockSize</a>()</font>
+
+
+<a name="line1357">1357: </a><font color="#B22222">@*/</font>
+<a name="line1358">1358: </a><strong><font color="#4169E1"><a name="VecGetBlockSize"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecGetBlockSize.html#VecGetBlockSize">VecGetBlockSize</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *bs)</font></strong>
+<a name="line1359">1359: </a>{
+
+<a name="line1365">1365: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutGetBlockSize.html#PetscLayoutGetBlockSize">PetscLayoutGetBlockSize</a>(v-&gt;map,bs);
+<a name="line1366">1366: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1367">1367: </a>}
+
+<a name="line1369">1369: </a><font color="#B22222">/*@C</font>
+<a name="line1370">1370: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecSetOptionsPrefix.html#VecSetOptionsPrefix">VecSetOptionsPrefix</a> - Sets the prefix used for searching for all</font>
+<a name="line1371">1371: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> options in the database.</font>
+
+<a name="line1373">1373: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1375">1375: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line1376">1376: </a><font color="#B22222">+  v - the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> context</font>
+<a name="line1377">1377: </a><font color="#B22222">-  prefix - the prefix to prepend to all option names</font>
+
+<a name="line1379">1379: </a><font color="#B22222">   Notes:</font>
+<a name="line1380">1380: </a><font color="#B22222">   A hyphen (-) must NOT be given at the beginning of the prefix name.</font>
+<a name="line1381">1381: </a><font color="#B22222">   The first character of all runtime options is AUTOMATICALLY the hyphen.</font>
+
+<a name="line1383">1383: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line1385">1385: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>()</font>
+<a name="line1386">1386: </a><font color="#B22222">@*/</font>
+<a name="line1387">1387: </a><strong><font color="#4169E1"><a name="VecSetOptionsPrefix"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecSetOptionsPrefix.html#VecSetOptionsPrefix">VecSetOptionsPrefix</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,const char prefix[])</font></strong>
+<a name="line1388">1388: </a>{
+
+<a name="line1393">1393: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectSetOptionsPrefix.html#PetscObjectSetOptionsPrefix">PetscObjectSetOptionsPrefix</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,prefix);
+<a name="line1394">1394: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1395">1395: </a>}
+
+<a name="line1397">1397: </a><font color="#B22222">/*@C</font>
+<a name="line1398">1398: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecAppendOptionsPrefix.html#VecAppendOptionsPrefix">VecAppendOptionsPrefix</a> - Appends to the prefix used for searching for all</font>
+<a name="line1399">1399: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> options in the database.</font>
+
+<a name="line1401">1401: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1403">1403: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line1404">1404: </a><font color="#B22222">+  v - the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> context</font>
+<a name="line1405">1405: </a><font color="#B22222">-  prefix - the prefix to prepend to all option names</font>
+
+<a name="line1407">1407: </a><font color="#B22222">   Notes:</font>
+<a name="line1408">1408: </a><font color="#B22222">   A hyphen (-) must NOT be given at the beginning of the prefix name.</font>
+<a name="line1409">1409: </a><font color="#B22222">   The first character of all runtime options is AUTOMATICALLY the hyphen.</font>
+
+<a name="line1411">1411: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line1413">1413: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecGetOptionsPrefix.html#VecGetOptionsPrefix">VecGetOptionsPrefix</a>()</font>
+<a name="line1414">1414: </a><font color="#B22222">@*/</font>
+<a name="line1415">1415: </a><strong><font color="#4169E1"><a name="VecAppendOptionsPrefix"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecAppendOptionsPrefix.html#VecAppendOptionsPrefix">VecAppendOptionsPrefix</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,const char prefix[])</font></strong>
+<a name="line1416">1416: </a>{
+
+<a name="line1421">1421: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectAppendOptionsPrefix.html#PetscObjectAppendOptionsPrefix">PetscObjectAppendOptionsPrefix</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,prefix);
+<a name="line1422">1422: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1423">1423: </a>}
+
+<a name="line1425">1425: </a><font color="#B22222">/*@C</font>
+<a name="line1426">1426: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecGetOptionsPrefix.html#VecGetOptionsPrefix">VecGetOptionsPrefix</a> - Sets the prefix used for searching for all</font>
+<a name="line1427">1427: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> options in the database.</font>
+
+<a name="line1429">1429: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line1431">1431: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line1432">1432: </a><font color="#B22222">.  v - the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> context</font>
+
+<a name="line1434">1434: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line1435">1435: </a><font color="#B22222">.  prefix - pointer to the prefix string used</font>
+
+<a name="line1437">1437: </a><font color="#B22222">   Notes:</font>
+<a name="line1438">1438: </a><font color="#B22222">    On the fortran side, the user should pass in a string 'prefix' of</font>
+<a name="line1439">1439: </a><font color="#B22222">   sufficient length to hold the prefix.</font>
+
+<a name="line1441">1441: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line1443">1443: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecAppendOptionsPrefix.html#VecAppendOptionsPrefix">VecAppendOptionsPrefix</a>()</font>
+<a name="line1444">1444: </a><font color="#B22222">@*/</font>
+<a name="line1445">1445: </a><strong><font color="#4169E1"><a name="VecGetOptionsPrefix"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecGetOptionsPrefix.html#VecGetOptionsPrefix">VecGetOptionsPrefix</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,const char *prefix[])</font></strong>
+<a name="line1446">1446: </a>{
+
+<a name="line1451">1451: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectGetOptionsPrefix.html#PetscObjectGetOptionsPrefix">PetscObjectGetOptionsPrefix</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v,prefix);
+<a name="line1452">1452: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1453">1453: </a>}
+
+<a name="line1455">1455: </a><font color="#B22222">/*@</font>
+<a name="line1456">1456: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecSetUp.html#VecSetUp">VecSetUp</a> - Sets up the internal vector data structures for the later use.</font>
+
+<a name="line1458">1458: </a><font color="#B22222">   Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1460">1460: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line1461">1461: </a><font color="#B22222">.  v - the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> context</font>
+
+<a name="line1463">1463: </a><font color="#B22222">   Notes:</font>
+<a name="line1464">1464: </a><font color="#B22222">   For basic use of the <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> classes the user need not explicitly call</font>
+<a name="line1465">1465: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecSetUp.html#VecSetUp">VecSetUp</a>(), since these actions will happen automatically.</font>
+
+<a name="line1467">1467: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line1469">1469: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(), <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>()</font>
+<a name="line1470">1470: </a><font color="#B22222">@*/</font>
+<a name="line1471">1471: </a><strong><font color="#4169E1"><a name="VecSetUp"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecSetUp.html#VecSetUp">VecSetUp</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v)</font></strong>
+<a name="line1472">1472: </a>{
+<a name="line1473">1473: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+
+<a name="line1478">1478: </a>  <font color="#4169E1">if</font> (v-&gt;map-&gt;n &lt; 0 &amp;&amp; v-&gt;map-&gt;N &lt; 0) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_ARG_WRONGSTATE, <font color="#666666">"Sizes not set"</font>);
+<a name="line1479">1479: </a>  <font color="#4169E1">if</font> (!((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v)-&gt;type_name) {
+<a name="line1480">1480: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v), &amp;size);
+<a name="line1481">1481: </a>    <font color="#4169E1">if</font> (size == 1) {
+<a name="line1482">1482: </a>      <a href="../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(v, <a href="../../../../docs/manualpages/Vec/VECSEQ.html#VECSEQ">VECSEQ</a>);
+<a name="line1483">1483: </a>    } <font color="#4169E1">else</font> {
+<a name="line1484">1484: </a>      <a href="../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(v, <a href="../../../../docs/manualpages/Vec/VECMPI.html#VECMPI">VECMPI</a>);
+<a name="line1485">1485: </a>    }
+<a name="line1486">1486: </a>  }
+<a name="line1487">1487: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1488">1488: </a>}
+
+<a name="line1490">1490: </a><font color="#B22222">/*</font>
+<a name="line1491">1491: </a><font color="#B22222">    These currently expose the <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>/<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> in updating the</font>
+<a name="line1492">1492: </a><font color="#B22222">    cached norm. If we push those down into the implementation these</font>
+<a name="line1493">1493: </a><font color="#B22222">    will become independent of <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>/<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a></font>
+<a name="line1494">1494: </a><font color="#B22222">*/</font>
+
+<a name="line1496">1496: </a><font color="#B22222">/*@</font>
+<a name="line1497">1497: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a> - Copies a vector. y &lt;- x</font>
+
+<a name="line1499">1499: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1501">1501: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line1502">1502: </a><font color="#B22222">.  x - the vector</font>
+
+<a name="line1504">1504: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line1505">1505: </a><font color="#B22222">.  y - the copy</font>
+
+<a name="line1507">1507: </a><font color="#B22222">   Notes:</font>
+<a name="line1508">1508: </a><font color="#B22222">   For default parallel PETSc vectors, both x and y must be distributed in</font>
+<a name="line1509">1509: </a><font color="#B22222">   the same manner; local copies are done.</font>
+
+<a name="line1511">1511: </a><font color="#B22222">   Developer Notes:</font>
+<a name="line1513">1513: </a><font color="#B22222">   of the vectors to be sequential and one to be parallel so long as both have the same</font>
+<a name="line1514">1514: </a><font color="#B22222">   local sizes. This is used in some internal functions in PETSc.</font>
+
+<a name="line1516">1516: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line1518">1518: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>()</font>
+<a name="line1519">1519: </a><font color="#B22222">@*/</font>
+<a name="line1520">1520: </a><strong><font color="#4169E1"><a name="VecCopy"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecCopy.html#VecCopy">VecCopy</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line1521">1521: </a>{
+<a name="line1522">1522: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flgs[4];
+<a name="line1523">1523: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      norms[4] = {0.0,0.0,0.0,0.0};
+<a name="line1525">1525: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i;
+
+<a name="line1532">1532: </a>  <font color="#4169E1">if</font> (x == y) <font color="#4169E1">return</font>(0);
+<a name="line1533">1533: </a>  VecCheckSameLocalSize(x,1,y,2);
+<a name="line1534">1534: </a>  <font color="#4169E1">if</font> (x-&gt;stash.insertmode != <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">NOT_SET_VALUES</a>) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Not for unassembled vector"</font>);
+<a name="line1535">1535: </a>  VecSetErrorIfLocked(y,2);
+
+<a name="line1537">1537: </a><font color="#A020F0">#if !defined(PETSC_USE_MIXED_PRECISION)</font>
+<a name="line1538">1538: </a>  <font color="#4169E1">for</font> (i=0; i&lt;4; i++) {
+<a name="line1539">1539: </a>    <a href="../../../../docs/manualpages/Sys/PetscObjectComposedDataGetReal.html#PetscObjectComposedDataGetReal">PetscObjectComposedDataGetReal</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x,NormIds[i],norms[i],flgs[i]);
+<a name="line1540">1540: </a>  }
+<a name="line1541">1541: </a><font color="#A020F0">#endif</font>
+
+<a name="line1543">1543: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_Copy,x,y,0,0);
+<a name="line1544">1544: </a><font color="#A020F0">#if defined(PETSC_USE_MIXED_PRECISION)</font>
+<a name="line1545">1545: </a>  extern <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,double**);
+<a name="line1546">1546: </a>  extern <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,double**);
+<a name="line1547">1547: </a>  extern <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,float**);
+<a name="line1548">1548: </a>  extern <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,float**);
+<a name="line1549">1549: </a>  extern <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,const double**);
+<a name="line1550">1550: </a>  extern <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,const double**);
+<a name="line1551">1551: </a>  extern <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,const float**);
+<a name="line1552">1552: </a>  extern <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>,const float**);
+<a name="line1553">1553: </a>  <font color="#4169E1">if</font> ((((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x)-&gt;precision == PETSC_PRECISION_SINGLE) &amp;&amp; (((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)y)-&gt;precision == PETSC_PRECISION_DOUBLE)) {
+<a name="line1554">1554: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    i,n;
+<a name="line1555">1555: </a>    const float *xx;
+<a name="line1556">1556: </a>    double      *yy;
+<a name="line1557">1557: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(x,&amp;xx);
+<a name="line1558">1558: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(y,&amp;yy);
+<a name="line1559">1559: </a>    <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(x,&amp;n);
+<a name="line1560">1560: </a>    <font color="#4169E1">for</font> (i=0; i&lt;n; i++) yy[i] = xx[i];
+<a name="line1561">1561: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(x,&amp;xx);
+<a name="line1562">1562: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(y,&amp;yy);
+<a name="line1563">1563: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> ((((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x)-&gt;precision == PETSC_PRECISION_DOUBLE) &amp;&amp; (((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)y)-&gt;precision == PETSC_PRECISION_SINGLE)) {
+<a name="line1564">1564: </a>    <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>     i,n;
+<a name="line1565">1565: </a>    float        *yy;
+<a name="line1566">1566: </a>    const double *xx;
+<a name="line1567">1567: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(x,&amp;xx);
+<a name="line1568">1568: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(y,&amp;yy);
+<a name="line1569">1569: </a>    <a href="../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(x,&amp;n);
+<a name="line1570">1570: </a>    <font color="#4169E1">for</font> (i=0; i&lt;n; i++) yy[i] = (float) xx[i];
+<a name="line1571">1571: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(x,&amp;xx);
+<a name="line1572">1572: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(y,&amp;yy);
+<a name="line1573">1573: </a>  } <font color="#4169E1">else</font> {
+<a name="line1574">1574: </a>    (*x-&gt;ops-&gt;copy)(x,y);
+<a name="line1575">1575: </a>  }
+<a name="line1576">1576: </a><font color="#A020F0">#else</font>
+<a name="line1577">1577: </a>  (*x-&gt;ops-&gt;copy)(x,y);
+<a name="line1578">1578: </a><font color="#A020F0">#endif</font>
+
+<a name="line1580">1580: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)y);
+<a name="line1581">1581: </a><font color="#A020F0">#if !defined(PETSC_USE_MIXED_PRECISION)</font>
+<a name="line1582">1582: </a>  <font color="#4169E1">for</font> (i=0; i&lt;4; i++) {
+<a name="line1583">1583: </a>    <font color="#4169E1">if</font> (flgs[i]) {
+<a name="line1584">1584: </a>      <a href="../../../../docs/manualpages/Sys/PetscObjectComposedDataSetReal.html#PetscObjectComposedDataSetReal">PetscObjectComposedDataSetReal</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)y,NormIds[i],norms[i]);
+<a name="line1585">1585: </a>    }
+<a name="line1586">1586: </a>  }
+<a name="line1587">1587: </a><font color="#A020F0">#endif</font>
+
+<a name="line1589">1589: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_Copy,x,y,0,0);
+<a name="line1590">1590: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1591">1591: </a>}
+
+<a name="line1593">1593: </a><font color="#B22222">/*@</font>
+<a name="line1594">1594: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecSwap.html#VecSwap">VecSwap</a> - Swaps the vectors x and y.</font>
+
+<a name="line1596">1596: </a><font color="#B22222">   Logically Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1598">1598: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line1599">1599: </a><font color="#B22222">.  x, y  - the vectors</font>
+
+<a name="line1601">1601: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line1603">1603: </a><font color="#B22222">@*/</font>
+<a name="line1604">1604: </a><strong><font color="#4169E1"><a name="VecSwap"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecSwap.html#VecSwap">VecSwap</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line1605">1605: </a>{
+<a name="line1606">1606: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      normxs[4]={0.0,0.0,0.0,0.0},normys[4]={0.0,0.0,0.0,0.0};
+<a name="line1607">1607: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flgxs[4],flgys[4];
+<a name="line1609">1609: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i;
+
+<a name="line1617">1617: </a>  VecCheckSameSize(x,1,y,2);
+<a name="line1618">1618: </a>  <font color="#4169E1">if</font> (x-&gt;stash.insertmode != <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">NOT_SET_VALUES</a>) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Not for unassembled vector"</font>);
+<a name="line1619">1619: </a>  <font color="#4169E1">if</font> (y-&gt;stash.insertmode != <a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">NOT_SET_VALUES</a>) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Not for unassembled vector"</font>);
+
+<a name="line1621">1621: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(VEC_Swap,x,y,0,0);
+<a name="line1622">1622: </a>  <font color="#4169E1">for</font> (i=0; i&lt;4; i++) {
+<a name="line1623">1623: </a>    <a href="../../../../docs/manualpages/Sys/PetscObjectComposedDataGetReal.html#PetscObjectComposedDataGetReal">PetscObjectComposedDataGetReal</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x,NormIds[i],normxs[i],flgxs[i]);
+<a name="line1624">1624: </a>    <a href="../../../../docs/manualpages/Sys/PetscObjectComposedDataGetReal.html#PetscObjectComposedDataGetReal">PetscObjectComposedDataGetReal</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)y,NormIds[i],normys[i],flgys[i]);
+<a name="line1625">1625: </a>  }
+<a name="line1626">1626: </a>  (*x-&gt;ops-&gt;swap)(x,y);
+<a name="line1627">1627: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x);
+<a name="line1628">1628: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectStateIncrease.html#PetscObjectStateIncrease">PetscObjectStateIncrease</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)y);
+<a name="line1629">1629: </a>  <font color="#4169E1">for</font> (i=0; i&lt;4; i++) {
+<a name="line1630">1630: </a>    <font color="#4169E1">if</font> (flgxs[i]) {
+<a name="line1631">1631: </a>      <a href="../../../../docs/manualpages/Sys/PetscObjectComposedDataSetReal.html#PetscObjectComposedDataSetReal">PetscObjectComposedDataSetReal</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)y,NormIds[i],normxs[i]);
+<a name="line1632">1632: </a>    }
+<a name="line1633">1633: </a>    <font color="#4169E1">if</font> (flgys[i]) {
+<a name="line1634">1634: </a>      <a href="../../../../docs/manualpages/Sys/PetscObjectComposedDataSetReal.html#PetscObjectComposedDataSetReal">PetscObjectComposedDataSetReal</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x,NormIds[i],normys[i]);
+<a name="line1635">1635: </a>    }
+<a name="line1636">1636: </a>  }
+<a name="line1637">1637: </a>  <a href="../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(VEC_Swap,x,y,0,0);
+<a name="line1638">1638: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1639">1639: </a>}
+
+<a name="line1641">1641: </a><font color="#B22222">/*</font>
+<a name="line1642">1642: </a><font color="#B22222">  VecStashViewFromOptions - Processes command line options to determine if/how an VecStash object is to be viewed.</font>
+
+<a name="line1644">1644: </a><font color="#B22222">  Collective on VecStash</font>
+
+<a name="line1646">1646: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line1647">1647: </a><font color="#B22222">+ obj   - the VecStash object</font>
+<a name="line1648">1648: </a><font color="#B22222">. bobj - optional other object that provides the prefix</font>
+<a name="line1649">1649: </a><font color="#B22222">- optionname - option to activate viewing</font>
+
+<a name="line1651">1651: </a><font color="#B22222">  Level: intermediate</font>
+
+<a name="line1653">1653: </a><font color="#B22222">  Developer Note: This cannot use <a href="../../../../docs/manualpages/Sys/PetscObjectViewFromOptions.html#PetscObjectViewFromOptions">PetscObjectViewFromOptions</a>() because it takes a <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> as an argument but does not use <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a></font>
+
+<a name="line1655">1655: </a><font color="#B22222">*/</font>
+<a name="line1656">1656: </a><strong><font color="#4169E1"><a name="VecStashViewFromOptions"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecStashViewFromOptions(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> obj,<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> bobj,const char optionname[])</font></strong>
+<a name="line1657">1657: </a>{
+<a name="line1658">1658: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line1659">1659: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>       viewer;
+<a name="line1660">1660: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         flg;
+<a name="line1661">1661: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerFormat.html#PetscViewerFormat">PetscViewerFormat</a> format;
+<a name="line1662">1662: </a>  char              *prefix;
+
+<a name="line1665">1665: </a>  prefix = bobj ? bobj-&gt;prefix : ((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)obj)-&gt;prefix;
+<a name="line1666">1666: </a>  <a href="../../../../docs/manualpages/Viewer/PetscOptionsGetViewer.html#PetscOptionsGetViewer">PetscOptionsGetViewer</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)obj),((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)obj)-&gt;options,prefix,optionname,&amp;viewer,&amp;format,&amp;flg);
+<a name="line1667">1667: </a>  <font color="#4169E1">if</font> (flg) {
+<a name="line1668">1668: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerPushFormat.html#PetscViewerPushFormat">PetscViewerPushFormat</a>(viewer,format);
+<a name="line1669">1669: </a>    <a href="../../../../docs/manualpages/Vec/VecStashView.html#VecStashView">VecStashView</a>(obj,viewer);
+<a name="line1670">1670: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerPopFormat.html#PetscViewerPopFormat">PetscViewerPopFormat</a>(viewer);
+<a name="line1671">1671: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(&amp;viewer);
+<a name="line1672">1672: </a>  }
+<a name="line1673">1673: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1674">1674: </a>}
+
+<a name="line1676">1676: </a><font color="#B22222">/*@</font>
+<a name="line1677">1677: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecStashView.html#VecStashView">VecStashView</a> - Prints the entries in the vector stash and block stash.</font>
+
+<a name="line1679">1679: </a><font color="#B22222">   Collective on <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a></font>
+
+<a name="line1681">1681: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line1682">1682: </a><font color="#B22222">+  v - the vector</font>
+<a name="line1683">1683: </a><font color="#B22222">-  viewer - the viewer</font>
+
+<a name="line1685">1685: </a><font color="#B22222">   Level: advanced</font>
+
+
+<a name="line1688">1688: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecSetBlockSize.html#VecSetBlockSize">VecSetBlockSize</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>(), <a href="../../../../docs/manualpages/Vec/VecSetValuesBlocked.html#VecSetValuesBlocked">VecSetValuesBlocked</a>()</font>
+
+<a name="line1690">1690: </a><font color="#B22222">@*/</font>
+<a name="line1691">1691: </a><strong><font color="#4169E1"><a name="VecStashView"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/Vec/VecStashView.html#VecStashView">VecStashView</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,<a href="../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line1692">1692: </a>{
+<a name="line1694">1694: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    rank;
+<a name="line1695">1695: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,j;
+<a name="line1696">1696: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      match;
+<a name="line1697">1697: </a>  VecStash       *s;
+<a name="line1698">1698: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    val;
+
+
+<a name="line1705">1705: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../docs/manualpages/Viewer/PETSCVIEWERASCII.html#PETSCVIEWERASCII">PETSCVIEWERASCII</a>,&amp;match);
+<a name="line1706">1706: </a>  <font color="#4169E1">if</font> (!match) <a href="../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_SUP,<font color="#666666">"Stash viewer only works with ASCII viewer not %s\n"</font>,((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v)-&gt;type_name);
+<a name="line1707">1707: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIUseTabs.html#PetscViewerASCIIUseTabs">PetscViewerASCIIUseTabs</a>(viewer,<a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>);
+<a name="line1708">1708: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)v),&amp;rank);
+<a name="line1709">1709: </a>  s    = &amp;v-&gt;bstash;
+
+<a name="line1711">1711: </a>  <font color="#B22222">/* print block stash */</font>
+<a name="line1712">1712: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIPushSynchronized.html#PetscViewerASCIIPushSynchronized">PetscViewerASCIIPushSynchronized</a>(viewer);
+<a name="line1713">1713: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"[%d]Vector Block stash size %D block size %D\n"</font>,rank,s-&gt;n,s-&gt;bs);
+<a name="line1714">1714: </a>  <font color="#4169E1">for</font> (i=0; i&lt;s-&gt;n; i++) {
+<a name="line1715">1715: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"[%d] Element %D "</font>,rank,s-&gt;idx[i]);
+<a name="line1716">1716: </a>    <font color="#4169E1">for</font> (j=0; j&lt;s-&gt;bs; j++) {
+<a name="line1717">1717: </a>      val = s-&gt;array[i*s-&gt;bs+j];
+<a name="line1718">1718: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line1719">1719: </a>      <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"(%18.16e %18.16e) "</font>,<a href="../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(val),<a href="../../../../docs/manualpages/Sys/PetscImaginaryPart.html#PetscImaginaryPart">PetscImaginaryPart</a>(val));
+<a name="line1720">1720: </a><font color="#A020F0">#else</font>
+<a name="line1721">1721: </a>      <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"%18.16e "</font>,val);
+<a name="line1722">1722: </a><font color="#A020F0">#endif</font>
+<a name="line1723">1723: </a>    }
+<a name="line1724">1724: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"\n"</font>);
+<a name="line1725">1725: </a>  }
+<a name="line1726">1726: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerFlush.html#PetscViewerFlush">PetscViewerFlush</a>(viewer);
+
+<a name="line1728">1728: </a>  s = &amp;v-&gt;stash;
+
+<a name="line1730">1730: </a>  <font color="#B22222">/* print basic stash */</font>
+<a name="line1731">1731: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"[%d]Vector stash size %D\n"</font>,rank,s-&gt;n);
+<a name="line1732">1732: </a>  <font color="#4169E1">for</font> (i=0; i&lt;s-&gt;n; i++) {
+<a name="line1733">1733: </a>    val = s-&gt;array[i];
+<a name="line1734">1734: </a><font color="#A020F0">#if defined(PETSC_USE_COMPLEX)</font>
+<a name="line1735">1735: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"[%d] Element %D (%18.16e %18.16e) "</font>,rank,s-&gt;idx[i],<a href="../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(val),<a href="../../../../docs/manualpages/Sys/PetscImaginaryPart.html#PetscImaginaryPart">PetscImaginaryPart</a>(val));
+<a name="line1736">1736: </a><font color="#A020F0">#else</font>
+<a name="line1737">1737: </a>    <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"[%d] Element %D %18.16e\n"</font>,rank,s-&gt;idx[i],val);
+<a name="line1738">1738: </a><font color="#A020F0">#endif</font>
+<a name="line1739">1739: </a>  }
+<a name="line1740">1740: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerFlush.html#PetscViewerFlush">PetscViewerFlush</a>(viewer);
+<a name="line1741">1741: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIPopSynchronized.html#PetscViewerASCIIPopSynchronized">PetscViewerASCIIPopSynchronized</a>(viewer);
+<a name="line1742">1742: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerASCIIUseTabs.html#PetscViewerASCIIUseTabs">PetscViewerASCIIUseTabs</a>(viewer,<a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>);
+<a name="line1743">1743: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1744">1744: </a>}
+
+<a name="line1746">1746: </a><strong><font color="#4169E1"><a name="PetscOptionsGetVec"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscOptionsGetVec(PetscOptions options,const char prefix[],const char key[],<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,<a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> *set)</font></strong>
+<a name="line1747">1747: </a>{
+<a name="line1748">1748: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,N,rstart,rend;
+<a name="line1750">1750: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *xx;
+<a name="line1751">1751: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      *xreal;
+<a name="line1752">1752: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      iset;
+
+<a name="line1755">1755: </a>  <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(v,&amp;rstart,&amp;rend);
+<a name="line1756">1756: </a>  <a href="../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(v,&amp;N);
+<a name="line1757">1757: </a>  <a href="../../../../docs/manualpages/Sys/PetscCalloc1.html#PetscCalloc1">PetscCalloc1</a>(N,&amp;xreal);
+<a name="line1758">1758: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsGetRealArray.html#PetscOptionsGetRealArray">PetscOptionsGetRealArray</a>(options,prefix,key,xreal,&amp;N,&amp;iset);
+<a name="line1759">1759: </a>  <font color="#4169E1">if</font> (iset) {
+<a name="line1760">1760: </a>    <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(v,&amp;xx);
+<a name="line1761">1761: </a>    <font color="#4169E1">for</font> (i=rstart; i&lt;rend; i++) xx[i-rstart] = xreal[i];
+<a name="line1762">1762: </a>    <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(v,&amp;xx);
+<a name="line1763">1763: </a>  }
+<a name="line1764">1764: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(xreal);
+<a name="line1765">1765: </a>  <font color="#4169E1">if</font> (set) *set = iset;
+<a name="line1766">1766: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1767">1767: </a>}
+
+<a name="line1769">1769: </a><font color="#B22222">/*@</font>
+<a name="line1770">1770: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecGetLayout.html#VecGetLayout">VecGetLayout</a> - get <a href="../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a> describing vector layout</font>
+
+<a name="line1772">1772: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line1774">1774: </a><font color="#B22222">   Input Arguments:</font>
+<a name="line1775">1775: </a><font color="#B22222">.  x - the vector</font>
+
+<a name="line1777">1777: </a><font color="#B22222">   Output Arguments:</font>
+<a name="line1778">1778: </a><font color="#B22222">.  map - the layout</font>
+
+<a name="line1780">1780: </a><font color="#B22222">   Level: developer</font>
+
+<a name="line1782">1782: </a><font color="#B22222">.seealso: VecGetSizes(), <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(), <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRanges.html#VecGetOwnershipRanges">VecGetOwnershipRanges</a>()</font>
+<a name="line1783">1783: </a><font color="#B22222">@*/</font>
+<a name="line1784">1784: </a><strong><font color="#4169E1"><a name="VecGetLayout"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecGetLayout.html#VecGetLayout">VecGetLayout</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a> *map)</font></strong>
+<a name="line1785">1785: </a>{
+
+<a name="line1789">1789: </a>  *map = x-&gt;map;
+<a name="line1790">1790: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1791">1791: </a>}
+
+<a name="line1793">1793: </a><font color="#B22222">/*@</font>
+<a name="line1794">1794: </a><font color="#B22222">   <a href="../../../../docs/manualpages/Vec/VecSetLayout.html#VecSetLayout">VecSetLayout</a> - set <a href="../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a> describing vector layout</font>
+
+<a name="line1796">1796: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line1798">1798: </a><font color="#B22222">   Input Arguments:</font>
+<a name="line1799">1799: </a><font color="#B22222">+  x - the vector</font>
+<a name="line1800">1800: </a><font color="#B22222">-  map - the layout</font>
+
+<a name="line1802">1802: </a><font color="#B22222">   Notes:</font>
+<a name="line1803">1803: </a><font color="#B22222">   It is normally only valid to replace the layout with a layout known to be equivalent.</font>
+
+<a name="line1805">1805: </a><font color="#B22222">   Level: developer</font>
+
+<a name="line1807">1807: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/Vec/VecGetLayout.html#VecGetLayout">VecGetLayout</a>(), VecGetSizes(), <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(), <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRanges.html#VecGetOwnershipRanges">VecGetOwnershipRanges</a>()</font>
+<a name="line1808">1808: </a><font color="#B22222">@*/</font>
+<a name="line1809">1809: </a><strong><font color="#4169E1"><a name="VecSetLayout"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecSetLayout.html#VecSetLayout">VecSetLayout</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../docs/manualpages/IS/PetscLayout.html#PetscLayout">PetscLayout</a> map)</font></strong>
+<a name="line1810">1810: </a>{
+
+<a name="line1815">1815: </a>  <a href="../../../../docs/manualpages/IS/PetscLayoutReference.html#PetscLayoutReference">PetscLayoutReference</a>(map,&amp;x-&gt;map);
+<a name="line1816">1816: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1817">1817: </a>}
+
+<a name="line1819">1819: </a><strong><font color="#4169E1"><a name="VecSetInf"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> VecSetInf(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> xin)</font></strong>
+<a name="line1820">1820: </a>{
+<a name="line1821">1821: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,n = xin-&gt;map-&gt;n;
+<a name="line1822">1822: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *xx;
+<a name="line1823">1823: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    zero=0.0,one=1.0,inf=one/zero;
+
+<a name="line1827">1827: </a>  <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(xin,&amp;xx);
+<a name="line1828">1828: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n; i++) xx[i] = inf;
+<a name="line1829">1829: </a>  <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(xin,&amp;xx);
+<a name="line1830">1830: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1831">1831: </a>}
+
+<a name="line1833">1833: </a><font color="#B22222">/*@</font>
+<a name="line1834">1834: </a><font color="#B22222">     <a href="../../../../docs/manualpages/Vec/VecPinToCPU.html#VecPinToCPU">VecPinToCPU</a> - marks a vector to temporarily stay on the CPU and perform computations on the CPU</font>
+
+<a name="line1836">1836: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line1837">1837: </a><font color="#B22222">+   v - the vector</font>
+<a name="line1838">1838: </a><font color="#B22222">-   flg - pin to the CPU if value of <a href="../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a></font>
+
+<a name="line1840">1840: </a><font color="#B22222">   Level: intermediate</font>
+<a name="line1841">1841: </a><font color="#B22222">@*/</font>
+<a name="line1842">1842: </a><strong><font color="#4169E1"><a name="VecPinToCPU"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../docs/manualpages/Vec/VecPinToCPU.html#VecPinToCPU">VecPinToCPU</a>(<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> v,<a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> flg)</font></strong>
+<a name="line1843">1843: </a>{
+<a name="line1844">1844: </a><font color="#A020F0">#if defined(PETSC_HAVE_VIENNACL) || defined(PETSC_HAVE_CUDA)</font>
+
+<a name="line1848">1848: </a>  <font color="#4169E1">if</font> (v-&gt;pinnedtocpu == flg) <font color="#4169E1">return</font>(0);
+<a name="line1849">1849: </a>  v-&gt;pinnedtocpu = flg;
+<a name="line1850">1850: </a>  <font color="#4169E1">if</font> (v-&gt;ops-&gt;pintocpu) {
+<a name="line1851">1851: </a>    (*v-&gt;ops-&gt;pintocpu)(v,flg);
+<a name="line1852">1852: </a>  }
+<a name="line1853">1853: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1854">1854: </a><font color="#A020F0">#else</font>
+<a name="line1855">1855: </a>  <font color="#4169E1">return</font> 0;
+<a name="line1856">1856: </a><font color="#A020F0">#endif</font>
+<a name="line1857">1857: </a>}
+
+</pre>
+</body>
+
+</html>

@@ -1,0 +1,269 @@
+<center><a href="ex16fwd.c">Actual source code: ex16fwd.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ts/examples/tutorials/ex16fwd.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:30:54+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ts/examples/tutorials/ex16fwd.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a>static char help[] = <font color="#666666">"Performs adjoint sensitivity analysis for the van der Pol equation.\n\</font>
+<a name="line2">  2: </a><font color="#666666">Input parameters include:\n\</font>
+<a name="line3">  3: </a><font color="#666666">      -mu : stiffness parameter\n\n"</font>;
+
+<a name="line5">  5: </a><font color="#B22222">/*</font>
+<a name="line6">  6: </a><font color="#B22222">   Concepts: <a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a>^time-dependent nonlinear problems</font>
+<a name="line7">  7: </a><font color="#B22222">   Concepts: <a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a>^van der Pol equation</font>
+<a name="line8">  8: </a><font color="#B22222">   Concepts: <a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a>^adjoint sensitivity analysis</font>
+<a name="line9">  9: </a><font color="#B22222">   Processors: 1</font>
+<a name="line10"> 10: </a><font color="#B22222">*/</font>
+<a name="line11"> 11: </a><font color="#B22222">/* ------------------------------------------------------------------------</font>
+
+<a name="line13"> 13: </a><font color="#B22222">   This program solves the van der Pol equation</font>
+<a name="line14"> 14: </a><font color="#B22222">       y'' - \mu (1-y^2)*y' + y = 0        (1)</font>
+<a name="line15"> 15: </a><font color="#B22222">   on the domain 0 &lt;= x &lt;= 1, with the boundary conditions</font>
+<a name="line16"> 16: </a><font color="#B22222">       y(0) = 2, y'(0) = 0,</font>
+<a name="line17"> 17: </a><font color="#B22222">   and computes the sensitivities of the final solution w.r.t. initial conditions and parameter \mu with an explicit Runge-Kutta method and its discrete tangent linear model.</font>
+
+<a name="line19"> 19: </a><font color="#B22222">   Notes:</font>
+<a name="line20"> 20: </a><font color="#B22222">   This code demonstrates the TSForward interface to a system of ordinary differential equations (ODEs) in the form of u_t = F(u,t).</font>
+
+<a name="line22"> 22: </a><font color="#B22222">   (1) can be turned into a system of first order ODEs</font>
+<a name="line23"> 23: </a><font color="#B22222">   [ y' ] = [          z          ]</font>
+<a name="line24"> 24: </a><font color="#B22222">   [ z' ]   [ \mu (1 - y^2) z - y ]</font>
+
+<a name="line26"> 26: </a><font color="#B22222">   which then we can write as a vector equation</font>
+
+<a name="line28"> 28: </a><font color="#B22222">   [ u_1' ] = [             u_2           ]  (2)</font>
+<a name="line29"> 29: </a><font color="#B22222">   [ u_2' ]   [ \mu (1 - u_1^2) u_2 - u_1 ]</font>
+
+<a name="line31"> 31: </a><font color="#B22222">   which is now in the form of u_t = F(u,t).</font>
+
+<a name="line33"> 33: </a><font color="#B22222">   The user provides the right-hand-side function</font>
+
+<a name="line35"> 35: </a><font color="#B22222">   [ F(u,t) ] = [ u_2                       ]</font>
+<a name="line36"> 36: </a><font color="#B22222">                [ \mu (1 - u_1^2) u_2 - u_1 ]</font>
+
+<a name="line38"> 38: </a><font color="#B22222">   the Jacobian function</font>
+
+<a name="line40"> 40: </a><font color="#B22222">   dF   [       0           ;         1        ]</font>
+<a name="line41"> 41: </a><font color="#B22222">   -- = [                                      ]</font>
+<a name="line42"> 42: </a><font color="#B22222">   du   [ -2 \mu u_1*u_2 - 1;  \mu (1 - u_1^2) ]</font>
+
+<a name="line44"> 44: </a><font color="#B22222">   and the JacobainP (the Jacobian w.r.t. parameter) function</font>
+
+<a name="line46"> 46: </a><font color="#B22222">   dF      [  0;   0;     0             ]</font>
+<a name="line47"> 47: </a><font color="#B22222">   ---   = [                            ]</font>
+<a name="line48"> 48: </a><font color="#B22222">   d\mu    [  0;   0;  (1 - u_1^2) u_2  ]</font>
+
+
+<a name="line51"> 51: </a><font color="#B22222">  ------------------------------------------------------------------------- */</font>
+
+<a name="line53"> 53: </a> #include <A href="../../../../include/petscts.h.html">&lt;petscts.h&gt;</A>
+<a name="line54"> 54: </a> #include <A href="../../../../include/petscmat.h.html">&lt;petscmat.h&gt;</A>
+<a name="line55"> 55: </a><font color="#4169E1">typedef struct _n_User *User;</font>
+<a name="line56"> 56: </a><font color="#4169E1"><a name="_n_User"></a>struct _n_User </font>{
+<a name="line57"> 57: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> mu;
+<a name="line58"> 58: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> next_output;
+<a name="line59"> 59: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> tprev;
+<a name="line60"> 60: </a>};
+
+<a name="line62"> 62: </a><font color="#B22222">/*</font>
+<a name="line63"> 63: </a><font color="#B22222">*  User-defined routines</font>
+<a name="line64"> 64: </a><font color="#B22222">*/</font>
+<a name="line65"> 65: </a><strong><font color="#4169E1"><a name="RHSFunction"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> RHSFunction(<a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> F,void *ctx)</font></strong>
+<a name="line66"> 66: </a>{
+<a name="line67"> 67: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line68"> 68: </a>  User              user = (User)ctx;
+<a name="line69"> 69: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       *f;
+<a name="line70"> 70: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x;
+
+<a name="line73"> 73: </a>  <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(X,&amp;x);
+<a name="line74"> 74: </a>  <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(F,&amp;f);
+<a name="line75"> 75: </a>  f[0] = x[1];
+<a name="line76"> 76: </a>  f[1] = user-&gt;mu*(1.-x[0]*x[0])*x[1]-x[0];
+<a name="line77"> 77: </a>  <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(X,&amp;x);
+<a name="line78"> 78: </a>  <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(F,&amp;f);
+<a name="line79"> 79: </a>  <font color="#4169E1">return</font>(0);
+<a name="line80"> 80: </a>}
+
+<a name="line82"> 82: </a><strong><font color="#4169E1"><a name="RHSJacobian"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> RHSJacobian(<a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X,<a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,<a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> B,void *ctx)</font></strong>
+<a name="line83"> 83: </a>{
+<a name="line84"> 84: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line85"> 85: </a>  User              user = (User)ctx;
+<a name="line86"> 86: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         mu   = user-&gt;mu;
+<a name="line87"> 87: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          rowcol[] = {0,1};
+<a name="line88"> 88: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       J[2][2];
+<a name="line89"> 89: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x;
+
+<a name="line92"> 92: </a>  <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(X,&amp;x);
+<a name="line93"> 93: </a>  J[0][0] = 0;
+<a name="line94"> 94: </a>  J[1][0] = -2.*mu*x[1]*x[0]-1.;
+<a name="line95"> 95: </a>  J[0][1] = 1.0;
+<a name="line96"> 96: </a>  J[1][1] = mu*(1.0-x[0]*x[0]);
+<a name="line97"> 97: </a>  <a href="../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(A,2,rowcol,2,rowcol,&amp;J[0][0],<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line98"> 98: </a>  <a href="../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(A,<a href="../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line99"> 99: </a>  <a href="../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(A,<a href="../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line100">100: </a>  <font color="#4169E1">if</font> (A != B) {
+<a name="line101">101: </a>    <a href="../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(B,<a href="../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line102">102: </a>    <a href="../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(B,<a href="../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line103">103: </a>  }
+<a name="line104">104: </a>  <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(X,&amp;x);
+<a name="line105">105: </a>  <font color="#4169E1">return</font>(0);
+<a name="line106">106: </a>}
+
+<a name="line108">108: </a><strong><font color="#4169E1"><a name="RHSJacobianP"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> RHSJacobianP(<a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X,<a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> A,void *ctx)</font></strong>
+<a name="line109">109: </a>{
+<a name="line110">110: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line111">111: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          row[] = {0,1},col[]={2};
+<a name="line112">112: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>       J[2][1];
+<a name="line113">113: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x;
+
+<a name="line116">116: </a>  <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(X,&amp;x);
+<a name="line117">117: </a>  J[0][0] = 0;
+<a name="line118">118: </a>  J[1][0] = (1.-x[0]*x[0])*x[1];
+<a name="line119">119: </a>  <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(X,&amp;x);
+<a name="line120">120: </a>  <a href="../../../../docs/manualpages/Mat/MatSetValues.html#MatSetValues">MatSetValues</a>(A,2,row,1,col,&amp;J[0][0],<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+
+<a name="line122">122: </a>  <a href="../../../../docs/manualpages/Mat/MatAssemblyBegin.html#MatAssemblyBegin">MatAssemblyBegin</a>(A,<a href="../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line123">123: </a>  <a href="../../../../docs/manualpages/Mat/MatAssemblyEnd.html#MatAssemblyEnd">MatAssemblyEnd</a>(A,<a href="../../../../docs/manualpages/Mat/MatAssemblyType.html#MatAssemblyType">MAT_FINAL_ASSEMBLY</a>);
+<a name="line124">124: </a>  <font color="#4169E1">return</font>(0);
+<a name="line125">125: </a>}
+
+<a name="line127">127: </a><font color="#B22222">/* Monitor timesteps and use interpolation to output at integer multiples of 0.1 */</font>
+<a name="line128">128: </a><strong><font color="#4169E1"><a name="Monitor"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> Monitor(<a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a> ts,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> step,<a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> X,void *ctx)</font></strong>
+<a name="line129">129: </a>{
+<a name="line130">130: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line131">131: </a>  const <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *x;
+<a name="line132">132: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         tfinal, dt, tprev;
+<a name="line133">133: </a>  User              user = (User)ctx;
+
+<a name="line136">136: </a>  <a href="../../../../docs/manualpages/TS/TSGetTimeStep.html#TSGetTimeStep">TSGetTimeStep</a>(ts,&amp;dt);
+<a name="line137">137: </a>  <a href="../../../../docs/manualpages/TS/TSGetMaxTime.html#TSGetMaxTime">TSGetMaxTime</a>(ts,&amp;tfinal);
+<a name="line138">138: </a>  <a href="../../../../docs/manualpages/TS/TSGetPrevTime.html#TSGetPrevTime">TSGetPrevTime</a>(ts,&amp;tprev);
+<a name="line139">139: </a>  <a href="../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(X,&amp;x);
+<a name="line140">140: </a>  <a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"[%.1f] %D <a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a> %.6f (dt = %.6f) X % 12.6e % 12.6e\n"</font>,(double)user-&gt;next_output,step,(double)t,(double)dt,(double)<a href="../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(x[0]),(double)<a href="../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(x[1]));
+<a name="line141">141: </a>  <a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"t %.6f (tprev = %.6f) \n"</font>,(double)t,(double)tprev);
+<a name="line142">142: </a>  <a href="../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(X,&amp;x);
+<a name="line143">143: </a>  <font color="#4169E1">return</font>(0);
+<a name="line144">144: </a>}
+
+<a name="line146">146: </a><strong><font color="#4169E1"><a name="main"></a>int main(int argc,char **argv)</font></strong>
+<a name="line147">147: </a>{
+<a name="line148">148: </a>  <a href="../../../../docs/manualpages/TS/TS.html#TS">TS</a>             ts;            <font color="#B22222">/* nonlinear solver */</font>
+<a name="line149">149: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            x;             <font color="#B22222">/* solution, residual vectors */</font>
+<a name="line150">150: </a>  <a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            A;             <font color="#B22222">/* Jacobian matrix */</font>
+<a name="line151">151: </a>  <a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            Jacp;          <font color="#B22222">/* JacobianP matrix */</font>
+<a name="line152">152: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       steps;
+<a name="line153">153: </a>  <a href="../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      ftime   =0.5;
+<a name="line154">154: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      monitor = <a href="../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line155">155: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *x_ptr;
+<a name="line156">156: </a>  <a href="../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+<a name="line157">157: </a>  <font color="#4169E1">struct _n_User</font> user;
+<a name="line159">159: </a>  <a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            sp;
+
+<a name="line161">161: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line162">162: </a><font color="#B22222">     Initialize program</font>
+<a name="line163">163: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line164">164: </a>  <a href="../../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(&amp;argc,&amp;argv,NULL,help);<font color="#4169E1">if</font> (ierr) <font color="#4169E1">return</font> ierr;
+<a name="line165">165: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;size);
+<a name="line166">166: </a>  <font color="#4169E1">if</font> (size != 1) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,1,<font color="#666666">"This is a uniprocessor example only!"</font>);
+
+<a name="line168">168: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line169">169: </a><font color="#B22222">    Set runtime options</font>
+<a name="line170">170: </a><font color="#B22222">    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line171">171: </a>  user.mu          = 1;
+<a name="line172">172: </a>  user.next_output = 0.0;
+
+
+<a name="line175">175: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsGetReal.html#PetscOptionsGetReal">PetscOptionsGetReal</a>(NULL,NULL,<font color="#666666">"-mu"</font>,&amp;user.mu,NULL);
+<a name="line176">176: </a>  <a href="../../../../docs/manualpages/Sys/PetscOptionsGetBool.html#PetscOptionsGetBool">PetscOptionsGetBool</a>(NULL,NULL,<font color="#666666">"-monitor"</font>,&amp;monitor,NULL);
+
+<a name="line178">178: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line179">179: </a><font color="#B22222">    Create necessary matrix and vectors, solve same ODE on every process</font>
+<a name="line180">180: </a><font color="#B22222">    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line181">181: </a>  <a href="../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;A);
+<a name="line182">182: </a>  <a href="../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(A,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,2,2);
+<a name="line183">183: </a>  <a href="../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(A);
+<a name="line184">184: </a>  <a href="../../../../docs/manualpages/Mat/MatSetUp.html#MatSetUp">MatSetUp</a>(A);
+<a name="line185">185: </a>  <a href="../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(A,&amp;x,NULL);
+
+<a name="line187">187: </a>  <a href="../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;Jacp);
+<a name="line188">188: </a>  <a href="../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(Jacp,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,2,3);
+<a name="line189">189: </a>  <a href="../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(Jacp);
+<a name="line190">190: </a>  <a href="../../../../docs/manualpages/Mat/MatSetUp.html#MatSetUp">MatSetUp</a>(Jacp);
+
+<a name="line192">192: </a>  <a href="../../../../docs/manualpages/Mat/MatCreateDense.html#MatCreateDense">MatCreateDense</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,2,3,NULL,&amp;sp);
+<a name="line193">193: </a>  <a href="../../../../docs/manualpages/Mat/MatZeroEntries.html#MatZeroEntries">MatZeroEntries</a>(sp);
+<a name="line194">194: </a>  <a href="../../../../docs/manualpages/Mat/MatShift.html#MatShift">MatShift</a>(sp,1.0);
+
+<a name="line196">196: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line197">197: </a><font color="#B22222">     Create timestepping solver context</font>
+<a name="line198">198: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line199">199: </a>  <a href="../../../../docs/manualpages/TS/TSCreate.html#TSCreate">TSCreate</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;ts);
+<a name="line200">200: </a>  <a href="../../../../docs/manualpages/TS/TSSetType.html#TSSetType">TSSetType</a>(ts,<a href="../../../../docs/manualpages/TS/TSRK.html#TSRK">TSRK</a>);
+<a name="line201">201: </a>  <a href="../../../../docs/manualpages/TS/TSSetRHSFunction.html#TSSetRHSFunction">TSSetRHSFunction</a>(ts,NULL,RHSFunction,&amp;user);
+<a name="line202">202: </a>  <font color="#B22222">/*   Set RHS Jacobian for the adjoint integration */</font>
+<a name="line203">203: </a>  <a href="../../../../docs/manualpages/TS/TSSetRHSJacobian.html#TSSetRHSJacobian">TSSetRHSJacobian</a>(ts,A,A,RHSJacobian,&amp;user);
+<a name="line204">204: </a>  <a href="../../../../docs/manualpages/TS/TSSetMaxTime.html#TSSetMaxTime">TSSetMaxTime</a>(ts,ftime);
+<a name="line205">205: </a>  <a href="../../../../docs/manualpages/TS/TSSetExactFinalTime.html#TSSetExactFinalTime">TSSetExactFinalTime</a>(ts,<a href="../../../../docs/manualpages/TS/TSExactFinalTimeOption.html#TSExactFinalTimeOption">TS_EXACTFINALTIME_MATCHSTEP</a>);
+<a name="line206">206: </a>  <font color="#4169E1">if</font> (monitor) {
+<a name="line207">207: </a>    <a href="../../../../docs/manualpages/TS/TSMonitorSet.html#TSMonitorSet">TSMonitorSet</a>(ts,Monitor,&amp;user,NULL);
+<a name="line208">208: </a>  }
+<a name="line209">209: </a>  <a href="../../../../docs/manualpages/Sensitivity/TSForwardSetSensitivities.html#TSForwardSetSensitivities">TSForwardSetSensitivities</a>(ts,3,sp);
+<a name="line210">210: </a>  <a href="../../../../docs/manualpages/Sensitivity/TSSetRHSJacobianP.html#TSSetRHSJacobianP">TSSetRHSJacobianP</a>(ts,Jacp,RHSJacobianP,&amp;user);
+
+<a name="line212">212: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line213">213: </a><font color="#B22222">     Set initial conditions</font>
+<a name="line214">214: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line215">215: </a>  <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(x,&amp;x_ptr);
+
+<a name="line217">217: </a>  x_ptr[0] = 2;   x_ptr[1] = 0.66666654321;
+<a name="line218">218: </a>  <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(x,&amp;x_ptr);
+<a name="line219">219: </a>  <a href="../../../../docs/manualpages/TS/TSSetTimeStep.html#TSSetTimeStep">TSSetTimeStep</a>(ts,.001);
+
+
+<a name="line222">222: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line223">223: </a><font color="#B22222">     Set runtime options</font>
+<a name="line224">224: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line225">225: </a>  <a href="../../../../docs/manualpages/TS/TSSetFromOptions.html#TSSetFromOptions">TSSetFromOptions</a>(ts);
+
+<a name="line227">227: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line228">228: </a><font color="#B22222">     Solve nonlinear system</font>
+<a name="line229">229: </a><font color="#B22222">     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line230">230: </a>  <a href="../../../../docs/manualpages/TS/TSSolve.html#TSSolve">TSSolve</a>(ts,x);
+<a name="line231">231: </a>  <a href="../../../../docs/manualpages/TS/TSGetSolveTime.html#TSGetSolveTime">TSGetSolveTime</a>(ts,&amp;ftime);
+<a name="line232">232: </a>  <a href="../../../../docs/manualpages/TS/TSGetStepNumber.html#TSGetStepNumber">TSGetStepNumber</a>(ts,&amp;steps);
+<a name="line233">233: </a>  <a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"mu %g, steps %D, ftime %g\n"</font>,(double)user.mu,steps,(double)ftime);
+<a name="line234">234: </a>  <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(x,<a href="../../../../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_WORLD.html#PETSC_VIEWER_STDOUT_WORLD">PETSC_VIEWER_STDOUT_WORLD</a>);
+
+<a name="line236">236: </a>  <a href="../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"\n forward sensitivity: d[y(tf) z(tf)]/d[y0 z0 mu]\n"</font>);
+<a name="line237">237: </a>  <a href="../../../../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(sp,<a href="../../../../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_WORLD.html#PETSC_VIEWER_STDOUT_WORLD">PETSC_VIEWER_STDOUT_WORLD</a>);
+
+<a name="line239">239: </a>  <font color="#B22222">/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</font>
+<a name="line240">240: </a><font color="#B22222">     Free work space.  All PETSc objects should be destroyed when they</font>
+<a name="line241">241: </a><font color="#B22222">     are no longer needed.</font>
+<a name="line242">242: </a><font color="#B22222">   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */</font>
+<a name="line243">243: </a>  <a href="../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;A);
+<a name="line244">244: </a>  <a href="../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;Jacp);
+<a name="line245">245: </a>  <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;x);
+<a name="line246">246: </a>  <a href="../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;sp);
+<a name="line247">247: </a>  <a href="../../../../docs/manualpages/TS/TSDestroy.html#TSDestroy">TSDestroy</a>(&amp;ts);
+<a name="line248">248: </a>  <a href="../../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>();
+<a name="line249">249: </a>  <font color="#4169E1">return</font> ierr;
+<a name="line250">250: </a>}
+
+<a name="line252">252: </a><font color="#B22222">/*TEST</font>
+
+<a name="line254">254: </a><font color="#B22222">    test:</font>
+<a name="line255">255: </a><font color="#B22222">      args: -monitor 0 -ts_adapt_type none</font>
+
+<a name="line257">257: </a><font color="#B22222">TEST*/</font>
+</pre>
+</body>
+
+</html>

@@ -1,0 +1,888 @@
+<center><a href="feopencl.c">Actual source code: feopencl.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/dm/dt/fe/impls/opencl/feopencl.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:09:11+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/dm/dt/fe/impls/opencl/feopencl.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a> #include <A href="../../../../../../include/petsc/private/petscfeimpl.h.html">&lt;petsc/private/petscfeimpl.h&gt;</A>
+
+<a name="line3">  3: </a><font color="#A020F0">#if defined(PETSC_HAVE_OPENCL)</font>
+
+<a name="line5">  5: </a><strong><font color="#4169E1"><a name="PetscFEDestroy_OpenCL"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFEDestroy_OpenCL(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> fem)</font></strong>
+<a name="line6">  6: </a>{
+<a name="line7">  7: </a>  PetscFE_OpenCL *ocl = (PetscFE_OpenCL *) fem-&gt;data;
+<a name="line8">  8: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line11"> 11: </a>  clReleaseCommandQueue(ocl-&gt;queue_id);
+<a name="line12"> 12: </a>  ocl-&gt;queue_id = 0;
+<a name="line13"> 13: </a>  clReleaseContext(ocl-&gt;ctx_id);
+<a name="line14"> 14: </a>  ocl-&gt;ctx_id = 0;
+<a name="line15"> 15: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(ocl);
+<a name="line16"> 16: </a>  <font color="#4169E1">return</font>(0);
+<a name="line17"> 17: </a>}
+
+<a name="line19"> 19: </a><strong><font color="#228B22">#define STRING_ERROR_CHECK(MSG) do { string_tail += count; if (string_tail == end_of_buffer) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, PETSC_ERR_SUP, MSG);} while(0)</font></strong>
+<a name="line20"> 20: </a><font color="#4169E1">enum</font> {LAPLACIAN = 0, ELASTICITY = 1};
+
+<a name="line22"> 22: </a><font color="#B22222">/* NOTE: This is now broken for vector problems. Must redo loops to respect vector basis elements */</font>
+<a name="line23"> 23: </a><font color="#B22222">/* dim     Number of spatial dimensions:          2                   */</font>
+<a name="line24"> 24: </a><font color="#B22222">/* N_b     Number of basis functions:             generated           */</font>
+<a name="line25"> 25: </a><font color="#B22222">/* N_{bt}  Number of total basis functions:       N_b * N_{comp}      */</font>
+<a name="line26"> 26: </a><font color="#B22222">/* N_q     Number of quadrature points:           generated           */</font>
+<a name="line27"> 27: </a><font color="#B22222">/* N_{bs}  Number of block cells                  LCM(N_b, N_q)       */</font>
+<a name="line28"> 28: </a><font color="#B22222">/* N_{bst} Number of block cell components        LCM(N_{bt}, N_q)    */</font>
+<a name="line29"> 29: </a><font color="#B22222">/* N_{bl}  Number of concurrent blocks            generated           */</font>
+<a name="line30"> 30: </a><font color="#B22222">/* N_t     Number of threads:                     N_{bl} * N_{bs}     */</font>
+<a name="line31"> 31: </a><font color="#B22222">/* N_{cbc} Number of concurrent basis      cells: N_{bl} * N_q        */</font>
+<a name="line32"> 32: </a><font color="#B22222">/* N_{cqc} Number of concurrent quadrature cells: N_{bl} * N_b        */</font>
+<a name="line33"> 33: </a><font color="#B22222">/* N_{sbc} Number of serial     basis      cells: N_{bs} / N_q        */</font>
+<a name="line34"> 34: </a><font color="#B22222">/* N_{sqc} Number of serial     quadrature cells: N_{bs} / N_b        */</font>
+<a name="line35"> 35: </a><font color="#B22222">/* N_{cb}  Number of serial cell batches:         input               */</font>
+<a name="line36"> 36: </a><font color="#B22222">/* N_c     Number of total cells:                 N_{cb}*N_{t}/N_{comp} */</font>
+<a name="line37"> 37: </a><strong><font color="#4169E1"><a name="PetscFEOpenCLGenerateIntegrationCode"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFEOpenCLGenerateIntegrationCode(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> fem, char **string_buffer, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> buffer_length, <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> useAux, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> N_bl)</font></strong>
+<a name="line38"> 38: </a>{
+<a name="line39"> 39: </a>  PetscFE_OpenCL *ocl = (PetscFE_OpenCL *) fem-&gt;data;
+<a name="line40"> 40: </a>  <a href="../../../../../../docs/manualpages/FE/PetscQuadrature.html#PetscQuadrature">PetscQuadrature</a> q;
+<a name="line41"> 41: </a>  char           *string_tail   = *string_buffer;
+<a name="line42"> 42: </a>  char           *end_of_buffer = *string_buffer + buffer_length;
+<a name="line43"> 43: </a>  char            float_str[]   = <font color="#666666">"float"</font>, double_str[]  = <font color="#666666">"double"</font>;
+<a name="line44"> 44: </a>  char           *numeric_str   = &amp;(float_str[0]);
+<a name="line45"> 45: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        op            = ocl-&gt;op;
+<a name="line46"> 46: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       useField      = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line47"> 47: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       useFieldDer   = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line48"> 48: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       useFieldAux   = useAux;
+<a name="line49"> 49: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       useFieldDerAux= <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line50"> 50: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       useF0         = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line51"> 51: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       useF1         = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line52"> 52: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *points, *weights;
+<a name="line53"> 53: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>      *basis, *basisDer;
+<a name="line54"> 54: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        dim, qNc, N_b, N_c, N_q, N_t, p, d, b, c;
+<a name="line55"> 55: </a>  size_t          count;
+<a name="line56"> 56: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line59"> 59: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetSpatialDimension.html#PetscFEGetSpatialDimension">PetscFEGetSpatialDimension</a>(fem, &amp;dim);
+<a name="line60"> 60: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetDimension.html#PetscFEGetDimension">PetscFEGetDimension</a>(fem, &amp;N_b);
+<a name="line61"> 61: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetNumComponents.html#PetscFEGetNumComponents">PetscFEGetNumComponents</a>(fem, &amp;N_c);
+<a name="line62"> 62: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetQuadrature.html#PetscFEGetQuadrature">PetscFEGetQuadrature</a>(fem, &amp;q);
+<a name="line63"> 63: </a>  <a href="../../../../../../docs/manualpages/DT/PetscQuadratureGetData.html#PetscQuadratureGetData">PetscQuadratureGetData</a>(q, NULL, &amp;qNc, &amp;N_q, &amp;points, &amp;weights);
+<a name="line64"> 64: </a>  <font color="#4169E1">if</font> (qNc != 1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_SUP, <font color="#666666">"Only supports scalar quadrature, not %D components\n"</font>, qNc);
+<a name="line65"> 65: </a>  N_t  = N_b * N_c * N_q * N_bl;
+<a name="line66"> 66: </a>  <font color="#B22222">/* Enable device extension for double precision */</font>
+<a name="line67"> 67: </a>  <font color="#4169E1">if</font> (ocl-&gt;realType == <a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PETSC_DOUBLE</a>) {
+<a name="line68"> 68: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line69"> 69: </a><font color="#666666">"#if defined(cl_khr_fp64)\n"</font>
+<a name="line70"> 70: </a><font color="#666666">"#  pragma OPENCL EXTENSION cl_khr_fp64: enable\n"</font>
+<a name="line71"> 71: </a><font color="#666666">"#elif defined(cl_amd_fp64)\n"</font>
+<a name="line72"> 72: </a><font color="#666666">"#  pragma OPENCL EXTENSION cl_amd_fp64: enable\n"</font>
+<a name="line73"> 73: </a><font color="#666666">"#endif\n"</font>,
+<a name="line74"> 74: </a>                              &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line75"> 75: </a>    numeric_str  = &amp;(double_str[0]);
+<a name="line76"> 76: </a>  }
+<a name="line77"> 77: </a>  <font color="#B22222">/* Kernel API */</font>
+<a name="line78"> 78: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line79"> 79: </a><font color="#666666">"\n"</font>
+<a name="line80"> 80: </a><font color="#666666">"__kernel void integrateElementQuadrature(int N_cb, __global %s *coefficients, __global %s *coefficientsAux, __global %s *jacobianInverses, __global %s *jacobianDeterminants, __global %s *elemVec)\n"</font>
+<a name="line81"> 81: </a><font color="#666666">"{\n"</font>,
+<a name="line82"> 82: </a>                       &amp;count, numeric_str, numeric_str, numeric_str, numeric_str, numeric_str);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line83"> 83: </a>  <font color="#B22222">/* Quadrature */</font>
+<a name="line84"> 84: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line85"> 85: </a><font color="#666666">"  /* Quadrature points\n"</font>
+<a name="line86"> 86: </a><font color="#666666">"   - (<a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x1</a>,y1,<a href="../../../../../../docs/manualpages/Sys/PetscOffloadMask.html#PetscOffloadMask">x2</a>,y2,...) */\n"</font>
+<a name="line87"> 87: </a><font color="#666666">"  const %s points[%d] = {\n"</font>,
+<a name="line88"> 88: </a>                       &amp;count, numeric_str, N_q*dim);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line89"> 89: </a>  <font color="#4169E1">for</font> (p = 0; p &lt; N_q; ++p) {
+<a name="line90"> 90: </a>    <font color="#4169E1">for</font> (d = 0; d &lt; dim; ++d) {
+<a name="line91"> 91: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"%g,\n"</font>, &amp;count, points[p*dim+d]);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line92"> 92: </a>    }
+<a name="line93"> 93: </a>  }
+<a name="line94"> 94: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"};\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line95"> 95: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line96"> 96: </a><font color="#666666">"  /* Quadrature weights\n"</font>
+<a name="line97"> 97: </a><font color="#666666">"   - (v1,v2,...) */\n"</font>
+<a name="line98"> 98: </a><font color="#666666">"  const %s weights[%d] = {\n"</font>,
+<a name="line99"> 99: </a>                       &amp;count, numeric_str, N_q);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line100">100: </a>  <font color="#4169E1">for</font> (p = 0; p &lt; N_q; ++p) {
+<a name="line101">101: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"%g,\n"</font>, &amp;count, weights[p]);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line102">102: </a>  }
+<a name="line103">103: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"};\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line104">104: </a>  <font color="#B22222">/* Basis Functions */</font>
+<a name="line105">105: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetDefaultTabulation.html#PetscFEGetDefaultTabulation">PetscFEGetDefaultTabulation</a>(fem, &amp;basis, &amp;basisDer, NULL);
+<a name="line106">106: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line107">107: </a><font color="#666666">"  /* Nodal basis function evaluations\n"</font>
+<a name="line108">108: </a><font color="#666666">"    - basis component is fastest varying, the basis function, then point */\n"</font>
+<a name="line109">109: </a><font color="#666666">"  const %s Basis[%d] = {\n"</font>,
+<a name="line110">110: </a>                       &amp;count, numeric_str, N_q*N_b*N_c);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line111">111: </a>  <font color="#4169E1">for</font> (p = 0; p &lt; N_q; ++p) {
+<a name="line112">112: </a>    <font color="#4169E1">for</font> (b = 0; b &lt; N_b; ++b) {
+<a name="line113">113: </a>      <font color="#4169E1">for</font> (c = 0; c &lt; N_c; ++c) {
+<a name="line114">114: </a>        <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"%g,\n"</font>, &amp;count, basis[(p*N_b + b)*N_c + c]);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line115">115: </a>      }
+<a name="line116">116: </a>    }
+<a name="line117">117: </a>  }
+<a name="line118">118: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"};\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line119">119: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line120">120: </a><font color="#666666">"\n"</font>
+<a name="line121">121: </a><font color="#666666">"  /* Nodal basis function derivative evaluations,\n"</font>
+<a name="line122">122: </a><font color="#666666">"      - derivative direction is fastest varying, then basis component, then basis function, then point */\n"</font>
+<a name="line123">123: </a><font color="#666666">"  const %s%d BasisDerivatives[%d] = {\n"</font>,
+<a name="line124">124: </a>                       &amp;count, numeric_str, dim, N_q*N_b*N_c);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line125">125: </a>  <font color="#4169E1">for</font> (p = 0; p &lt; N_q; ++p) {
+<a name="line126">126: </a>    <font color="#4169E1">for</font> (b = 0; b &lt; N_b; ++b) {
+<a name="line127">127: </a>      <font color="#4169E1">for</font> (c = 0; c &lt; N_c; ++c) {
+<a name="line128">128: </a>        <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"(%s%d)("</font>, &amp;count, numeric_str, dim);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line129">129: </a>        <font color="#4169E1">for</font> (d = 0; d &lt; dim; ++d) {
+<a name="line130">130: </a>          <font color="#4169E1">if</font> (d &gt; 0) {
+<a name="line131">131: </a>            <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">", %g"</font>, &amp;count, basisDer[((p*N_b + b)*dim + d)*N_c + c]);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line132">132: </a>          } <font color="#4169E1">else</font> {
+<a name="line133">133: </a>            <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"%g"</font>, &amp;count, basisDer[((p*N_b + b)*dim + d)*N_c + c]);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line134">134: </a>          }
+<a name="line135">135: </a>        }
+<a name="line136">136: </a>        <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"),\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line137">137: </a>      }
+<a name="line138">138: </a>    }
+<a name="line139">139: </a>  }
+<a name="line140">140: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"};\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line141">141: </a>  <font color="#B22222">/* Sizes */</font>
+<a name="line142">142: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line143">143: </a><font color="#666666">"  const int dim    = %d;                           // The spatial dimension\n"</font>
+<a name="line144">144: </a><font color="#666666">"  const int N_bl   = %d;                           // The number of concurrent blocks\n"</font>
+<a name="line145">145: </a><font color="#666666">"  const int N_b    = %d;                           // The number of basis functions\n"</font>
+<a name="line146">146: </a><font color="#666666">"  const int N_comp = %d;                           // The number of basis function components\n"</font>
+<a name="line147">147: </a><font color="#666666">"  const int N_bt   = N_b*N_comp;                    // The total number of scalar basis functions\n"</font>
+<a name="line148">148: </a><font color="#666666">"  const int N_q    = %d;                           // The number of quadrature points\n"</font>
+<a name="line149">149: </a><font color="#666666">"  const int N_bst  = N_bt*N_q;                      // The block size, LCM(N_b*N_comp, N_q), Notice that a block is not processed simultaneously\n"</font>
+<a name="line150">150: </a><font color="#666666">"  const int N_t    = N_bst*N_bl;                    // The number of threads, N_bst * N_bl\n"</font>
+<a name="line151">151: </a><font color="#666666">"  const int N_bc   = N_t/N_comp;                    // The number of cells per batch (N_b*N_q*N_bl)\n"</font>
+<a name="line152">152: </a><font color="#666666">"  const int N_sbc  = N_bst / (N_q * N_comp);\n"</font>
+<a name="line153">153: </a><font color="#666666">"  const int N_sqc  = N_bst / N_bt;\n"</font>
+<a name="line154">154: </a><font color="#666666">"  /*const int N_c    = N_cb * N_bc;*/\n"</font>
+<a name="line155">155: </a><font color="#666666">"\n"</font>
+<a name="line156">156: </a><font color="#666666">"  /* Calculated indices */\n"</font>
+<a name="line157">157: </a><font color="#666666">"  /*const int tidx    = get_local_id(0) + get_local_size(0)*get_local_id(1);*/\n"</font>
+<a name="line158">158: </a><font color="#666666">"  const int tidx    = get_local_id(0);\n"</font>
+<a name="line159">159: </a><font color="#666666">"  const int blidx   = tidx / N_bst;                  // Block number for this thread\n"</font>
+<a name="line160">160: </a><font color="#666666">"  const int bidx    = tidx %% N_bt;                   // Basis function mapped to this thread\n"</font>
+<a name="line161">161: </a><font color="#666666">"  const int cidx    = tidx %% N_comp;                 // Basis component mapped to this thread\n"</font>
+<a name="line162">162: </a><font color="#666666">"  const int qidx    = tidx %% N_q;                    // Quadrature point mapped to this thread\n"</font>
+<a name="line163">163: </a><font color="#666666">"  const int blbidx  = tidx %% N_q + blidx*N_q;        // Cell mapped to this thread in the basis phase\n"</font>
+<a name="line164">164: </a><font color="#666666">"  const int blqidx  = tidx %% N_b + blidx*N_b;        // Cell mapped to this thread in the quadrature phase\n"</font>
+<a name="line165">165: </a><font color="#666666">"  const int gidx    = get_group_id(1)*get_num_groups(0) + get_group_id(0);\n"</font>
+<a name="line166">166: </a><font color="#666666">"  const int Goffset = gidx*N_cb*N_bc;\n"</font>,
+<a name="line167">167: </a>                            &amp;count, dim, N_bl, N_b, N_c, N_q);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line168">168: </a>  <font color="#B22222">/* Local memory */</font>
+<a name="line169">169: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line170">170: </a><font color="#666666">"\n"</font>
+<a name="line171">171: </a><font color="#666666">"  /* Quadrature data */\n"</font>
+<a name="line172">172: </a><font color="#666666">"  %s                w;                   // $w_q$, Quadrature weight at $x_q$\n"</font>
+<a name="line173">173: </a><font color="#666666">"  __local %s         phi_i[%d];    //[N_bt*N_q];  // $\\phi_i(x_q)$, Value of the basis function $i$ at $x_q$\n"</font>
+<a name="line174">174: </a><font color="#666666">"  __local %s%d       phiDer_i[%d]; //[N_bt*N_q];  // $\\frac{\\partial\\phi_i(x_q)}{\\partial x_d}$, Value of the derivative of basis function $i$ in direction $x_d$ at $x_q$\n"</font>
+<a name="line175">175: </a><font color="#666666">"  /* Geometric data */\n"</font>
+<a name="line176">176: </a><font color="#666666">"  __local %s        detJ[%d]; //[N_t];           // $|J(x_q)|$, Jacobian determinant at $x_q$\n"</font>
+<a name="line177">177: </a><font color="#666666">"  __local %s        invJ[%d];//[N_t*dim*dim];   // $J^{-1}(x_q)$, Jacobian inverse at $x_q$\n"</font>,
+<a name="line178">178: </a>                            &amp;count, numeric_str, numeric_str, N_b*N_c*N_q, numeric_str, dim, N_b*N_c*N_q, numeric_str, N_t,
+<a name="line179">179: </a>                            numeric_str, N_t*dim*dim, numeric_str, N_t*N_b*N_c);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line180">180: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line181">181: </a><font color="#666666">"  /* FEM data */\n"</font>
+<a name="line182">182: </a><font color="#666666">"  __local %s        u_i[%d]; //[N_t*N_bt];       // Coefficients $u_i$ of the field $u|_{\\mathcal{T}} = \\sum_i u_i \\phi_i$\n"</font>,
+<a name="line183">183: </a>                            &amp;count, numeric_str, N_t*N_b*N_c);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line184">184: </a>  <font color="#4169E1">if</font> (useAux) {
+<a name="line185">185: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line186">186: </a><font color="#666666">"  __local %s        a_i[%d]; //[N_t];            // Coefficients $a_i$ of the auxiliary field $a|_{\\mathcal{T}} = \\sum_i a_i \\phi^R_i$\n"</font>,
+<a name="line187">187: </a>                            &amp;count, numeric_str, N_t);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line188">188: </a>  }
+<a name="line189">189: </a>  <font color="#4169E1">if</font> (useF0) {
+<a name="line190">190: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line191">191: </a><font color="#666666">"  /* Intermediate calculations */\n"</font>
+<a name="line192">192: </a><font color="#666666">"  __local %s         f_0[%d]; //[N_t*N_sqc];      // $f_0(u(x_q), \\nabla u(x_q)) |J(x_q)| w_q$\n"</font>,
+<a name="line193">193: </a>                              &amp;count, numeric_str, N_t*N_q);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line194">194: </a>  }
+<a name="line195">195: </a>  <font color="#4169E1">if</font> (useF1) {
+<a name="line196">196: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line197">197: </a><font color="#666666">"  __local %s%d       f_1[%d]; //[N_t*N_sqc];      // $f_1(u(x_q), \\nabla u(x_q)) |J(x_q)| w_q$\n"</font>,
+<a name="line198">198: </a>                              &amp;count, numeric_str, dim, N_t*N_q);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line199">199: </a>  }
+<a name="line200">200: </a>  <font color="#B22222">/* TODO: If using elasticity, put in mu/lambda coefficients */</font>
+<a name="line201">201: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line202">202: </a><font color="#666666">"  /* Output data */\n"</font>
+<a name="line203">203: </a><font color="#666666">"  %s                e_i;                 // Coefficient $e_i$ of the residual\n\n"</font>,
+<a name="line204">204: </a>                            &amp;count, numeric_str);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line205">205: </a>  <font color="#B22222">/* One-time loads */</font>
+<a name="line206">206: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line207">207: </a><font color="#666666">"  /* These should be generated inline */\n"</font>
+<a name="line208">208: </a><font color="#666666">"  /* Load quadrature weights */\n"</font>
+<a name="line209">209: </a><font color="#666666">"  w = weights[qidx];\n"</font>
+<a name="line210">210: </a><font color="#666666">"  /* Load basis tabulation \\phi_i for this cell */\n"</font>
+<a name="line211">211: </a><font color="#666666">"  if (tidx &lt; N_bt*N_q) {\n"</font>
+<a name="line212">212: </a><font color="#666666">"    phi_i[tidx]    = Basis[tidx];\n"</font>
+<a name="line213">213: </a><font color="#666666">"    phiDer_i[tidx] = BasisDerivatives[tidx];\n"</font>
+<a name="line214">214: </a><font color="#666666">"  }\n\n"</font>,
+<a name="line215">215: </a>                       &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line216">216: </a>  <font color="#B22222">/* Batch loads */</font>
+<a name="line217">217: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line218">218: </a><font color="#666666">"  for (int batch = 0; batch &lt; N_cb; ++batch) {\n"</font>
+<a name="line219">219: </a><font color="#666666">"    /* Load geometry */\n"</font>
+<a name="line220">220: </a><font color="#666666">"    detJ[tidx] = jacobianDeterminants[Goffset+batch*N_bc+tidx];\n"</font>
+<a name="line221">221: </a><font color="#666666">"    for (int n = 0; n &lt; dim*dim; ++n) {\n"</font>
+<a name="line222">222: </a><font color="#666666">"      const int offset = n*N_t;\n"</font>
+<a name="line223">223: </a><font color="#666666">"      invJ[offset+tidx] = jacobianInverses[(Goffset+batch*N_bc)*dim*dim+offset+tidx];\n"</font>
+<a name="line224">224: </a><font color="#666666">"    }\n"</font>
+<a name="line225">225: </a><font color="#666666">"    /* Load coefficients u_i for this cell */\n"</font>
+<a name="line226">226: </a><font color="#666666">"    for (int n = 0; n &lt; N_bt; ++n) {\n"</font>
+<a name="line227">227: </a><font color="#666666">"      const int offset = n*N_t;\n"</font>
+<a name="line228">228: </a><font color="#666666">"      u_i[offset+tidx] = coefficients[(Goffset*N_bt)+batch*N_t*N_b+offset+tidx];\n"</font>
+<a name="line229">229: </a><font color="#666666">"    }\n"</font>,
+<a name="line230">230: </a>                       &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line231">231: </a>  <font color="#4169E1">if</font> (useAux) {
+<a name="line232">232: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line233">233: </a><font color="#666666">"    /* Load coefficients a_i for this cell */\n"</font>
+<a name="line234">234: </a><font color="#666666">"    /* TODO: This should not be N_t here, it should be N_bc*N_comp_aux */\n"</font>
+<a name="line235">235: </a><font color="#666666">"    a_i[tidx] = coefficientsAux[Goffset+batch*N_t+tidx];\n"</font>,
+<a name="line236">236: </a>                            &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line237">237: </a>  }
+<a name="line238">238: </a>  <font color="#B22222">/* Quadrature phase */</font>
+<a name="line239">239: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line240">240: </a><font color="#666666">"    barrier(CLK_LOCAL_MEM_FENCE);\n"</font>
+<a name="line241">241: </a><font color="#666666">"\n"</font>
+<a name="line242">242: </a><font color="#666666">"    /* Map coefficients to values at quadrature points */\n"</font>
+<a name="line243">243: </a><font color="#666666">"    for (int c = 0; c &lt; N_sqc; ++c) {\n"</font>
+<a name="line244">244: </a><font color="#666666">"      const int cell          = c*N_bl*N_b + blqidx;\n"</font>
+<a name="line245">245: </a><font color="#666666">"      const int fidx          = (cell*N_q + qidx)*N_comp + cidx;\n"</font>,
+<a name="line246">246: </a>                       &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line247">247: </a>  <font color="#4169E1">if</font> (useField) {
+<a name="line248">248: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line249">249: </a><font color="#666666">"      %s  u[%d]; //[N_comp];     // $u(x_q)$, Value of the field at $x_q$\n"</font>,
+<a name="line250">250: </a>                              &amp;count, numeric_str, N_c);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line251">251: </a>  }
+<a name="line252">252: </a>  <font color="#4169E1">if</font> (useFieldDer) {
+<a name="line253">253: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line254">254: </a><font color="#666666">"      %s%d   gradU[%d]; //[N_comp]; // $\\nabla u(x_q)$, Value of the field gradient at $x_q$\n"</font>,
+<a name="line255">255: </a>                              &amp;count, numeric_str, dim, N_c);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line256">256: </a>  }
+<a name="line257">257: </a>  <font color="#4169E1">if</font> (useFieldAux) {
+<a name="line258">258: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line259">259: </a><font color="#666666">"      %s  a[%d]; //[1];     // $a(x_q)$, Value of the auxiliary fields at $x_q$\n"</font>,
+<a name="line260">260: </a>                              &amp;count, numeric_str, 1);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line261">261: </a>  }
+<a name="line262">262: </a>  <font color="#4169E1">if</font> (useFieldDerAux) {
+<a name="line263">263: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line264">264: </a><font color="#666666">"      %s%d   gradA[%d]; //[1]; // $\\nabla a(x_q)$, Value of the auxiliary field gradient at $x_q$\n"</font>,
+<a name="line265">265: </a>                              &amp;count, numeric_str, dim, 1);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line266">266: </a>  }
+<a name="line267">267: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line268">268: </a><font color="#666666">"\n"</font>
+<a name="line269">269: </a><font color="#666666">"      for (int comp = 0; comp &lt; N_comp; ++comp) {\n"</font>,
+<a name="line270">270: </a>                            &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line271">271: </a>  <font color="#4169E1">if</font> (useField) {<a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"        u[comp] = 0.0;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);}
+<a name="line272">272: </a>  <font color="#4169E1">if</font> (useFieldDer) {
+<a name="line273">273: </a>    <font color="#4169E1">switch</font> (dim) {
+<a name="line274">274: </a>    <font color="#4169E1">case</font> 1:
+<a name="line275">275: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"        gradU[comp].x = 0.0;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line276">276: </a>    <font color="#4169E1">case</font> 2:
+<a name="line277">277: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"        gradU[comp].x = 0.0; gradU[comp].y = 0.0;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line278">278: </a>    <font color="#4169E1">case</font> 3:
+<a name="line279">279: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"        gradU[comp].x = 0.0; gradU[comp].y = 0.0; gradU[comp].z = 0.0;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line280">280: </a>    }
+<a name="line281">281: </a>  }
+<a name="line282">282: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line283">283: </a><font color="#666666">"      }\n"</font>,
+<a name="line284">284: </a>                            &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line285">285: </a>  <font color="#4169E1">if</font> (useFieldAux) {
+<a name="line286">286: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"      a[0] = 0.0;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line287">287: </a>  }
+<a name="line288">288: </a>  <font color="#4169E1">if</font> (useFieldDerAux) {
+<a name="line289">289: </a>    <font color="#4169E1">switch</font> (dim) {
+<a name="line290">290: </a>    <font color="#4169E1">case</font> 1:
+<a name="line291">291: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"      gradA[0].x = 0.0;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line292">292: </a>    <font color="#4169E1">case</font> 2:
+<a name="line293">293: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"      gradA[0].x = 0.0; gradA[0].y = 0.0;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line294">294: </a>    <font color="#4169E1">case</font> 3:
+<a name="line295">295: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"      gradA[0].x = 0.0; gradA[0].y = 0.0; gradA[0].z = 0.0;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line296">296: </a>    }
+<a name="line297">297: </a>  }
+<a name="line298">298: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line299">299: </a><font color="#666666">"      /* Get field and derivatives at this quadrature point */\n"</font>
+<a name="line300">300: </a><font color="#666666">"      for (int i = 0; i &lt; N_b; ++i) {\n"</font>
+<a name="line301">301: </a><font color="#666666">"        for (int comp = 0; comp &lt; N_comp; ++comp) {\n"</font>
+<a name="line302">302: </a><font color="#666666">"          const int b    = i*N_comp+comp;\n"</font>
+<a name="line303">303: </a><font color="#666666">"          const int pidx = qidx*N_bt + b;\n"</font>
+<a name="line304">304: </a><font color="#666666">"          const int uidx = cell*N_bt + b;\n"</font>
+<a name="line305">305: </a><font color="#666666">"          %s%d   realSpaceDer;\n\n"</font>,
+<a name="line306">306: </a>                            &amp;count, numeric_str, dim);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line307">307: </a>  <font color="#4169E1">if</font> (useField) {<a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,<font color="#666666">"          u[comp] += u_i[uidx]*phi_i[pidx];\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);}
+<a name="line308">308: </a>  <font color="#4169E1">if</font> (useFieldDer) {
+<a name="line309">309: </a>    <font color="#4169E1">switch</font> (dim) {
+<a name="line310">310: </a>    <font color="#4169E1">case</font> 2:
+<a name="line311">311: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line312">312: </a><font color="#666666">"          realSpaceDer.x = invJ[cell*dim*dim+0*dim+0]*phiDer_i[pidx].x + invJ[cell*dim*dim+1*dim+0]*phiDer_i[pidx].y;\n"</font>
+<a name="line313">313: </a><font color="#666666">"          gradU[comp].x += u_i[uidx]*realSpaceDer.x;\n"</font>
+<a name="line314">314: </a><font color="#666666">"          realSpaceDer.y = invJ[cell*dim*dim+0*dim+1]*phiDer_i[pidx].x + invJ[cell*dim*dim+1*dim+1]*phiDer_i[pidx].y;\n"</font>
+<a name="line315">315: </a><font color="#666666">"          gradU[comp].y += u_i[uidx]*realSpaceDer.y;\n"</font>,
+<a name="line316">316: </a>                           &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line317">317: </a>    <font color="#4169E1">case</font> 3:
+<a name="line318">318: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line319">319: </a><font color="#666666">"          realSpaceDer.x = invJ[cell*dim*dim+0*dim+0]*phiDer_i[pidx].x + invJ[cell*dim*dim+1*dim+0]*phiDer_i[pidx].y + invJ[cell*dim*dim+2*dim+0]*phiDer_i[pidx].z;\n"</font>
+<a name="line320">320: </a><font color="#666666">"          gradU[comp].x += u_i[uidx]*realSpaceDer.x;\n"</font>
+<a name="line321">321: </a><font color="#666666">"          realSpaceDer.y = invJ[cell*dim*dim+0*dim+1]*phiDer_i[pidx].x + invJ[cell*dim*dim+1*dim+1]*phiDer_i[pidx].y + invJ[cell*dim*dim+2*dim+1]*phiDer_i[pidx].z;\n"</font>
+<a name="line322">322: </a><font color="#666666">"          gradU[comp].y += u_i[uidx]*realSpaceDer.y;\n"</font>
+<a name="line323">323: </a><font color="#666666">"          realSpaceDer.z = invJ[cell*dim*dim+0*dim+2]*phiDer_i[pidx].x + invJ[cell*dim*dim+1*dim+2]*phiDer_i[pidx].y + invJ[cell*dim*dim+2*dim+2]*phiDer_i[pidx].z;\n"</font>
+<a name="line324">324: </a><font color="#666666">"          gradU[comp].z += u_i[uidx]*realSpaceDer.z;\n"</font>,
+<a name="line325">325: </a>                           &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line326">326: </a>    }
+<a name="line327">327: </a>  }
+<a name="line328">328: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line329">329: </a><font color="#666666">"        }\n"</font>
+<a name="line330">330: </a><font color="#666666">"      }\n"</font>,
+<a name="line331">331: </a>                            &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line332">332: </a>  <font color="#4169E1">if</font> (useFieldAux) {
+<a name="line333">333: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,<font color="#666666">"          a[0] += a_i[cell];\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line334">334: </a>  }
+<a name="line335">335: </a>  <font color="#B22222">/* Calculate residual at quadrature points: Should be generated by an weak form egine */</font>
+<a name="line336">336: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line337">337: </a><font color="#666666">"      /* Process values at quadrature points */\n"</font>,
+<a name="line338">338: </a>                            &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line339">339: </a>  <font color="#4169E1">switch</font> (op) {
+<a name="line340">340: </a>  <font color="#4169E1">case</font> LAPLACIAN:
+<a name="line341">341: </a>    <font color="#4169E1">if</font> (useF0) {<a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"      f_0[fidx] = 4.0;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);}
+<a name="line342">342: </a>    <font color="#4169E1">if</font> (useF1) {
+<a name="line343">343: </a>      <font color="#4169E1">if</font> (useAux) {<a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"      f_1[fidx] = a[0]*gradU[cidx];\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);}
+<a name="line344">344: </a>      <font color="#4169E1">else</font>        {<a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"      f_1[fidx] = gradU[cidx];\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);}
+<a name="line345">345: </a>    }
+<a name="line346">346: </a>    <font color="#4169E1">break</font>;
+<a name="line347">347: </a>  <font color="#4169E1">case</font> ELASTICITY:
+<a name="line348">348: </a>    <font color="#4169E1">if</font> (useF0) {<a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail, <font color="#666666">"      f_0[fidx] = 4.0;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);}
+<a name="line349">349: </a>    <font color="#4169E1">if</font> (useF1) {
+<a name="line350">350: </a>    <font color="#4169E1">switch</font> (dim) {
+<a name="line351">351: </a>    <font color="#4169E1">case</font> 2:
+<a name="line352">352: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line353">353: </a><font color="#666666">"      switch (cidx) {\n"</font>
+<a name="line354">354: </a><font color="#666666">"      case 0:\n"</font>
+<a name="line355">355: </a><font color="#666666">"        f_1[fidx].x = lambda*(gradU[0].x + gradU[1].y) + mu*(gradU[0].x + gradU[0].x);\n"</font>
+<a name="line356">356: </a><font color="#666666">"        f_1[fidx].y = lambda*(gradU[0].x + gradU[1].y) + mu*(gradU[0].y + gradU[1].x);\n"</font>
+<a name="line357">357: </a><font color="#666666">"        break;\n"</font>
+<a name="line358">358: </a><font color="#666666">"      case 1:\n"</font>
+<a name="line359">359: </a><font color="#666666">"        f_1[fidx].x = lambda*(gradU[0].x + gradU[1].y) + mu*(gradU[1].x + gradU[0].y);\n"</font>
+<a name="line360">360: </a><font color="#666666">"        f_1[fidx].y = lambda*(gradU[0].x + gradU[1].y) + mu*(gradU[1].y + gradU[1].y);\n"</font>
+<a name="line361">361: </a><font color="#666666">"      }\n"</font>,
+<a name="line362">362: </a>                           &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line363">363: </a>    <font color="#4169E1">case</font> 3:
+<a name="line364">364: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line365">365: </a><font color="#666666">"      switch (cidx) {\n"</font>
+<a name="line366">366: </a><font color="#666666">"      case 0:\n"</font>
+<a name="line367">367: </a><font color="#666666">"        f_1[fidx].x = lambda*(gradU[0].x + gradU[1].y + gradU[2].z) + mu*(gradU[0].x + gradU[0].x);\n"</font>
+<a name="line368">368: </a><font color="#666666">"        f_1[fidx].y = lambda*(gradU[0].x + gradU[1].y + gradU[2].z) + mu*(gradU[0].y + gradU[1].x);\n"</font>
+<a name="line369">369: </a><font color="#666666">"        f_1[fidx].z = lambda*(gradU[0].x + gradU[1].y + gradU[2].z) + mu*(gradU[0].z + gradU[2].x);\n"</font>
+<a name="line370">370: </a><font color="#666666">"        break;\n"</font>
+<a name="line371">371: </a><font color="#666666">"      case 1:\n"</font>
+<a name="line372">372: </a><font color="#666666">"        f_1[fidx].x = lambda*(gradU[0].x + gradU[1].y + gradU[2].z) + mu*(gradU[1].x + gradU[0].y);\n"</font>
+<a name="line373">373: </a><font color="#666666">"        f_1[fidx].y = lambda*(gradU[0].x + gradU[1].y + gradU[2].z) + mu*(gradU[1].y + gradU[1].y);\n"</font>
+<a name="line374">374: </a><font color="#666666">"        f_1[fidx].z = lambda*(gradU[0].x + gradU[1].y + gradU[2].z) + mu*(gradU[1].y + gradU[2].y);\n"</font>
+<a name="line375">375: </a><font color="#666666">"        break;\n"</font>
+<a name="line376">376: </a><font color="#666666">"      case 2:\n"</font>
+<a name="line377">377: </a><font color="#666666">"        f_1[fidx].x = lambda*(gradU[0].x + gradU[1].y + gradU[2].z) + mu*(gradU[2].x + gradU[0].z);\n"</font>
+<a name="line378">378: </a><font color="#666666">"        f_1[fidx].y = lambda*(gradU[0].x + gradU[1].y + gradU[2].z) + mu*(gradU[2].y + gradU[1].z);\n"</font>
+<a name="line379">379: </a><font color="#666666">"        f_1[fidx].z = lambda*(gradU[0].x + gradU[1].y + gradU[2].z) + mu*(gradU[2].y + gradU[2].z);\n"</font>
+<a name="line380">380: </a><font color="#666666">"      }\n"</font>,
+<a name="line381">381: </a>                           &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line382">382: </a>    }}
+<a name="line383">383: </a>    <font color="#4169E1">break</font>;
+<a name="line384">384: </a><strong><font color="#FF0000">  default:</font></strong>
+<a name="line385">385: </a>    <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>, PETSC_ERR_SUP, <font color="#666666">"PDE operator %d is not supported"</font>, op);
+<a name="line386">386: </a>  }
+<a name="line387">387: </a>  <font color="#4169E1">if</font> (useF0) {<a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,<font color="#666666">"      f_0[fidx] *= detJ[cell]*w;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);}
+<a name="line388">388: </a>  <font color="#4169E1">if</font> (useF1) {
+<a name="line389">389: </a>    <font color="#4169E1">switch</font> (dim) {
+<a name="line390">390: </a>    <font color="#4169E1">case</font> 1:
+<a name="line391">391: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,<font color="#666666">"      f_1[fidx].x *= detJ[cell]*w;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line392">392: </a>    <font color="#4169E1">case</font> 2:
+<a name="line393">393: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,<font color="#666666">"      f_1[fidx].x *= detJ[cell]*w; f_1[fidx].y *= detJ[cell]*w;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line394">394: </a>    <font color="#4169E1">case</font> 3:
+<a name="line395">395: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,<font color="#666666">"      f_1[fidx].x *= detJ[cell]*w; f_1[fidx].y *= detJ[cell]*w; f_1[fidx].z *= detJ[cell]*w;\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line396">396: </a>    }
+<a name="line397">397: </a>  }
+<a name="line398">398: </a>  <font color="#B22222">/* Thread transpose */</font>
+<a name="line399">399: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line400">400: </a><font color="#666666">"    }\n\n"</font>
+<a name="line401">401: </a><font color="#666666">"    /* ==== TRANSPOSE THREADS ==== */\n"</font>
+<a name="line402">402: </a><font color="#666666">"    barrier(CLK_LOCAL_MEM_FENCE);\n\n"</font>,
+<a name="line403">403: </a>                       &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line404">404: </a>  <font color="#B22222">/* Basis phase */</font>
+<a name="line405">405: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line406">406: </a><font color="#666666">"    /* Map values at quadrature points to coefficients */\n"</font>
+<a name="line407">407: </a><font color="#666666">"    for (int c = 0; c &lt; N_sbc; ++c) {\n"</font>
+<a name="line408">408: </a><font color="#666666">"      const int cell = c*N_bl*N_q + blbidx; /* Cell number in batch */\n"</font>
+<a name="line409">409: </a><font color="#666666">"\n"</font>
+<a name="line410">410: </a><font color="#666666">"      e_i = 0.0;\n"</font>
+<a name="line411">411: </a><font color="#666666">"      for (int q = 0; q &lt; N_q; ++q) {\n"</font>
+<a name="line412">412: </a><font color="#666666">"        const int pidx = q*N_bt + bidx;\n"</font>
+<a name="line413">413: </a><font color="#666666">"        const int fidx = (cell*N_q + q)*N_comp + cidx;\n"</font>
+<a name="line414">414: </a><font color="#666666">"        %s%d   realSpaceDer;\n\n"</font>,
+<a name="line415">415: </a>                       &amp;count, numeric_str, dim);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+
+<a name="line417">417: </a>  <font color="#4169E1">if</font> (useF0) {<a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,<font color="#666666">"        e_i += phi_i[pidx]*f_0[fidx];\n"</font>, &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);}
+<a name="line418">418: </a>  <font color="#4169E1">if</font> (useF1) {
+<a name="line419">419: </a>    <font color="#4169E1">switch</font> (dim) {
+<a name="line420">420: </a>    <font color="#4169E1">case</font> 2:
+<a name="line421">421: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line422">422: </a><font color="#666666">"        realSpaceDer.x = invJ[cell*dim*dim+0*dim+0]*phiDer_i[pidx].x + invJ[cell*dim*dim+1*dim+0]*phiDer_i[pidx].y;\n"</font>
+<a name="line423">423: </a><font color="#666666">"        e_i           += realSpaceDer.x*f_1[fidx].x;\n"</font>
+<a name="line424">424: </a><font color="#666666">"        realSpaceDer.y = invJ[cell*dim*dim+0*dim+1]*phiDer_i[pidx].x + invJ[cell*dim*dim+1*dim+1]*phiDer_i[pidx].y;\n"</font>
+<a name="line425">425: </a><font color="#666666">"        e_i           += realSpaceDer.y*f_1[fidx].y;\n"</font>,
+<a name="line426">426: </a>                           &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line427">427: </a>    <font color="#4169E1">case</font> 3:
+<a name="line428">428: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line429">429: </a><font color="#666666">"        realSpaceDer.x = invJ[cell*dim*dim+0*dim+0]*phiDer_i[pidx].x + invJ[cell*dim*dim+1*dim+0]*phiDer_i[pidx].y + invJ[cell*dim*dim+2*dim+0]*phiDer_i[pidx].z;\n"</font>
+<a name="line430">430: </a><font color="#666666">"        e_i           += realSpaceDer.x*f_1[fidx].x;\n"</font>
+<a name="line431">431: </a><font color="#666666">"        realSpaceDer.y = invJ[cell*dim*dim+0*dim+1]*phiDer_i[pidx].x + invJ[cell*dim*dim+1*dim+1]*phiDer_i[pidx].y + invJ[cell*dim*dim+2*dim+1]*phiDer_i[pidx].z;\n"</font>
+<a name="line432">432: </a><font color="#666666">"        e_i           += realSpaceDer.y*f_1[fidx].y;\n"</font>
+<a name="line433">433: </a><font color="#666666">"        realSpaceDer.z = invJ[cell*dim*dim+0*dim+2]*phiDer_i[pidx].x + invJ[cell*dim*dim+1*dim+2]*phiDer_i[pidx].y + invJ[cell*dim*dim+2*dim+2]*phiDer_i[pidx].z;\n"</font>
+<a name="line434">434: </a><font color="#666666">"        e_i           += realSpaceDer.z*f_1[fidx].z;\n"</font>,
+<a name="line435">435: </a>                           &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);<font color="#4169E1">break</font>;
+<a name="line436">436: </a>    }
+<a name="line437">437: </a>  }
+<a name="line438">438: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(string_tail, end_of_buffer - string_tail,
+<a name="line439">439: </a><font color="#666666">"      }\n"</font>
+<a name="line440">440: </a><font color="#666666">"      /* Write element vector for N_{cbc} cells at a time */\n"</font>
+<a name="line441">441: </a><font color="#666666">"      elemVec[(Goffset + batch*N_bc + c*N_bl*N_q)*N_bt + tidx] = e_i;\n"</font>
+<a name="line442">442: </a><font color="#666666">"    }\n"</font>
+<a name="line443">443: </a><font color="#666666">"    /* ==== Could do one write per batch ==== */\n"</font>
+<a name="line444">444: </a><font color="#666666">"  }\n"</font>
+<a name="line445">445: </a><font color="#666666">"  return;\n"</font>
+<a name="line446">446: </a><font color="#666666">"}\n"</font>,
+<a name="line447">447: </a>                       &amp;count);STRING_ERROR_CHECK(<font color="#666666">"Message to short"</font>);
+<a name="line448">448: </a>  <font color="#4169E1">return</font>(0);
+<a name="line449">449: </a>}
+
+<a name="line451">451: </a><strong><font color="#4169E1"><a name="PetscFEOpenCLGetIntegrationKernel"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFEOpenCLGetIntegrationKernel(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> fem, <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> useAux, cl_program *ocl_prog, cl_kernel *ocl_kernel)</font></strong>
+<a name="line452">452: </a>{
+<a name="line453">453: </a>  PetscFE_OpenCL *ocl = (PetscFE_OpenCL *) fem-&gt;data;
+<a name="line454">454: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>        dim, N_bl;
+<a name="line455">455: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>       flg;
+<a name="line456">456: </a>  char           *buffer;
+<a name="line457">457: </a>  size_t          len;
+<a name="line458">458: </a>  char            errMsg[8192];
+<a name="line459">459: </a>  cl_int          ierr2;
+<a name="line460">460: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line463">463: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetSpatialDimension.html#PetscFEGetSpatialDimension">PetscFEGetSpatialDimension</a>(fem, &amp;dim);
+<a name="line464">464: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(8192, &amp;buffer);
+<a name="line465">465: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetTileSizes.html#PetscFEGetTileSizes">PetscFEGetTileSizes</a>(fem, NULL, &amp;N_bl, NULL, NULL);
+<a name="line466">466: </a>  PetscFEOpenCLGenerateIntegrationCode(fem, &amp;buffer, 8192, useAux, N_bl);
+<a name="line467">467: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscOptionsHasName.html#PetscOptionsHasName">PetscOptionsHasName</a>(((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)fem)-&gt;options,((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)fem)-&gt;prefix, <font color="#666666">"-petscfe_opencl_kernel_print"</font>, &amp;flg);
+<a name="line468">468: </a>  <font color="#4169E1">if</font> (flg) {<a href="../../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) fem), <font color="#666666">"OpenCL FE Integration Kernel:\n%s\n"</font>, buffer);}
+<a name="line469">469: </a>  len  = strlen(buffer);
+<a name="line470">470: </a>  *ocl_prog = clCreateProgramWithSource(ocl-&gt;ctx_id, 1, (const char **) &amp;buffer, &amp;len, &amp;ierr2);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr2);
+<a name="line471">471: </a>  clBuildProgram(*ocl_prog, 0, NULL, NULL, NULL, NULL);
+<a name="line472">472: </a>  <font color="#4169E1">if</font> (ierr != CL_SUCCESS) {
+<a name="line473">473: </a>    clGetProgramBuildInfo(*ocl_prog, ocl-&gt;dev_id, CL_PROGRAM_BUILD_LOG, 8192*<font color="#4169E1">sizeof</font>(char), &amp;errMsg, NULL);
+<a name="line474">474: </a>    <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_PLIB, <font color="#666666">"Build failed! Log:\n %s"</font>, errMsg);
+<a name="line475">475: </a>  }
+<a name="line476">476: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(buffer);
+<a name="line477">477: </a>  *ocl_kernel = clCreateKernel(*ocl_prog, <font color="#666666">"integrateElementQuadrature"</font>, &amp;ierr);
+<a name="line478">478: </a>  <font color="#4169E1">return</font>(0);
+<a name="line479">479: </a>}
+
+<a name="line481">481: </a><strong><font color="#4169E1"><a name="PetscFEOpenCLCalculateGrid"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFEOpenCLCalculateGrid(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> fem, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> N, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> blockSize, size_t *x, size_t *y, size_t *z)</font></strong>
+<a name="line482">482: </a>{
+<a name="line483">483: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nblocks = N/blockSize;
+
+<a name="line486">486: </a>  <font color="#4169E1">if</font> (N % blockSize) <a href="../../../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_ARG_SIZ, <font color="#666666">"Invalid block size %d for %d elements"</font>, blockSize, N);
+<a name="line487">487: </a>  *z = 1;
+<a name="line488">488: </a>  *y = 1;
+<a name="line489">489: </a>  <font color="#4169E1">for</font> (*x = (size_t) (PetscSqrtReal(Nblocks) + 0.5); *x &gt; 0; --*x) {
+<a name="line490">490: </a>    *y = Nblocks / *x;
+<a name="line491">491: </a>    <font color="#4169E1">if</font> (*x * *y == Nblocks) <font color="#4169E1">break</font>;
+<a name="line492">492: </a>  }
+<a name="line493">493: </a>  <font color="#4169E1">if</font> (*x * *y != Nblocks) <a href="../../../../../../docs/manualpages/Sys/SETERRQ2.html#SETERRQ2">SETERRQ2</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_ARG_SIZ, <font color="#666666">"Could not find partition for %d with block size %d"</font>, N, blockSize);
+<a name="line494">494: </a>  <font color="#4169E1">return</font>(0);
+<a name="line495">495: </a>}
+
+<a name="line497">497: </a><strong><font color="#4169E1"><a name="PetscFEOpenCLLogResidual"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFEOpenCLLogResidual(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> fem, <a href="../../../../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> time, <a href="../../../../../../docs/manualpages/Sys/PetscLogDouble.html#PetscLogDouble">PetscLogDouble</a> flops)</font></strong>
+<a name="line498">498: </a>{
+<a name="line499">499: </a>  PetscFE_OpenCL   *ocl = (PetscFE_OpenCL *) fem-&gt;data;
+<a name="line500">500: </a>  PetscStageLog     stageLog;
+<a name="line501">501: </a>  PetscEventPerfLog eventLog = NULL;
+<a name="line502">502: </a>  int               stage;
+<a name="line503">503: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+<a name="line506">506: </a>  <a href="../../../../../../docs/manualpages/Profiling/PetscLogGetStageLog.html#PetscLogGetStageLog">PetscLogGetStageLog</a>(&amp;stageLog);
+<a name="line507">507: </a>  <a href="../../../../../../docs/manualpages/Profiling/PetscStageLogGetCurrent.html#PetscStageLogGetCurrent">PetscStageLogGetCurrent</a>(stageLog, &amp;stage);
+<a name="line508">508: </a>  <a href="../../../../../../docs/manualpages/Profiling/PetscStageLogGetEventPerfLog.html#PetscStageLogGetEventPerfLog">PetscStageLogGetEventPerfLog</a>(stageLog, stage, &amp;eventLog);
+<a name="line509">509: </a>    <font color="#B22222">/* Log performance info */</font>
+<a name="line510">510: </a>  eventLog-&gt;eventInfo[ocl-&gt;residualEvent].count++;
+<a name="line511">511: </a>  eventLog-&gt;eventInfo[ocl-&gt;residualEvent].time  += time;
+<a name="line512">512: </a>  eventLog-&gt;eventInfo[ocl-&gt;residualEvent].flops += flops;
+<a name="line513">513: </a>  <font color="#4169E1">return</font>(0);
+<a name="line514">514: </a>}
+
+<a name="line516">516: </a><strong><font color="#4169E1"><a name="PetscFEIntegrateResidual_OpenCL"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFEIntegrateResidual_OpenCL(<a href="../../../../../../docs/manualpages/DM/PetscDS.html#PetscDS">PetscDS</a> prob, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> field, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Ne, PetscFEGeom *cgeom,</font></strong>
+<a name="line517">517: </a><strong><font color="#4169E1">                                                      const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> coefficients[], const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> coefficients_t[], <a href="../../../../../../docs/manualpages/DM/PetscDS.html#PetscDS">PetscDS</a> probAux, const <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> coefficientsAux[], <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> t, <a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> elemVec[])</font></strong>
+<a name="line518">518: </a>{
+<a name="line519">519: </a>  <font color="#B22222">/* Nbc = batchSize */</font>
+<a name="line520">520: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a>           fem;
+<a name="line521">521: </a>  PetscFE_OpenCL   *ocl;
+<a name="line522">522: </a>  PetscPointFunc    f0_func;
+<a name="line523">523: </a>  PetscPointFunc    f1_func;
+<a name="line524">524: </a>  <a href="../../../../../../docs/manualpages/FE/PetscQuadrature.html#PetscQuadrature">PetscQuadrature</a>   q;
+<a name="line525">525: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          dim, qNc;
+<a name="line526">526: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          N_b;    <font color="#B22222">/* The number of basis functions */</font>
+<a name="line527">527: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          N_comp; <font color="#B22222">/* The number of basis function components */</font>
+<a name="line528">528: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          N_bt;   <font color="#B22222">/* The total number of scalar basis functions */</font>
+<a name="line529">529: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          N_q;    <font color="#B22222">/* The number of quadrature points */</font>
+<a name="line530">530: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          N_bst;  <font color="#B22222">/* The block size, LCM(N_bt, N_q), Notice that a block is not process simultaneously */</font>
+<a name="line531">531: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          N_t;    <font color="#B22222">/* The number of threads, N_bst * N_bl */</font>
+<a name="line532">532: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          N_bl;   <font color="#B22222">/* The number of blocks */</font>
+<a name="line533">533: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          N_bc;   <font color="#B22222">/* The batch size, N_bl*N_q*N_b */</font>
+<a name="line534">534: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          N_cb;   <font color="#B22222">/* The number of batches */</font>
+<a name="line535">535: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          numFlops, f0Flops = 0, f1Flops = 0;
+<a name="line536">536: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         useAux      = probAux ? <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line537">537: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         useField    = <a href="../../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line538">538: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         useFieldDer = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line539">539: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         useF0       = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line540">540: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         useF1       = <a href="../../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line541">541: </a>  <font color="#B22222">/* OpenCL variables */</font>
+<a name="line542">542: </a>  cl_program        ocl_prog;
+<a name="line543">543: </a>  cl_kernel         ocl_kernel;
+<a name="line544">544: </a>  cl_event          ocl_ev;         <font color="#B22222">/* The event for tracking kernel execution */</font>
+<a name="line545">545: </a>  cl_ulong          ns_start;       <font color="#B22222">/* Nanoseconds counter on GPU at kernel start */</font>
+<a name="line546">546: </a>  cl_ulong          ns_end;         <font color="#B22222">/* Nanoseconds counter on GPU at kernel stop */</font>
+<a name="line547">547: </a>  cl_mem            o_jacobianInverses, o_jacobianDeterminants;
+<a name="line548">548: </a>  cl_mem            o_coefficients, o_coefficientsAux, o_elemVec;
+<a name="line549">549: </a>  float            *f_coeff = NULL, *f_coeffAux = NULL, *f_invJ = NULL, *f_detJ = NULL;
+<a name="line550">550: </a>  double           *d_coeff = NULL, *d_coeffAux = NULL, *d_invJ = NULL, *d_detJ = NULL;
+<a name="line551">551: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>        *r_invJ = NULL, *r_detJ = NULL;
+<a name="line552">552: </a>  void             *oclCoeff, *oclCoeffAux, *oclInvJ, *oclDetJ;
+<a name="line553">553: </a>  size_t            local_work_size[3], global_work_size[3];
+<a name="line554">554: </a>  size_t            realSize, x, y, z;
+<a name="line555">555: </a>  const <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   *points, *weights;
+<a name="line556">556: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+
+<a name="line559">559: </a>  <a href="../../../../../../docs/manualpages/DT/PetscDSGetDiscretization.html#PetscDSGetDiscretization">PetscDSGetDiscretization</a>(prob, field, (<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> *) &amp;fem);
+<a name="line560">560: </a>  ocl  = (PetscFE_OpenCL *) fem-&gt;data;
+<a name="line561">561: </a>  <font color="#4169E1">if</font> (!Ne) {PetscFEOpenCLLogResidual(fem, 0.0, 0.0); <font color="#4169E1">return</font>(0);}
+<a name="line562">562: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetSpatialDimension.html#PetscFEGetSpatialDimension">PetscFEGetSpatialDimension</a>(fem, &amp;dim);
+<a name="line563">563: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetQuadrature.html#PetscFEGetQuadrature">PetscFEGetQuadrature</a>(fem, &amp;q);
+<a name="line564">564: </a>  <a href="../../../../../../docs/manualpages/DT/PetscQuadratureGetData.html#PetscQuadratureGetData">PetscQuadratureGetData</a>(q, NULL, &amp;qNc, &amp;N_q, &amp;points, &amp;weights);
+<a name="line565">565: </a>  <font color="#4169E1">if</font> (qNc != 1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_SUP, <font color="#666666">"Only supports scalar quadrature, not %D components\n"</font>, qNc);
+<a name="line566">566: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetDimension.html#PetscFEGetDimension">PetscFEGetDimension</a>(fem, &amp;N_b);
+<a name="line567">567: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetNumComponents.html#PetscFEGetNumComponents">PetscFEGetNumComponents</a>(fem, &amp;N_comp);
+<a name="line568">568: </a>  <a href="../../../../../../docs/manualpages/DT/PetscDSGetResidual.html#PetscDSGetResidual">PetscDSGetResidual</a>(prob, field, &amp;f0_func, &amp;f1_func);
+<a name="line569">569: </a>  <a href="../../../../../../docs/manualpages/FE/PetscFEGetTileSizes.html#PetscFEGetTileSizes">PetscFEGetTileSizes</a>(fem, NULL, &amp;N_bl, &amp;N_bc, &amp;N_cb);
+<a name="line570">570: </a>  N_bt  = N_b*N_comp;
+<a name="line571">571: </a>  N_bst = N_bt*N_q;
+<a name="line572">572: </a>  N_t   = N_bst*N_bl;
+<a name="line573">573: </a>  <font color="#4169E1">if</font> (N_bc*N_comp != N_t) <a href="../../../../../../docs/manualpages/Sys/SETERRQ3.html#SETERRQ3">SETERRQ3</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_PLIB, <font color="#666666">"Number of threads %d should be %d * %d"</font>, N_t, N_bc, N_comp);
+<a name="line574">574: </a>  <font color="#B22222">/* Calculate layout */</font>
+<a name="line575">575: </a>  <font color="#4169E1">if</font> (Ne % (N_cb*N_bc)) { <font color="#B22222">/* Remainder cells */</font>
+<a name="line576">576: </a>    PetscFEIntegrateResidual_Basic(prob, field, Ne, cgeom, coefficients, coefficients_t, probAux, coefficientsAux, t, elemVec);
+<a name="line577">577: </a>    <font color="#4169E1">return</font>(0);
+<a name="line578">578: </a>  }
+<a name="line579">579: </a>  PetscFEOpenCLCalculateGrid(fem, Ne, N_cb*N_bc, &amp;x, &amp;y, &amp;z);
+<a name="line580">580: </a>  local_work_size[0]  = N_bc*N_comp;
+<a name="line581">581: </a>  local_work_size[1]  = 1;
+<a name="line582">582: </a>  local_work_size[2]  = 1;
+<a name="line583">583: </a>  global_work_size[0] = x * local_work_size[0];
+<a name="line584">584: </a>  global_work_size[1] = y * local_work_size[1];
+<a name="line585">585: </a>  global_work_size[2] = z * local_work_size[2];
+<a name="line586">586: </a>  PetscInfo7(fem, <font color="#666666">"GPU layout grid(%d,%d,%d) block(%d,%d,%d) with %d batches\n"</font>, x, y, z, local_work_size[0], local_work_size[1], local_work_size[2], N_cb);
+<a name="line587">587: </a>  PetscInfo2(fem, <font color="#666666">" N_t: %d, N_cb: %d\n"</font>, N_t, N_cb);
+<a name="line588">588: </a>  <font color="#B22222">/* Generate code */</font>
+<a name="line589">589: </a>  <font color="#4169E1">if</font> (probAux) {
+<a name="line590">590: </a>    <a href="../../../../../../docs/manualpages/FE/PetscSpace.html#PetscSpace">PetscSpace</a> P;
+<a name="line591">591: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>   NfAux, order, f;
+
+<a name="line593">593: </a>    <a href="../../../../../../docs/manualpages/DT/PetscDSGetNumFields.html#PetscDSGetNumFields">PetscDSGetNumFields</a>(probAux, &amp;NfAux);
+<a name="line594">594: </a>    <font color="#4169E1">for</font> (f = 0; f &lt; NfAux; ++f) {
+<a name="line595">595: </a>      <a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> feAux;
+
+<a name="line597">597: </a>      <a href="../../../../../../docs/manualpages/DT/PetscDSGetDiscretization.html#PetscDSGetDiscretization">PetscDSGetDiscretization</a>(probAux, f, (<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a> *) &amp;feAux);
+<a name="line598">598: </a>      <a href="../../../../../../docs/manualpages/FE/PetscFEGetBasisSpace.html#PetscFEGetBasisSpace">PetscFEGetBasisSpace</a>(feAux, &amp;P);
+<a name="line599">599: </a>      <a href="../../../../../../docs/manualpages/SPACE/PetscSpaceGetDegree.html#PetscSpaceGetDegree">PetscSpaceGetDegree</a>(P, &amp;order, NULL);
+<a name="line600">600: </a>      <font color="#4169E1">if</font> (order &gt; 0) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_ARG_WRONG, <font color="#666666">"Can only handle P0 coefficient fields"</font>);
+<a name="line601">601: </a>    }
+<a name="line602">602: </a>  }
+<a name="line603">603: </a>  PetscFEOpenCLGetIntegrationKernel(fem, useAux, &amp;ocl_prog, &amp;ocl_kernel);
+<a name="line604">604: </a>  <font color="#B22222">/* Create buffers on the device and send data over */</font>
+<a name="line605">605: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscDataTypeGetSize.html#PetscDataTypeGetSize">PetscDataTypeGetSize</a>(ocl-&gt;realType, &amp;realSize);
+<a name="line606">606: </a>  <font color="#4169E1">if</font> (cgeom-&gt;numPoints &gt; 1) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_SUP, <font color="#666666">"Only support affine geometry for OpenCL integration right now"</font>);
+<a name="line607">607: </a>  <font color="#4169E1">if</font> (<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>) != realSize) {
+<a name="line608">608: </a>    <font color="#4169E1">switch</font> (ocl-&gt;realType) {
+<a name="line609">609: </a>    <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PETSC_FLOAT</a>:
+<a name="line610">610: </a>    {
+<a name="line611">611: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> c, b, d;
+
+<a name="line613">613: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(Ne*N_bt,&amp;f_coeff,Ne,&amp;f_coeffAux,Ne*dim*dim,&amp;f_invJ,Ne,&amp;f_detJ);
+<a name="line614">614: </a>      <font color="#4169E1">for</font> (c = 0; c &lt; Ne; ++c) {
+<a name="line615">615: </a>        f_detJ[c] = (float) cgeom-&gt;detJ[c];
+<a name="line616">616: </a>        <font color="#4169E1">for</font> (d = 0; d &lt; dim*dim; ++d) {
+<a name="line617">617: </a>          f_invJ[c*dim*dim+d] = (float) cgeom-&gt;invJ[c * dim * dim + d];
+<a name="line618">618: </a>        }
+<a name="line619">619: </a>        <font color="#4169E1">for</font> (b = 0; b &lt; N_bt; ++b) {
+<a name="line620">620: </a>          f_coeff[c*N_bt+b] = (float) coefficients[c*N_bt+b];
+<a name="line621">621: </a>        }
+<a name="line622">622: </a>      }
+<a name="line623">623: </a>      <font color="#4169E1">if</font> (coefficientsAux) { <font color="#B22222">/* Assume P0 */</font>
+<a name="line624">624: </a>        <font color="#4169E1">for</font> (c = 0; c &lt; Ne; ++c) {
+<a name="line625">625: </a>          f_coeffAux[c] = (float) coefficientsAux[c];
+<a name="line626">626: </a>        }
+<a name="line627">627: </a>      }
+<a name="line628">628: </a>      oclCoeff      = (void *) f_coeff;
+<a name="line629">629: </a>      <font color="#4169E1">if</font> (coefficientsAux) {
+<a name="line630">630: </a>        oclCoeffAux = (void *) f_coeffAux;
+<a name="line631">631: </a>      } <font color="#4169E1">else</font> {
+<a name="line632">632: </a>        oclCoeffAux = NULL;
+<a name="line633">633: </a>      }
+<a name="line634">634: </a>      oclInvJ       = (void *) f_invJ;
+<a name="line635">635: </a>      oclDetJ       = (void *) f_detJ;
+<a name="line636">636: </a>    }
+<a name="line637">637: </a>    <font color="#4169E1">break</font>;
+<a name="line638">638: </a>    <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PETSC_DOUBLE</a>:
+<a name="line639">639: </a>    {
+<a name="line640">640: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> c, b, d;
+
+<a name="line642">642: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscMalloc4.html#PetscMalloc4">PetscMalloc4</a>(Ne*N_bt,&amp;d_coeff,Ne,&amp;d_coeffAux,Ne*dim*dim,&amp;d_invJ,Ne,&amp;d_detJ);
+<a name="line643">643: </a>      <font color="#4169E1">for</font> (c = 0; c &lt; Ne; ++c) {
+<a name="line644">644: </a>        d_detJ[c] = (double) cgeom-&gt;detJ[c];
+<a name="line645">645: </a>        <font color="#4169E1">for</font> (d = 0; d &lt; dim*dim; ++d) {
+<a name="line646">646: </a>          d_invJ[c*dim*dim+d] = (double) cgeom-&gt;invJ[c * dim * dim + d];
+<a name="line647">647: </a>        }
+<a name="line648">648: </a>        <font color="#4169E1">for</font> (b = 0; b &lt; N_bt; ++b) {
+<a name="line649">649: </a>          d_coeff[c*N_bt+b] = (double) coefficients[c*N_bt+b];
+<a name="line650">650: </a>        }
+<a name="line651">651: </a>      }
+<a name="line652">652: </a>      <font color="#4169E1">if</font> (coefficientsAux) { <font color="#B22222">/* Assume P0 */</font>
+<a name="line653">653: </a>        <font color="#4169E1">for</font> (c = 0; c &lt; Ne; ++c) {
+<a name="line654">654: </a>          d_coeffAux[c] = (double) coefficientsAux[c];
+<a name="line655">655: </a>        }
+<a name="line656">656: </a>      }
+<a name="line657">657: </a>      oclCoeff      = (void *) d_coeff;
+<a name="line658">658: </a>      <font color="#4169E1">if</font> (coefficientsAux) {
+<a name="line659">659: </a>        oclCoeffAux = (void *) d_coeffAux;
+<a name="line660">660: </a>      } <font color="#4169E1">else</font> {
+<a name="line661">661: </a>        oclCoeffAux = NULL;
+<a name="line662">662: </a>      }
+<a name="line663">663: </a>      oclInvJ       = (void *) d_invJ;
+<a name="line664">664: </a>      oclDetJ       = (void *) d_detJ;
+<a name="line665">665: </a>    }
+<a name="line666">666: </a>    <font color="#4169E1">break</font>;
+<a name="line667">667: </a><strong><font color="#FF0000">    default:</font></strong>
+<a name="line668">668: </a>      <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_ARG_WRONG, <font color="#666666">"Unsupported PETSc type %d"</font>, ocl-&gt;realType);
+<a name="line669">669: </a>    }
+<a name="line670">670: </a>  } <font color="#4169E1">else</font> {
+<a name="line671">671: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> c, d;
+
+<a name="line673">673: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(Ne*dim*dim,&amp;r_invJ,Ne,&amp;r_detJ);
+<a name="line674">674: </a>    <font color="#4169E1">for</font> (c = 0; c &lt; Ne; ++c) {
+<a name="line675">675: </a>      r_detJ[c] = cgeom-&gt;detJ[c];
+<a name="line676">676: </a>      <font color="#4169E1">for</font> (d = 0; d &lt; dim*dim; ++d) {
+<a name="line677">677: </a>        r_invJ[c*dim*dim+d] = cgeom-&gt;invJ[c * dim * dim + d];
+<a name="line678">678: </a>      }
+<a name="line679">679: </a>    }
+<a name="line680">680: </a>    oclCoeff    = (void *) coefficients;
+<a name="line681">681: </a>    oclCoeffAux = (void *) coefficientsAux;
+<a name="line682">682: </a>    oclInvJ     = (void *) r_invJ;
+<a name="line683">683: </a>    oclDetJ     = (void *) r_detJ;
+<a name="line684">684: </a>  }
+<a name="line685">685: </a>  o_coefficients         = clCreateBuffer(ocl-&gt;ctx_id, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, Ne*N_bt    * realSize, oclCoeff,    &amp;ierr);
+<a name="line686">686: </a>  <font color="#4169E1">if</font> (coefficientsAux) {
+<a name="line687">687: </a>    o_coefficientsAux    = clCreateBuffer(ocl-&gt;ctx_id, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, Ne         * realSize, oclCoeffAux, &amp;ierr);
+<a name="line688">688: </a>  } <font color="#4169E1">else</font> {
+<a name="line689">689: </a>    o_coefficientsAux    = clCreateBuffer(ocl-&gt;ctx_id, CL_MEM_READ_ONLY,                        Ne         * realSize, oclCoeffAux, &amp;ierr);
+<a name="line690">690: </a>  }
+<a name="line691">691: </a>  o_jacobianInverses     = clCreateBuffer(ocl-&gt;ctx_id, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, Ne*dim*dim * realSize, oclInvJ,     &amp;ierr);
+<a name="line692">692: </a>  o_jacobianDeterminants = clCreateBuffer(ocl-&gt;ctx_id, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, Ne         * realSize, oclDetJ,     &amp;ierr);
+<a name="line693">693: </a>  o_elemVec              = clCreateBuffer(ocl-&gt;ctx_id, CL_MEM_WRITE_ONLY,                       Ne*N_bt    * realSize, NULL,        &amp;ierr);
+<a name="line694">694: </a>  <font color="#B22222">/* Kernel launch */</font>
+<a name="line695">695: </a>  clSetKernelArg(ocl_kernel, 0, <font color="#4169E1">sizeof</font>(cl_int), (void*) &amp;N_cb);
+<a name="line696">696: </a>  clSetKernelArg(ocl_kernel, 1, <font color="#4169E1">sizeof</font>(cl_mem), (void*) &amp;o_coefficients);
+<a name="line697">697: </a>  clSetKernelArg(ocl_kernel, 2, <font color="#4169E1">sizeof</font>(cl_mem), (void*) &amp;o_coefficientsAux);
+<a name="line698">698: </a>  clSetKernelArg(ocl_kernel, 3, <font color="#4169E1">sizeof</font>(cl_mem), (void*) &amp;o_jacobianInverses);
+<a name="line699">699: </a>  clSetKernelArg(ocl_kernel, 4, <font color="#4169E1">sizeof</font>(cl_mem), (void*) &amp;o_jacobianDeterminants);
+<a name="line700">700: </a>  clSetKernelArg(ocl_kernel, 5, <font color="#4169E1">sizeof</font>(cl_mem), (void*) &amp;o_elemVec);
+<a name="line701">701: </a>  clEnqueueNDRangeKernel(ocl-&gt;queue_id, ocl_kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &amp;ocl_ev);
+<a name="line702">702: </a>  <font color="#B22222">/* Read data back from device */</font>
+<a name="line703">703: </a>  <font color="#4169E1">if</font> (<font color="#4169E1">sizeof</font>(<a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>) != realSize) {
+<a name="line704">704: </a>    <font color="#4169E1">switch</font> (ocl-&gt;realType) {
+<a name="line705">705: </a>    <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PETSC_FLOAT</a>:
+<a name="line706">706: </a>    {
+<a name="line707">707: </a>      float   *elem;
+<a name="line708">708: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> c, b;
+
+<a name="line710">710: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(f_coeff,f_coeffAux,f_invJ,f_detJ);
+<a name="line711">711: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(Ne*N_bt, &amp;elem);
+<a name="line712">712: </a>      clEnqueueReadBuffer(ocl-&gt;queue_id, o_elemVec, CL_TRUE, 0, Ne*N_bt * realSize, elem, 0, NULL, NULL);
+<a name="line713">713: </a>      <font color="#4169E1">for</font> (c = 0; c &lt; Ne; ++c) {
+<a name="line714">714: </a>        <font color="#4169E1">for</font> (b = 0; b &lt; N_bt; ++b) {
+<a name="line715">715: </a>          elemVec[c*N_bt+b] = (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) elem[c*N_bt+b];
+<a name="line716">716: </a>        }
+<a name="line717">717: </a>      }
+<a name="line718">718: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(elem);
+<a name="line719">719: </a>    }
+<a name="line720">720: </a>    <font color="#4169E1">break</font>;
+<a name="line721">721: </a>    <font color="#4169E1">case</font> <a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PETSC_DOUBLE</a>:
+<a name="line722">722: </a>    {
+<a name="line723">723: </a>      double  *elem;
+<a name="line724">724: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> c, b;
+
+<a name="line726">726: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscFree4.html#PetscFree4">PetscFree4</a>(d_coeff,d_coeffAux,d_invJ,d_detJ);
+<a name="line727">727: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(Ne*N_bt, &amp;elem);
+<a name="line728">728: </a>      clEnqueueReadBuffer(ocl-&gt;queue_id, o_elemVec, CL_TRUE, 0, Ne*N_bt * realSize, elem, 0, NULL, NULL);
+<a name="line729">729: </a>      <font color="#4169E1">for</font> (c = 0; c &lt; Ne; ++c) {
+<a name="line730">730: </a>        <font color="#4169E1">for</font> (b = 0; b &lt; N_bt; ++b) {
+<a name="line731">731: </a>          elemVec[c*N_bt+b] = (<a href="../../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>) elem[c*N_bt+b];
+<a name="line732">732: </a>        }
+<a name="line733">733: </a>      }
+<a name="line734">734: </a>      <a href="../../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(elem);
+<a name="line735">735: </a>    }
+<a name="line736">736: </a>    <font color="#4169E1">break</font>;
+<a name="line737">737: </a><strong><font color="#FF0000">    default:</font></strong>
+<a name="line738">738: </a>      <a href="../../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>, PETSC_ERR_ARG_WRONG, <font color="#666666">"Unsupported PETSc type %d"</font>, ocl-&gt;realType);
+<a name="line739">739: </a>    }
+<a name="line740">740: </a>  } <font color="#4169E1">else</font> {
+<a name="line741">741: </a>    <a href="../../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(r_invJ,r_detJ);
+<a name="line742">742: </a>    clEnqueueReadBuffer(ocl-&gt;queue_id, o_elemVec, CL_TRUE, 0, Ne*N_bt * realSize, elemVec, 0, NULL, NULL);
+<a name="line743">743: </a>  }
+<a name="line744">744: </a>  <font color="#B22222">/* Log performance */</font>
+<a name="line745">745: </a>  clGetEventProfilingInfo(ocl_ev, CL_PROFILING_COMMAND_START, <font color="#4169E1">sizeof</font>(cl_ulong), &amp;ns_start, NULL);
+<a name="line746">746: </a>  clGetEventProfilingInfo(ocl_ev, CL_PROFILING_COMMAND_END,   <font color="#4169E1">sizeof</font>(cl_ulong), &amp;ns_end,   NULL);
+<a name="line747">747: </a>  f0Flops = 0;
+<a name="line748">748: </a>  <font color="#4169E1">switch</font> (ocl-&gt;op) {
+<a name="line749">749: </a>  <font color="#4169E1">case</font> LAPLACIAN:
+<a name="line750">750: </a>    f1Flops = useAux ? dim : 0;<font color="#4169E1">break</font>;
+<a name="line751">751: </a>  <font color="#4169E1">case</font> ELASTICITY:
+<a name="line752">752: </a>    f1Flops = 2*dim*dim;<font color="#4169E1">break</font>;
+<a name="line753">753: </a>  }
+<a name="line754">754: </a>  numFlops = Ne*(
+<a name="line755">755: </a>    N_q*(
+<a name="line756">756: </a>      N_b*N_comp*((useField ? 2 : 0) + (useFieldDer ? 2*dim*(dim + 1) : 0))
+<a name="line757">757: </a>      <font color="#B22222">/*+</font>
+<a name="line758">758: </a><font color="#B22222">       N_ba*N_compa*((useFieldAux ? 2 : 0) + (useFieldDerAux ? 2*dim*(dim + 1) : 0))*/</font>
+<a name="line759">759: </a>      +
+<a name="line760">760: </a>      N_comp*((useF0 ? f0Flops + 2 : 0) + (useF1 ? f1Flops + 2*dim : 0)))
+<a name="line761">761: </a>    +
+<a name="line762">762: </a>    N_b*((useF0 ? 2 : 0) + (useF1 ? 2*dim*(dim + 1) : 0)));
+<a name="line763">763: </a>  PetscFEOpenCLLogResidual(fem, (ns_end - ns_start)*1.0e-9, numFlops);
+<a name="line764">764: </a>  <font color="#B22222">/* Cleanup */</font>
+<a name="line765">765: </a>  clReleaseMemObject(o_coefficients);
+<a name="line766">766: </a>  clReleaseMemObject(o_coefficientsAux);
+<a name="line767">767: </a>  clReleaseMemObject(o_jacobianInverses);
+<a name="line768">768: </a>  clReleaseMemObject(o_jacobianDeterminants);
+<a name="line769">769: </a>  clReleaseMemObject(o_elemVec);
+<a name="line770">770: </a>  clReleaseKernel(ocl_kernel);
+<a name="line771">771: </a>  clReleaseProgram(ocl_prog);
+<a name="line772">772: </a>  <font color="#4169E1">return</font>(0);
+<a name="line773">773: </a>}
+
+<a name="line775">775: </a><strong><font color="#4169E1">PETSC_EXTERN <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFESetUp_Basic(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a>)</font></strong>;
+<a name="line776">776: </a><strong><font color="#4169E1">PETSC_EXTERN <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFEGetTabulation_Basic(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a>, <a href="../../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>, const <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> [],</font></strong>
+<a name="line777">777: </a><strong><font color="#4169E1">                                                       <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *, <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *, <a href="../../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> *)</font></strong>;
+
+<a name="line779">779: </a><strong><font color="#4169E1"><a name="PetscFEInitialize_OpenCL"></a>static <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFEInitialize_OpenCL(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> fem)</font></strong>
+<a name="line780">780: </a>{
+<a name="line782">782: </a>  fem-&gt;ops-&gt;setfromoptions          = NULL;
+<a name="line783">783: </a>  fem-&gt;ops-&gt;setup                   = PetscFESetUp_Basic;
+<a name="line784">784: </a>  fem-&gt;ops-&gt;view                    = NULL;
+<a name="line785">785: </a>  fem-&gt;ops-&gt;destroy                 = PetscFEDestroy_OpenCL;
+<a name="line786">786: </a>  fem-&gt;ops-&gt;getdimension            = PetscFEGetDimension_Basic;
+<a name="line787">787: </a>  fem-&gt;ops-&gt;gettabulation           = PetscFEGetTabulation_Basic;
+<a name="line788">788: </a>  fem-&gt;ops-&gt;integrateresidual       = PetscFEIntegrateResidual_OpenCL;
+<a name="line789">789: </a>  fem-&gt;ops-&gt;integratebdresidual     = NULL<font color="#B22222">/* PetscFEIntegrateBdResidual_OpenCL */</font>;
+<a name="line790">790: </a>  fem-&gt;ops-&gt;integratejacobianaction = NULL<font color="#B22222">/* PetscFEIntegrateJacobianAction_OpenCL */</font>;
+<a name="line791">791: </a>  fem-&gt;ops-&gt;integratejacobian       = PetscFEIntegrateJacobian_Basic;
+<a name="line792">792: </a>  <font color="#4169E1">return</font>(0);
+<a name="line793">793: </a>}
+
+<a name="line795">795: </a><font color="#B22222">/*MC</font>
+<a name="line796">796: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/FE/PETSCFEOPENCL.html#PETSCFEOPENCL">PETSCFEOPENCL</a> = "opencl" - A <a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> object that integrates using a vectorized OpenCL implementation</font>
+
+<a name="line798">798: </a><font color="#B22222">  Level: intermediate</font>
+
+<a name="line800">800: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/FE/PetscFEType.html#PetscFEType">PetscFEType</a>, <a href="../../../../../../docs/manualpages/FE/PetscFECreate.html#PetscFECreate">PetscFECreate</a>(), <a href="../../../../../../docs/manualpages/FE/PetscFESetType.html#PetscFESetType">PetscFESetType</a>()</font>
+<a name="line801">801: </a><font color="#B22222">M*/</font>
+
+<a name="line803">803: </a><strong><font color="#4169E1"><a name="PetscFECreate_OpenCL"></a>PETSC_EXTERN <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PetscFECreate_OpenCL(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> fem)</font></strong>
+<a name="line804">804: </a>{
+<a name="line805">805: </a>  PetscFE_OpenCL *ocl;
+<a name="line806">806: </a>  cl_uint         num_platforms;
+<a name="line807">807: </a>  cl_platform_id  platform_ids[42];
+<a name="line808">808: </a>  cl_uint         num_devices;
+<a name="line809">809: </a>  cl_device_id    device_ids[42];
+<a name="line810">810: </a>  cl_int          ierr2;
+<a name="line811">811: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  ierr;
+
+<a name="line815">815: </a>  <a href="../../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(fem,&amp;ocl);
+<a name="line816">816: </a>  fem-&gt;data = ocl;
+
+<a name="line818">818: </a>  <font color="#B22222">/* Init Platform */</font>
+<a name="line819">819: </a>  clGetPlatformIDs(42, platform_ids, &amp;num_platforms);
+<a name="line820">820: </a>  <font color="#4169E1">if</font> (!num_platforms) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) fem), PETSC_ERR_SUP, <font color="#666666">"No OpenCL platform found."</font>);
+<a name="line821">821: </a>  ocl-&gt;pf_id = platform_ids[0];
+<a name="line822">822: </a>  <font color="#B22222">/* Init Device */</font>
+<a name="line823">823: </a>  clGetDeviceIDs(ocl-&gt;pf_id, CL_DEVICE_TYPE_ALL, 42, device_ids, &amp;num_devices);
+<a name="line824">824: </a>  <font color="#4169E1">if</font> (!num_devices) <a href="../../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>) fem), PETSC_ERR_SUP, <font color="#666666">"No OpenCL device found."</font>);
+<a name="line825">825: </a>  ocl-&gt;dev_id = device_ids[0];
+<a name="line826">826: </a>  <font color="#B22222">/* Create context with one command queue */</font>
+<a name="line827">827: </a>  ocl-&gt;ctx_id   = clCreateContext(0, 1, &amp;(ocl-&gt;dev_id), NULL, NULL, &amp;ierr2);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr2);
+<a name="line828">828: </a>  ocl-&gt;queue_id = clCreateCommandQueue(ocl-&gt;ctx_id, ocl-&gt;dev_id, CL_QUEUE_PROFILING_ENABLE, &amp;ierr2);<a href="../../../../../../docs/manualpages/Sys/CHKERRQ.html#CHKERRQ">CHKERRQ</a>(ierr2);
+<a name="line829">829: </a>  <font color="#B22222">/* Types */</font>
+<a name="line830">830: </a>  ocl-&gt;realType = <a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PETSC_FLOAT</a>;
+<a name="line831">831: </a>  <font color="#B22222">/* Register events */</font>
+<a name="line832">832: </a>  <a href="../../../../../../docs/manualpages/Profiling/PetscLogEventRegister.html#PetscLogEventRegister">PetscLogEventRegister</a>(<font color="#666666">"OpenCL FEResidual"</font>, PETSCFE_CLASSID, &amp;ocl-&gt;residualEvent);
+<a name="line833">833: </a>  <font color="#B22222">/* Equation handling */</font>
+<a name="line834">834: </a>  ocl-&gt;op = LAPLACIAN;
+
+<a name="line836">836: </a>  PetscFEInitialize_OpenCL(fem);
+<a name="line837">837: </a>  <font color="#4169E1">return</font>(0);
+<a name="line838">838: </a>}
+
+<a name="line840">840: </a><font color="#B22222">/*@</font>
+<a name="line841">841: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/FE/PetscFEOpenCLSetRealType.html#PetscFEOpenCLSetRealType">PetscFEOpenCLSetRealType</a> - Set the scalar type for running on the accelerator</font>
+
+<a name="line843">843: </a><font color="#B22222">  Input Parameters:</font>
+<a name="line844">844: </a><font color="#B22222">+ fem      - The <a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a></font>
+<a name="line845">845: </a><font color="#B22222">- realType - The scalar type</font>
+
+<a name="line847">847: </a><font color="#B22222">  Level: developer</font>
+
+<a name="line849">849: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/FE/PetscFEOpenCLGetRealType.html#PetscFEOpenCLGetRealType">PetscFEOpenCLGetRealType</a>()</font>
+<a name="line850">850: </a><font color="#B22222">@*/</font>
+<a name="line851">851: </a><strong><font color="#4169E1"><a name="PetscFEOpenCLSetRealType"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/FE/PetscFEOpenCLSetRealType.html#PetscFEOpenCLSetRealType">PetscFEOpenCLSetRealType</a>(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> fem, <a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PetscDataType</a> realType)</font></strong>
+<a name="line852">852: </a>{
+<a name="line853">853: </a>  PetscFE_OpenCL *ocl = (PetscFE_OpenCL *) fem-&gt;data;
+
+<a name="line857">857: </a>  ocl-&gt;realType = realType;
+<a name="line858">858: </a>  <font color="#4169E1">return</font>(0);
+<a name="line859">859: </a>}
+
+<a name="line861">861: </a><font color="#B22222">/*@</font>
+<a name="line862">862: </a><font color="#B22222">  <a href="../../../../../../docs/manualpages/FE/PetscFEOpenCLGetRealType.html#PetscFEOpenCLGetRealType">PetscFEOpenCLGetRealType</a> - Get the scalar type for running on the accelerator</font>
+
+<a name="line864">864: </a><font color="#B22222">  Input Parameter:</font>
+<a name="line865">865: </a><font color="#B22222">. fem      - The <a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a></font>
+
+<a name="line867">867: </a><font color="#B22222">  Output Parameter:</font>
+<a name="line868">868: </a><font color="#B22222">. realType - The scalar type</font>
+
+<a name="line870">870: </a><font color="#B22222">  Level: developer</font>
+
+<a name="line872">872: </a><font color="#B22222">.seealso: <a href="../../../../../../docs/manualpages/FE/PetscFEOpenCLSetRealType.html#PetscFEOpenCLSetRealType">PetscFEOpenCLSetRealType</a>()</font>
+<a name="line873">873: </a><font color="#B22222">@*/</font>
+<a name="line874">874: </a><strong><font color="#4169E1"><a name="PetscFEOpenCLGetRealType"></a><a href="../../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../../docs/manualpages/FE/PetscFEOpenCLGetRealType.html#PetscFEOpenCLGetRealType">PetscFEOpenCLGetRealType</a>(<a href="../../../../../../docs/manualpages/FE/PetscFE.html#PetscFE">PetscFE</a> fem, <a href="../../../../../../docs/manualpages/Sys/PetscDataType.html#PetscDataType">PetscDataType</a> *realType)</font></strong>
+<a name="line875">875: </a>{
+<a name="line876">876: </a>  PetscFE_OpenCL *ocl = (PetscFE_OpenCL *) fem-&gt;data;
+
+<a name="line881">881: </a>  *realType = ocl-&gt;realType;
+<a name="line882">882: </a>  <font color="#4169E1">return</font>(0);
+<a name="line883">883: </a>}
+
+<a name="line885">885: </a><font color="#A020F0">#endif </font><font color="#B22222">/* PETSC_HAVE_OPENCL */</font><font color="#A020F0"></font>
+</pre>
+</body>
+
+</html>

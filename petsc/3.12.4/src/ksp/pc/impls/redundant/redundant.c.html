@@ -1,0 +1,528 @@
+<center><a href="redundant.c">Actual source code: redundant.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/pc/impls/redundant/redundant.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:10:54+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/pc/impls/redundant/redundant.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a><font color="#B22222">/*</font>
+<a name="line3">  3: </a><font color="#B22222">  This file defines a "solve the problem redundantly on each subgroup of processor" preconditioner.</font>
+<a name="line4">  4: </a><font color="#B22222">*/</font>
+<a name="line5">  5: </a> #include <A href="../../../../../include/petsc/private/pcimpl.h.html">&lt;petsc/private/pcimpl.h&gt;</A>
+<a name="line6">  6: </a> #include <A href="../../../../../include/petscksp.h.html">&lt;petscksp.h&gt;</A>
+
+<a name="line8">  8: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line9">  9: </a>  <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>                ksp;
+<a name="line10"> 10: </a>  <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>                 pc;                   <font color="#B22222">/* actual preconditioner used on each processor */</font>
+<a name="line11"> 11: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>                xsub,ysub;            <font color="#B22222">/* vectors of a subcommunicator to hold parallel vectors of <a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc) */</font>
+<a name="line12"> 12: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>                xdup,ydup;            <font color="#B22222">/* parallel vector that congregates xsub or ysub facilitating vector scattering */</font>
+<a name="line13"> 13: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>                pmats;                <font color="#B22222">/* matrix and optional preconditioner matrix belong to a subcommunicator */</font>
+<a name="line14"> 14: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>         scatterin,scatterout; <font color="#B22222">/* scatter used to move all values to each processor group (subcommunicator) */</font>
+<a name="line15"> 15: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>          useparallelmat;
+<a name="line16"> 16: </a>  <a href="../../../../../docs/manualpages/Sys/PetscSubcomm.html#PetscSubcomm">PetscSubcomm</a>       psubcomm;
+<a name="line17"> 17: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           nsubcomm;             <font color="#B22222">/* num of data structure <a href="../../../../../docs/manualpages/Sys/PetscSubcomm.html#PetscSubcomm">PetscSubcomm</a> */</font>
+<a name="line18"> 18: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>          shifttypeset;
+<a name="line19"> 19: </a>  <a href="../../../../../docs/manualpages/Mat/MatFactorShiftType.html#MatFactorShiftType">MatFactorShiftType</a> shifttype;
+<a name="line20"> 20: </a>} PC_Redundant;
+
+<a name="line22"> 22: </a><strong><font color="#4169E1"><a name="PCFactorSetShiftType_Redundant"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  PCFactorSetShiftType_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Mat/MatFactorShiftType.html#MatFactorShiftType">MatFactorShiftType</a> shifttype)</font></strong>
+<a name="line23"> 23: </a>{
+<a name="line24"> 24: </a>  PC_Redundant   *red = (PC_Redundant*)pc-&gt;data;
+
+<a name="line28"> 28: </a>  <font color="#4169E1">if</font> (red-&gt;ksp) {
+<a name="line29"> 29: </a>    <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc;
+<a name="line30"> 30: </a>    <a href="../../../../../docs/manualpages/KSP/KSPGetPC.html#KSPGetPC">KSPGetPC</a>(red-&gt;ksp,&amp;pc);
+<a name="line31"> 31: </a>    <a href="../../../../../docs/manualpages/PC/PCFactorSetShiftType.html#PCFactorSetShiftType">PCFactorSetShiftType</a>(pc,shifttype);
+<a name="line32"> 32: </a>  } <font color="#4169E1">else</font> {
+<a name="line33"> 33: </a>    red-&gt;shifttypeset = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line34"> 34: </a>    red-&gt;shifttype    = shifttype;
+<a name="line35"> 35: </a>  }
+<a name="line36"> 36: </a>  <font color="#4169E1">return</font>(0);
+<a name="line37"> 37: </a>}
+
+<a name="line39"> 39: </a><strong><font color="#4169E1"><a name="PCView_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCView_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line40"> 40: </a>{
+<a name="line41"> 41: </a>  PC_Redundant   *red = (PC_Redundant*)pc-&gt;data;
+<a name="line43"> 43: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      iascii,isstring;
+<a name="line44"> 44: </a>  <a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>    subviewer;
+
+<a name="line47"> 47: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../../docs/manualpages/Viewer/PETSCVIEWERASCII.html#PETSCVIEWERASCII">PETSCVIEWERASCII</a>,&amp;iascii);
+<a name="line48"> 48: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../../docs/manualpages/Viewer/PETSCVIEWERSTRING.html#PETSCVIEWERSTRING">PETSCVIEWERSTRING</a>,&amp;isstring);
+<a name="line49"> 49: </a>  <font color="#4169E1">if</font> (iascii) {
+<a name="line50"> 50: </a>    <font color="#4169E1">if</font> (!red-&gt;psubcomm) {
+<a name="line51"> 51: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Not yet setup\n"</font>);
+<a name="line52"> 52: </a>    } <font color="#4169E1">else</font> {
+<a name="line53"> 53: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  First (color=0) of %D PCs follows\n"</font>,red-&gt;nsubcomm);
+<a name="line54"> 54: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerGetSubViewer.html#PetscViewerGetSubViewer">PetscViewerGetSubViewer</a>(viewer,((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)red-&gt;pc)-&gt;comm,&amp;subviewer);
+<a name="line55"> 55: </a>      <font color="#4169E1">if</font> (!red-&gt;psubcomm-&gt;color) { <font color="#B22222">/* only view first redundant pc */</font>
+<a name="line56"> 56: </a>        <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPushTab.html#PetscViewerASCIIPushTab">PetscViewerASCIIPushTab</a>(subviewer);
+<a name="line57"> 57: </a>        <a href="../../../../../docs/manualpages/KSP/KSPView.html#KSPView">KSPView</a>(red-&gt;ksp,subviewer);
+<a name="line58"> 58: </a>        <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPopTab.html#PetscViewerASCIIPopTab">PetscViewerASCIIPopTab</a>(subviewer);
+<a name="line59"> 59: </a>      }
+<a name="line60"> 60: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerRestoreSubViewer.html#PetscViewerRestoreSubViewer">PetscViewerRestoreSubViewer</a>(viewer,((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)red-&gt;pc)-&gt;comm,&amp;subviewer);
+<a name="line61"> 61: </a>    }
+<a name="line62"> 62: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isstring) {
+<a name="line63"> 63: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerStringSPrintf.html#PetscViewerStringSPrintf">PetscViewerStringSPrintf</a>(viewer,<font color="#666666">" Redundant solver preconditioner"</font>);
+<a name="line64"> 64: </a>  }
+<a name="line65"> 65: </a>  <font color="#4169E1">return</font>(0);
+<a name="line66"> 66: </a>}
+
+<a name="line68"> 68: </a> #include <A href="../../../../../include/../src/mat/impls/aij/mpi/mpiaij.h.html">&lt;../src/mat/impls/aij/mpi/mpiaij.h&gt;</A>
+<a name="line69"> 69: </a><strong><font color="#4169E1"><a name="PCSetUp_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUp_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line70"> 70: </a>{
+<a name="line71"> 71: </a>  PC_Redundant   *red = (PC_Redundant*)pc-&gt;data;
+<a name="line73"> 73: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       mstart,mend,mlocal,M;
+<a name="line74"> 74: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+<a name="line75"> 75: </a>  <a href="../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>       comm,subcomm;
+<a name="line76"> 76: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            x;
+
+<a name="line79"> 79: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,&amp;comm);
+
+<a name="line81"> 81: </a>  <font color="#B22222">/* if pmatrix set by user is sequential then we do not need to gather the parallel matrix */</font>
+<a name="line82"> 82: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(comm,&amp;size);
+<a name="line83"> 83: </a>  <font color="#4169E1">if</font> (size == 1) red-&gt;useparallelmat = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+
+<a name="line85"> 85: </a>  <font color="#4169E1">if</font> (!pc-&gt;setupcalled) {
+<a name="line86"> 86: </a>    <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> mloc_sub;
+<a name="line87"> 87: </a>    <font color="#4169E1">if</font> (!red-&gt;psubcomm) { <font color="#B22222">/* create red-&gt;psubcomm, new ksp and pc over subcomm */</font>
+<a name="line88"> 88: </a>      <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> ksp;
+<a name="line89"> 89: </a>      <a href="../../../../../docs/manualpages/PC/PCRedundantGetKSP.html#PCRedundantGetKSP">PCRedundantGetKSP</a>(pc,&amp;ksp);
+<a name="line90"> 90: </a>    }
+<a name="line91"> 91: </a>    subcomm = PetscSubcommChild(red-&gt;psubcomm);
+
+<a name="line93"> 93: </a>    <font color="#4169E1">if</font> (red-&gt;useparallelmat) {
+<a name="line94"> 94: </a>      <font color="#B22222">/* grab the parallel matrix and put it into processors of a subcomminicator */</font>
+<a name="line95"> 95: </a>      <a href="../../../../../docs/manualpages/Mat/MatCreateRedundantMatrix.html#MatCreateRedundantMatrix">MatCreateRedundantMatrix</a>(pc-&gt;pmat,red-&gt;psubcomm-&gt;n,subcomm,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;red-&gt;pmats);
+
+<a name="line97"> 97: </a>      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(subcomm,&amp;size);
+<a name="line98"> 98: </a>      <font color="#4169E1">if</font> (size &gt; 1) {
+<a name="line99"> 99: </a>        <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> foundpack,issbaij;
+<a name="line100">100: </a>        <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)red-&gt;pmats,<a href="../../../../../docs/manualpages/Mat/MATMPISBAIJ.html#MATMPISBAIJ">MATMPISBAIJ</a>,&amp;issbaij);
+<a name="line101">101: </a>        <font color="#4169E1">if</font> (!issbaij) {
+<a name="line102">102: </a>          <a href="../../../../../docs/manualpages/Mat/MatGetFactorAvailable.html#MatGetFactorAvailable">MatGetFactorAvailable</a>(red-&gt;pmats,NULL,<a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_LU</a>,&amp;foundpack);
+<a name="line103">103: </a>        } <font color="#4169E1">else</font> {
+<a name="line104">104: </a>          <a href="../../../../../docs/manualpages/Mat/MatGetFactorAvailable.html#MatGetFactorAvailable">MatGetFactorAvailable</a>(red-&gt;pmats,NULL,<a href="../../../../../docs/manualpages/Mat/MatFactorType.html#MatFactorType">MAT_FACTOR_CHOLESKY</a>,&amp;foundpack);
+<a name="line105">105: </a>        }
+<a name="line106">106: </a>        <font color="#4169E1">if</font> (!foundpack) { <font color="#B22222">/* reset default ksp and pc */</font>
+<a name="line107">107: </a>          <a href="../../../../../docs/manualpages/KSP/KSPSetType.html#KSPSetType">KSPSetType</a>(red-&gt;ksp,<a href="../../../../../docs/manualpages/KSP/KSPGMRES.html#KSPGMRES">KSPGMRES</a>);
+<a name="line108">108: </a>          <a href="../../../../../docs/manualpages/PC/PCSetType.html#PCSetType">PCSetType</a>(red-&gt;pc,<a href="../../../../../docs/manualpages/PC/PCBJACOBI.html#PCBJACOBI">PCBJACOBI</a>);
+<a name="line109">109: </a>        } <font color="#4169E1">else</font> {
+<a name="line110">110: </a>          <a href="../../../../../docs/manualpages/PC/PCFactorSetMatSolverType.html#PCFactorSetMatSolverType">PCFactorSetMatSolverType</a>(red-&gt;pc,NULL);
+<a name="line111">111: </a>        }
+<a name="line112">112: </a>      }
+
+<a name="line114">114: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(red-&gt;ksp,red-&gt;pmats,red-&gt;pmats);
+
+<a name="line116">116: </a>      <font color="#B22222">/* get working vectors xsub and ysub */</font>
+<a name="line117">117: </a>      <a href="../../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(red-&gt;pmats,&amp;red-&gt;xsub,&amp;red-&gt;ysub);
+
+<a name="line119">119: </a>      <font color="#B22222">/* create working vectors xdup and ydup.</font>
+<a name="line120">120: </a><font color="#B22222">       xdup concatenates all xsub's contigously to form a mpi vector over dupcomm  (see PetscSubcommCreate_interlaced())</font>
+<a name="line121">121: </a><font color="#B22222">       ydup concatenates all ysub and has empty local arrays because ysub's arrays will be place into it.</font>
+<a name="line122">122: </a><font color="#B22222">       Note: we use communicator dupcomm, not <a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc)! */</font>
+<a name="line123">123: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetLocalSize.html#MatGetLocalSize">MatGetLocalSize</a>(red-&gt;pmats,&amp;mloc_sub,NULL);
+<a name="line124">124: </a>      <a href="../../../../../docs/manualpages/Vec/VecCreateMPI.html#VecCreateMPI">VecCreateMPI</a>(PetscSubcommContiguousParent(red-&gt;psubcomm),mloc_sub,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,&amp;red-&gt;xdup);
+<a name="line125">125: </a>      <a href="../../../../../docs/manualpages/Vec/VecCreateMPIWithArray.html#VecCreateMPIWithArray">VecCreateMPIWithArray</a>(PetscSubcommContiguousParent(red-&gt;psubcomm),1,mloc_sub,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,NULL,&amp;red-&gt;ydup);
+
+<a name="line127">127: </a>      <font color="#B22222">/* create vecscatters */</font>
+<a name="line128">128: </a>      <font color="#4169E1">if</font> (!red-&gt;scatterin) { <font color="#B22222">/* efficiency of scatterin is independent from psubcomm_type! */</font>
+<a name="line129">129: </a>        <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>       is1,is2;
+<a name="line130">130: </a>        <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *idx1,*idx2,i,j,k;
+
+<a name="line132">132: </a>        <a href="../../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(pc-&gt;pmat,&amp;x,0);
+<a name="line133">133: </a>        <a href="../../../../../docs/manualpages/Vec/VecGetSize.html#VecGetSize">VecGetSize</a>(x,&amp;M);
+<a name="line134">134: </a>        <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(x,&amp;mstart,&amp;mend);
+<a name="line135">135: </a>        mlocal = mend - mstart;
+<a name="line136">136: </a>        <a href="../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(red-&gt;psubcomm-&gt;n*mlocal,&amp;idx1,red-&gt;psubcomm-&gt;n*mlocal,&amp;idx2);
+<a name="line137">137: </a>        j    = 0;
+<a name="line138">138: </a>        <font color="#4169E1">for</font> (k=0; k&lt;red-&gt;psubcomm-&gt;n; k++) {
+<a name="line139">139: </a>          <font color="#4169E1">for</font> (i=mstart; i&lt;mend; i++) {
+<a name="line140">140: </a>            idx1[j]   = i;
+<a name="line141">141: </a>            idx2[j++] = i + M*k;
+<a name="line142">142: </a>          }
+<a name="line143">143: </a>        }
+<a name="line144">144: </a>        <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,red-&gt;psubcomm-&gt;n*mlocal,idx1,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;is1);
+<a name="line145">145: </a>        <a href="../../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(comm,red-&gt;psubcomm-&gt;n*mlocal,idx2,<a href="../../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;is2);
+<a name="line146">146: </a>        <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(x,is1,red-&gt;xdup,is2,&amp;red-&gt;scatterin);
+<a name="line147">147: </a>        <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;is1);
+<a name="line148">148: </a>        <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;is2);
+
+<a name="line150">150: </a>        <font color="#B22222">/* Impl below is good for PETSC_SUBCOMM_INTERLACED (no inter-process communication) and PETSC_SUBCOMM_CONTIGUOUS (communication within subcomm) */</font>
+<a name="line151">151: </a>        <a href="../../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(comm,mlocal,mstart+ red-&gt;psubcomm-&gt;color*M,1,&amp;is1);
+<a name="line152">152: </a>        <a href="../../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(comm,mlocal,mstart,1,&amp;is2);
+<a name="line153">153: </a>        <a href="../../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(red-&gt;xdup,is1,x,is2,&amp;red-&gt;scatterout);
+<a name="line154">154: </a>        <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;is1);
+<a name="line155">155: </a>        <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;is2);
+<a name="line156">156: </a>        <a href="../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(idx1,idx2);
+<a name="line157">157: </a>        <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;x);
+<a name="line158">158: </a>      }
+<a name="line159">159: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* !red-&gt;useparallelmat */</font>
+<a name="line160">160: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(red-&gt;ksp,pc-&gt;mat,pc-&gt;pmat);
+<a name="line161">161: </a>    }
+<a name="line162">162: </a>  } <font color="#4169E1">else</font> { <font color="#B22222">/* pc-&gt;setupcalled */</font>
+<a name="line163">163: </a>    <font color="#4169E1">if</font> (red-&gt;useparallelmat) {
+<a name="line164">164: </a>      <a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MatReuse</a>       reuse;
+<a name="line165">165: </a>      <font color="#B22222">/* grab the parallel matrix and put it into processors of a subcomminicator */</font>
+<a name="line166">166: </a>      <font color="#B22222">/*--------------------------------------------------------------------------*/</font>
+<a name="line167">167: </a>      <font color="#4169E1">if</font> (pc-&gt;flag == <a href="../../../../../docs/manualpages/Mat/MatStructure.html#MatStructure">DIFFERENT_NONZERO_PATTERN</a>) {
+<a name="line168">168: </a>        <font color="#B22222">/* destroy old matrices */</font>
+<a name="line169">169: </a>        <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;red-&gt;pmats);
+<a name="line170">170: </a>        reuse = <a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>;
+<a name="line171">171: </a>      } <font color="#4169E1">else</font> {
+<a name="line172">172: </a>        reuse = <a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_REUSE_MATRIX</a>;
+<a name="line173">173: </a>      }
+<a name="line174">174: </a>      <a href="../../../../../docs/manualpages/Mat/MatCreateRedundantMatrix.html#MatCreateRedundantMatrix">MatCreateRedundantMatrix</a>(pc-&gt;pmat,red-&gt;psubcomm-&gt;n,PetscSubcommChild(red-&gt;psubcomm),reuse,&amp;red-&gt;pmats);
+<a name="line175">175: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(red-&gt;ksp,red-&gt;pmats,red-&gt;pmats);
+<a name="line176">176: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* !red-&gt;useparallelmat */</font>
+<a name="line177">177: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(red-&gt;ksp,pc-&gt;mat,pc-&gt;pmat);
+<a name="line178">178: </a>    }
+<a name="line179">179: </a>  }
+
+<a name="line181">181: </a>  <font color="#4169E1">if</font> (pc-&gt;setfromoptionscalled) {
+<a name="line182">182: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(red-&gt;ksp);
+<a name="line183">183: </a>  }
+<a name="line184">184: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>(red-&gt;ksp);
+<a name="line185">185: </a>  <font color="#4169E1">return</font>(0);
+<a name="line186">186: </a>}
+
+<a name="line188">188: </a><strong><font color="#4169E1"><a name="PCApply_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApply_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line189">189: </a>{
+<a name="line190">190: </a>  PC_Redundant   *red = (PC_Redundant*)pc-&gt;data;
+<a name="line192">192: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *array;
+
+<a name="line195">195: </a>  <font color="#4169E1">if</font> (!red-&gt;useparallelmat) {
+<a name="line196">196: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(red-&gt;ksp,x,y);
+<a name="line197">197: </a>    <a href="../../../../../docs/manualpages/KSP/KSPCheckSolve.html#KSPCheckSolve">KSPCheckSolve</a>(red-&gt;ksp,pc,y);
+<a name="line198">198: </a>    <font color="#4169E1">return</font>(0);
+<a name="line199">199: </a>  }
+
+<a name="line201">201: </a>  <font color="#B22222">/* scatter x to xdup */</font>
+<a name="line202">202: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(red-&gt;scatterin,x,red-&gt;xdup,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line203">203: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(red-&gt;scatterin,x,red-&gt;xdup,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+
+<a name="line205">205: </a>  <font color="#B22222">/* place xdup's local array into xsub */</font>
+<a name="line206">206: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(red-&gt;xdup,&amp;array);
+<a name="line207">207: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(red-&gt;xsub,(const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>*)array);
+
+<a name="line209">209: </a>  <font color="#B22222">/* apply preconditioner on each processor */</font>
+<a name="line210">210: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(red-&gt;ksp,red-&gt;xsub,red-&gt;ysub);
+<a name="line211">211: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCheckSolve.html#KSPCheckSolve">KSPCheckSolve</a>(red-&gt;ksp,pc,red-&gt;ysub);
+<a name="line212">212: </a>  <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(red-&gt;xsub);
+<a name="line213">213: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(red-&gt;xdup,&amp;array);
+
+<a name="line215">215: </a>  <font color="#B22222">/* place ysub's local array into ydup */</font>
+<a name="line216">216: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(red-&gt;ysub,&amp;array);
+<a name="line217">217: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(red-&gt;ydup,(const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>*)array);
+
+<a name="line219">219: </a>  <font color="#B22222">/* scatter ydup to y */</font>
+<a name="line220">220: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(red-&gt;scatterout,red-&gt;ydup,y,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line221">221: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(red-&gt;scatterout,red-&gt;ydup,y,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line222">222: </a>  <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(red-&gt;ydup);
+<a name="line223">223: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(red-&gt;ysub,&amp;array);
+<a name="line224">224: </a>  <font color="#4169E1">return</font>(0);
+<a name="line225">225: </a>}
+
+<a name="line227">227: </a><strong><font color="#4169E1"><a name="PCApplyTranspose_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApplyTranspose_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line228">228: </a>{
+<a name="line229">229: </a>  PC_Redundant   *red = (PC_Redundant*)pc-&gt;data;
+<a name="line231">231: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *array;
+
+<a name="line234">234: </a>  <font color="#4169E1">if</font> (!red-&gt;useparallelmat) {
+<a name="line235">235: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSolveTranspose.html#KSPSolveTranspose">KSPSolveTranspose</a>(red-&gt;ksp,x,y);
+<a name="line236">236: </a>    <a href="../../../../../docs/manualpages/KSP/KSPCheckSolve.html#KSPCheckSolve">KSPCheckSolve</a>(red-&gt;ksp,pc,y);
+<a name="line237">237: </a>    <font color="#4169E1">return</font>(0);
+<a name="line238">238: </a>  }
+
+<a name="line240">240: </a>  <font color="#B22222">/* scatter x to xdup */</font>
+<a name="line241">241: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(red-&gt;scatterin,x,red-&gt;xdup,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line242">242: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(red-&gt;scatterin,x,red-&gt;xdup,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+
+<a name="line244">244: </a>  <font color="#B22222">/* place xdup's local array into xsub */</font>
+<a name="line245">245: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(red-&gt;xdup,&amp;array);
+<a name="line246">246: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(red-&gt;xsub,(const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>*)array);
+
+<a name="line248">248: </a>  <font color="#B22222">/* apply preconditioner on each processor */</font>
+<a name="line249">249: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSolveTranspose.html#KSPSolveTranspose">KSPSolveTranspose</a>(red-&gt;ksp,red-&gt;xsub,red-&gt;ysub);
+<a name="line250">250: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCheckSolve.html#KSPCheckSolve">KSPCheckSolve</a>(red-&gt;ksp,pc,red-&gt;ysub);
+<a name="line251">251: </a>  <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(red-&gt;xsub);
+<a name="line252">252: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(red-&gt;xdup,&amp;array);
+
+<a name="line254">254: </a>  <font color="#B22222">/* place ysub's local array into ydup */</font>
+<a name="line255">255: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(red-&gt;ysub,&amp;array);
+<a name="line256">256: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(red-&gt;ydup,(const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>*)array);
+
+<a name="line258">258: </a>  <font color="#B22222">/* scatter ydup to y */</font>
+<a name="line259">259: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(red-&gt;scatterout,red-&gt;ydup,y,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line260">260: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(red-&gt;scatterout,red-&gt;ydup,y,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line261">261: </a>  <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(red-&gt;ydup);
+<a name="line262">262: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(red-&gt;ysub,&amp;array);
+<a name="line263">263: </a>  <font color="#4169E1">return</font>(0);
+<a name="line264">264: </a>}
+
+<a name="line266">266: </a><strong><font color="#4169E1"><a name="PCReset_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCReset_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line267">267: </a>{
+<a name="line268">268: </a>  PC_Redundant   *red = (PC_Redundant*)pc-&gt;data;
+
+<a name="line272">272: </a>  <font color="#4169E1">if</font> (red-&gt;useparallelmat) {
+<a name="line273">273: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;red-&gt;scatterin);
+<a name="line274">274: </a>    <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;red-&gt;scatterout);
+<a name="line275">275: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;red-&gt;ysub);
+<a name="line276">276: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;red-&gt;xsub);
+<a name="line277">277: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;red-&gt;xdup);
+<a name="line278">278: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;red-&gt;ydup);
+<a name="line279">279: </a>  }
+<a name="line280">280: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;red-&gt;pmats);
+<a name="line281">281: </a>  <a href="../../../../../docs/manualpages/KSP/KSPReset.html#KSPReset">KSPReset</a>(red-&gt;ksp);
+<a name="line282">282: </a>  <font color="#4169E1">return</font>(0);
+<a name="line283">283: </a>}
+
+<a name="line285">285: </a><strong><font color="#4169E1"><a name="PCDestroy_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCDestroy_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line286">286: </a>{
+<a name="line287">287: </a>  PC_Redundant   *red = (PC_Redundant*)pc-&gt;data;
+
+<a name="line291">291: </a>  PCReset_Redundant(pc);
+<a name="line292">292: </a>  <a href="../../../../../docs/manualpages/KSP/KSPDestroy.html#KSPDestroy">KSPDestroy</a>(&amp;red-&gt;ksp);
+<a name="line293">293: </a>  <a href="../../../../../docs/manualpages/Sys/PetscSubcommDestroy.html#PetscSubcommDestroy">PetscSubcommDestroy</a>(&amp;red-&gt;psubcomm);
+<a name="line294">294: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pc-&gt;data);
+<a name="line295">295: </a>  <font color="#4169E1">return</font>(0);
+<a name="line296">296: </a>}
+
+<a name="line298">298: </a><strong><font color="#4169E1"><a name="PCSetFromOptions_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetFromOptions_Redundant(PetscOptionItems *PetscOptionsObject,<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line299">299: </a>{
+<a name="line301">301: </a>  PC_Redundant   *red = (PC_Redundant*)pc-&gt;data;
+
+<a name="line304">304: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsHead.html#PetscOptionsHead">PetscOptionsHead</a>(PetscOptionsObject,<font color="#666666">"Redundant options"</font>);
+<a name="line305">305: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-pc_redundant_number"</font>,<font color="#666666">"Number of redundant pc"</font>,<font color="#666666">"<a href="../../../../../docs/manualpages/PC/PCRedundantSetNumber.html#PCRedundantSetNumber">PCRedundantSetNumber</a>"</font>,red-&gt;nsubcomm,&amp;red-&gt;nsubcomm,0);
+<a name="line306">306: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsTail.html#PetscOptionsTail">PetscOptionsTail</a>();
+<a name="line307">307: </a>  <font color="#4169E1">return</font>(0);
+<a name="line308">308: </a>}
+
+<a name="line310">310: </a><strong><font color="#4169E1"><a name="PCRedundantSetNumber_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCRedundantSetNumber_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nreds)</font></strong>
+<a name="line311">311: </a>{
+<a name="line312">312: </a>  PC_Redundant *red = (PC_Redundant*)pc-&gt;data;
+
+<a name="line315">315: </a>  red-&gt;nsubcomm = nreds;
+<a name="line316">316: </a>  <font color="#4169E1">return</font>(0);
+<a name="line317">317: </a>}
+
+<a name="line319">319: </a><font color="#B22222">/*@</font>
+<a name="line320">320: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCRedundantSetNumber.html#PCRedundantSetNumber">PCRedundantSetNumber</a> - Sets the number of redundant preconditioner contexts.</font>
+
+<a name="line322">322: </a><font color="#B22222">   Logically Collective on <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a></font>
+
+<a name="line324">324: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line325">325: </a><font color="#B22222">+  pc - the preconditioner context</font>
+<a name="line326">326: </a><font color="#B22222">-  nredundant - number of redundant preconditioner contexts; for example if you are using 64 MPI processes and</font>
+<a name="line327">327: </a><font color="#B22222">                              use an nredundant of 4 there will be 4 parallel solves each on 16 = 64/4 processes.</font>
+
+<a name="line329">329: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line331">331: </a><font color="#B22222">@*/</font>
+<a name="line332">332: </a><strong><font color="#4169E1"><a name="PCRedundantSetNumber"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/PC/PCRedundantSetNumber.html#PCRedundantSetNumber">PCRedundantSetNumber</a>(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nredundant)</font></strong>
+<a name="line333">333: </a>{
+
+<a name="line338">338: </a>  <font color="#4169E1">if</font> (nredundant &lt;= 0) <a href="../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),PETSC_ERR_ARG_WRONG, <font color="#666666">"num of redundant pc %D must be positive"</font>,nredundant);
+<a name="line339">339: </a>  PetscTryMethod(pc,<font color="#666666">"PCRedundantSetNumber_C"</font>,(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>),(pc,nredundant));
+<a name="line340">340: </a>  <font color="#4169E1">return</font>(0);
+<a name="line341">341: </a>}
+
+<a name="line343">343: </a><strong><font color="#4169E1"><a name="PCRedundantSetScatter_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCRedundantSetScatter_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> in,<a href="../../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> out)</font></strong>
+<a name="line344">344: </a>{
+<a name="line345">345: </a>  PC_Redundant   *red = (PC_Redundant*)pc-&gt;data;
+
+<a name="line349">349: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)in);
+<a name="line350">350: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;red-&gt;scatterin);
+
+<a name="line352">352: </a>  red-&gt;scatterin  = in;
+
+<a name="line354">354: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectReference.html#PetscObjectReference">PetscObjectReference</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)out);
+<a name="line355">355: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;red-&gt;scatterout);
+<a name="line356">356: </a>  red-&gt;scatterout = out;
+<a name="line357">357: </a>  <font color="#4169E1">return</font>(0);
+<a name="line358">358: </a>}
+
+<a name="line360">360: </a><font color="#B22222">/*@</font>
+<a name="line361">361: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCRedundantSetScatter.html#PCRedundantSetScatter">PCRedundantSetScatter</a> - Sets the scatter used to copy values into the</font>
+<a name="line362">362: </a><font color="#B22222">     redundant local solve and the scatter to move them back into the global</font>
+<a name="line363">363: </a><font color="#B22222">     vector.</font>
+
+<a name="line365">365: </a><font color="#B22222">   Logically Collective on <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a></font>
+
+<a name="line367">367: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line368">368: </a><font color="#B22222">+  pc - the preconditioner context</font>
+<a name="line369">369: </a><font color="#B22222">.  in - the scatter to move the values in</font>
+<a name="line370">370: </a><font color="#B22222">-  out - the scatter to move them out</font>
+
+<a name="line372">372: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line374">374: </a><font color="#B22222">@*/</font>
+<a name="line375">375: </a><strong><font color="#4169E1"><a name="PCRedundantSetScatter"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/PC/PCRedundantSetScatter.html#PCRedundantSetScatter">PCRedundantSetScatter</a>(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> in,<a href="../../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a> out)</font></strong>
+<a name="line376">376: </a>{
+
+<a name="line383">383: </a>  PetscTryMethod(pc,<font color="#666666">"PCRedundantSetScatter_C"</font>,(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>,<a href="../../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>),(pc,in,out));
+<a name="line384">384: </a>  <font color="#4169E1">return</font>(0);
+<a name="line385">385: </a>}
+
+<a name="line387">387: </a><strong><font color="#4169E1"><a name="PCRedundantGetKSP_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCRedundantGetKSP_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> *innerksp)</font></strong>
+<a name="line388">388: </a>{
+<a name="line390">390: </a>  PC_Redundant   *red = (PC_Redundant*)pc-&gt;data;
+<a name="line391">391: </a>  <a href="../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>       comm,subcomm;
+<a name="line392">392: </a>  const char     *prefix;
+<a name="line393">393: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      issbaij;
+
+<a name="line396">396: </a>  <font color="#4169E1">if</font> (!red-&gt;psubcomm) {
+<a name="line397">397: </a>    <a href="../../../../../docs/manualpages/PC/PCGetOptionsPrefix.html#PCGetOptionsPrefix">PCGetOptionsPrefix</a>(pc,&amp;prefix);
+
+<a name="line399">399: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,&amp;comm);
+<a name="line400">400: </a>    <a href="../../../../../docs/manualpages/Sys/PetscSubcommCreate.html#PetscSubcommCreate">PetscSubcommCreate</a>(comm,&amp;red-&gt;psubcomm);
+<a name="line401">401: </a>    <a href="../../../../../docs/manualpages/Sys/PetscSubcommSetNumber.html#PetscSubcommSetNumber">PetscSubcommSetNumber</a>(red-&gt;psubcomm,red-&gt;nsubcomm);
+<a name="line402">402: </a>    <a href="../../../../../docs/manualpages/Sys/PetscSubcommSetType.html#PetscSubcommSetType">PetscSubcommSetType</a>(red-&gt;psubcomm,PETSC_SUBCOMM_CONTIGUOUS);
+
+<a name="line404">404: </a>    <a href="../../../../../docs/manualpages/Sys/PetscSubcommSetOptionsPrefix.html#PetscSubcommSetOptionsPrefix">PetscSubcommSetOptionsPrefix</a>(red-&gt;psubcomm,prefix);
+<a name="line405">405: </a>    <a href="../../../../../docs/manualpages/Sys/PetscSubcommSetFromOptions.html#PetscSubcommSetFromOptions">PetscSubcommSetFromOptions</a>(red-&gt;psubcomm);
+<a name="line406">406: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscSubcomm.html#PetscSubcomm">PetscSubcomm</a>));
+
+<a name="line408">408: </a>    <font color="#B22222">/* create a new <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> that processors in each subcomm have copy of */</font>
+<a name="line409">409: </a>    subcomm = PetscSubcommChild(red-&gt;psubcomm);
+
+<a name="line411">411: </a>    <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(subcomm,&amp;red-&gt;ksp);
+<a name="line412">412: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetErrorIfNotConverged.html#KSPSetErrorIfNotConverged">KSPSetErrorIfNotConverged</a>(red-&gt;ksp,pc-&gt;erroriffailure);
+<a name="line413">413: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectIncrementTabLevel.html#PetscObjectIncrementTabLevel">PetscObjectIncrementTabLevel</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)red-&gt;ksp,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,1);
+<a name="line414">414: </a>    PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)red-&gt;ksp);
+<a name="line415">415: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetType.html#KSPSetType">KSPSetType</a>(red-&gt;ksp,<a href="../../../../../docs/manualpages/KSP/KSPPREONLY.html#KSPPREONLY">KSPPREONLY</a>);
+<a name="line416">416: </a>    <a href="../../../../../docs/manualpages/KSP/KSPGetPC.html#KSPGetPC">KSPGetPC</a>(red-&gt;ksp,&amp;red-&gt;pc);
+<a name="line417">417: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc-&gt;pmat,<a href="../../../../../docs/manualpages/Mat/MATSEQSBAIJ.html#MATSEQSBAIJ">MATSEQSBAIJ</a>,&amp;issbaij);
+<a name="line418">418: </a>    <font color="#4169E1">if</font> (!issbaij) {
+<a name="line419">419: </a>      <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc-&gt;pmat,<a href="../../../../../docs/manualpages/Mat/MATMPISBAIJ.html#MATMPISBAIJ">MATMPISBAIJ</a>,&amp;issbaij);
+<a name="line420">420: </a>    }
+<a name="line421">421: </a>    <font color="#4169E1">if</font> (!issbaij) {
+<a name="line422">422: </a>      <a href="../../../../../docs/manualpages/PC/PCSetType.html#PCSetType">PCSetType</a>(red-&gt;pc,<a href="../../../../../docs/manualpages/PC/PCLU.html#PCLU">PCLU</a>);
+<a name="line423">423: </a>    } <font color="#4169E1">else</font> {
+<a name="line424">424: </a>      <a href="../../../../../docs/manualpages/PC/PCSetType.html#PCSetType">PCSetType</a>(red-&gt;pc,<a href="../../../../../docs/manualpages/PC/PCCHOLESKY.html#PCCHOLESKY">PCCHOLESKY</a>);
+<a name="line425">425: </a>    }
+<a name="line426">426: </a>    <font color="#4169E1">if</font> (red-&gt;shifttypeset) {
+<a name="line427">427: </a>      <a href="../../../../../docs/manualpages/PC/PCFactorSetShiftType.html#PCFactorSetShiftType">PCFactorSetShiftType</a>(red-&gt;pc,red-&gt;shifttype);
+<a name="line428">428: </a>      red-&gt;shifttypeset = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line429">429: </a>    }
+<a name="line430">430: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetOptionsPrefix.html#KSPSetOptionsPrefix">KSPSetOptionsPrefix</a>(red-&gt;ksp,prefix);
+<a name="line431">431: </a>    <a href="../../../../../docs/manualpages/KSP/KSPAppendOptionsPrefix.html#KSPAppendOptionsPrefix">KSPAppendOptionsPrefix</a>(red-&gt;ksp,<font color="#666666">"redundant_"</font>);
+<a name="line432">432: </a>  }
+<a name="line433">433: </a>  *innerksp = red-&gt;ksp;
+<a name="line434">434: </a>  <font color="#4169E1">return</font>(0);
+<a name="line435">435: </a>}
+
+<a name="line437">437: </a><font color="#B22222">/*@</font>
+<a name="line438">438: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCRedundantGetKSP.html#PCRedundantGetKSP">PCRedundantGetKSP</a> - Gets the less parallel <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> created by the redundant <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>.</font>
+
+<a name="line440">440: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line442">442: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line443">443: </a><font color="#B22222">.  pc - the preconditioner context</font>
+
+<a name="line445">445: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line446">446: </a><font color="#B22222">.  innerksp - the <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> on the smaller set of processes</font>
+
+<a name="line448">448: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line450">450: </a><font color="#B22222">@*/</font>
+<a name="line451">451: </a><strong><font color="#4169E1"><a name="PCRedundantGetKSP"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/PC/PCRedundantGetKSP.html#PCRedundantGetKSP">PCRedundantGetKSP</a>(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> *innerksp)</font></strong>
+<a name="line452">452: </a>{
+
+<a name="line458">458: </a>  PetscUseMethod(pc,<font color="#666666">"PCRedundantGetKSP_C"</font>,(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>*),(pc,innerksp));
+<a name="line459">459: </a>  <font color="#4169E1">return</font>(0);
+<a name="line460">460: </a>}
+
+<a name="line462">462: </a><strong><font color="#4169E1"><a name="PCRedundantGetOperators_Redundant"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCRedundantGetOperators_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *mat,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *pmat)</font></strong>
+<a name="line463">463: </a>{
+<a name="line464">464: </a>  PC_Redundant *red = (PC_Redundant*)pc-&gt;data;
+
+<a name="line467">467: </a>  <font color="#4169E1">if</font> (mat)  *mat  = red-&gt;pmats;
+<a name="line468">468: </a>  <font color="#4169E1">if</font> (pmat) *pmat = red-&gt;pmats;
+<a name="line469">469: </a>  <font color="#4169E1">return</font>(0);
+<a name="line470">470: </a>}
+
+<a name="line472">472: </a><font color="#B22222">/*@</font>
+<a name="line473">473: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCRedundantGetOperators.html#PCRedundantGetOperators">PCRedundantGetOperators</a> - gets the sequential matrix and preconditioner matrix</font>
+
+<a name="line475">475: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line477">477: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line478">478: </a><font color="#B22222">.  pc - the preconditioner context</font>
+
+<a name="line480">480: </a><font color="#B22222">   Output Parameters:</font>
+<a name="line481">481: </a><font color="#B22222">+  mat - the matrix</font>
+<a name="line482">482: </a><font color="#B22222">-  pmat - the (possibly different) preconditioner matrix</font>
+
+<a name="line484">484: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line486">486: </a><font color="#B22222">@*/</font>
+<a name="line487">487: </a><strong><font color="#4169E1"><a name="PCRedundantGetOperators"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> <a href="../../../../../docs/manualpages/PC/PCRedundantGetOperators.html#PCRedundantGetOperators">PCRedundantGetOperators</a>(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *mat,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *pmat)</font></strong>
+<a name="line488">488: </a>{
+
+<a name="line495">495: </a>  PetscUseMethod(pc,<font color="#666666">"PCRedundantGetOperators_C"</font>,(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>*,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>*),(pc,mat,pmat));
+<a name="line496">496: </a>  <font color="#4169E1">return</font>(0);
+<a name="line497">497: </a>}
+
+<a name="line499">499: </a><font color="#B22222">/* -------------------------------------------------------------------------------------*/</font>
+<a name="line500">500: </a><font color="#B22222">/*MC</font>
+<a name="line501">501: </a><font color="#B22222">     <a href="../../../../../docs/manualpages/PC/PCREDUNDANT.html#PCREDUNDANT">PCREDUNDANT</a> - Runs a <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> solver with preconditioner for the entire problem on subgroups of processors</font>
+
+<a name="line503">503: </a><font color="#B22222">     Options for the redundant preconditioners can be set with -redundant_pc_xxx for the redundant <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> with -redundant_ksp_xxx</font>
+
+<a name="line505">505: </a><font color="#B22222">  Options Database:</font>
+<a name="line506">506: </a><font color="#B22222">.  -pc_redundant_number &lt;n&gt; - number of redundant solves, for example if you are using 64 MPI processes and</font>
+<a name="line507">507: </a><font color="#B22222">                              use an n of 4 there will be 4 parallel solves each on 16 = 64/4 processes.</font>
+
+<a name="line509">509: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line511">511: </a><font color="#B22222">   Notes:</font>
+<a name="line512">512: </a><font color="#B22222">    The default <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> is preonly and the default <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> is LU or CHOLESKY if Pmat is of type <a href="../../../../../docs/manualpages/Mat/MATSBAIJ.html#MATSBAIJ">MATSBAIJ</a>.</font>
+
+<a name="line514">514: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCFactorSetShiftType.html#PCFactorSetShiftType">PCFactorSetShiftType</a>() applied to this <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> will convey they shift type into the inner <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> if it is factorization based.</font>
+
+<a name="line516">516: </a><font color="#B22222">   Developer Notes:</font>
+<a name="line517">517: </a><font color="#B22222">    Note that PCSetInitialGuessNonzero()  is not used by this class but likely should be.</font>
+
+<a name="line519">519: </a><font color="#B22222">.seealso:  <a href="../../../../../docs/manualpages/PC/PCCreate.html#PCCreate">PCCreate</a>(), <a href="../../../../../docs/manualpages/PC/PCSetType.html#PCSetType">PCSetType</a>(), <a href="../../../../../docs/manualpages/PC/PCType.html#PCType">PCType</a> (for list of available types), <a href="../../../../../docs/manualpages/PC/PCRedundantSetScatter.html#PCRedundantSetScatter">PCRedundantSetScatter</a>(),</font>
+<a name="line520">520: </a><font color="#B22222">           <a href="../../../../../docs/manualpages/PC/PCRedundantGetKSP.html#PCRedundantGetKSP">PCRedundantGetKSP</a>(), <a href="../../../../../docs/manualpages/PC/PCRedundantGetOperators.html#PCRedundantGetOperators">PCRedundantGetOperators</a>(), <a href="../../../../../docs/manualpages/PC/PCRedundantSetNumber.html#PCRedundantSetNumber">PCRedundantSetNumber</a>()</font>
+<a name="line521">521: </a><font color="#B22222">M*/</font>
+
+<a name="line523">523: </a><strong><font color="#4169E1"><a name="PCCreate_Redundant"></a>PETSC_EXTERN <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCCreate_Redundant(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line524">524: </a>{
+<a name="line526">526: </a>  PC_Redundant   *red;
+<a name="line527">527: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+
+<a name="line530">530: </a>  <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(pc,&amp;red);
+<a name="line531">531: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),&amp;size);
+
+<a name="line533">533: </a>  red-&gt;nsubcomm       = size;
+<a name="line534">534: </a>  red-&gt;useparallelmat = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line535">535: </a>  pc-&gt;data            = (void*)red;
+
+<a name="line537">537: </a>  pc-&gt;ops-&gt;apply          = PCApply_Redundant;
+<a name="line538">538: </a>  pc-&gt;ops-&gt;applytranspose = PCApplyTranspose_Redundant;
+<a name="line539">539: </a>  pc-&gt;ops-&gt;setup          = PCSetUp_Redundant;
+<a name="line540">540: </a>  pc-&gt;ops-&gt;destroy        = PCDestroy_Redundant;
+<a name="line541">541: </a>  pc-&gt;ops-&gt;reset          = PCReset_Redundant;
+<a name="line542">542: </a>  pc-&gt;ops-&gt;setfromoptions = PCSetFromOptions_Redundant;
+<a name="line543">543: </a>  pc-&gt;ops-&gt;view           = PCView_Redundant;
+
+<a name="line545">545: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#666666">"PCRedundantSetScatter_C"</font>,PCRedundantSetScatter_Redundant);
+<a name="line546">546: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#666666">"PCRedundantSetNumber_C"</font>,PCRedundantSetNumber_Redundant);
+<a name="line547">547: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#666666">"PCRedundantGetKSP_C"</font>,PCRedundantGetKSP_Redundant);
+<a name="line548">548: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#666666">"PCRedundantGetOperators_C"</font>,PCRedundantGetOperators_Redundant);
+<a name="line549">549: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#666666">"PCFactorSetShiftType_C"</font>,PCFactorSetShiftType_Redundant);
+<a name="line550">550: </a>  <font color="#4169E1">return</font>(0);
+<a name="line551">551: </a>}
+
+</pre>
+</body>
+
+</html>

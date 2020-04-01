@@ -1,0 +1,321 @@
+<center><a href="sliced.c">Actual source code: sliced.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/dm/impls/sliced/sliced.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T16:58:59+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/dm/impls/sliced/sliced.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+<a name="line1">  1: </a> #include <A href="../../../../include/petscdmsliced.h.html">&lt;petscdmsliced.h&gt;</A>
+<a name="line2">  2: </a> #include <A href="../../../../include/petscmat.h.html">&lt;petscmat.h&gt;</A>
+<a name="line3">  3: </a> #include <A href="../../../../include/petsc/private/dmimpl.h.html">&lt;petsc/private/dmimpl.h&gt;</A>
+
+<a name="line5">  5: </a><font color="#B22222">/* CSR storage of the nonzero structure of a bs*bs matrix */</font>
+<a name="line6">  6: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line7">  7: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> bs,nz,*i,*j;
+<a name="line8">  8: </a>} DMSlicedBlockFills;
+
+<a name="line10"> 10: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font>  {
+<a name="line11"> 11: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           bs,n,N,Nghosts,*ghosts;
+<a name="line12"> 12: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           d_nz,o_nz,*d_nnz,*o_nnz;
+<a name="line13"> 13: </a>  DMSlicedBlockFills *dfill,*ofill;
+<a name="line14"> 14: </a>} DM_Sliced;
+
+<a name="line16"> 16: </a><strong><font color="#4169E1"><a name="DMCreateMatrix_Sliced"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  DMCreateMatrix_Sliced(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm, <a href="../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> *J)</font></strong>
+<a name="line17"> 17: </a>{
+<a name="line18"> 18: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+<a name="line19"> 19: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               *globals,*sd_nnz,*so_nnz,rstart,bs,i;
+<a name="line20"> 20: </a>  <a href="../../../../docs/manualpages/IS/ISLocalToGlobalMapping.html#ISLocalToGlobalMapping">ISLocalToGlobalMapping</a> lmap;
+<a name="line21"> 21: </a>  void                   (*aij)(void) = NULL;
+<a name="line22"> 22: </a>  DM_Sliced              *slice = (DM_Sliced*)dm-&gt;data;
+
+<a name="line25"> 25: </a>  bs   = slice-&gt;bs;
+<a name="line26"> 26: </a>  <a href="../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)dm),J);
+<a name="line27"> 27: </a>  <a href="../../../../docs/manualpages/Mat/MatSetSizes.html#MatSetSizes">MatSetSizes</a>(*J,slice-&gt;n*bs,slice-&gt;n*bs,<a href="../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>,<a href="../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>);
+<a name="line28"> 28: </a>  <a href="../../../../docs/manualpages/Mat/MatSetBlockSize.html#MatSetBlockSize">MatSetBlockSize</a>(*J,bs);
+<a name="line29"> 29: </a>  <a href="../../../../docs/manualpages/Mat/MatSetType.html#MatSetType">MatSetType</a>(*J,dm-&gt;mattype);
+<a name="line30"> 30: </a>  <a href="../../../../docs/manualpages/Mat/MatSeqBAIJSetPreallocation.html#MatSeqBAIJSetPreallocation">MatSeqBAIJSetPreallocation</a>(*J,bs,slice-&gt;d_nz,slice-&gt;d_nnz);
+<a name="line31"> 31: </a>  <a href="../../../../docs/manualpages/Mat/MatMPIBAIJSetPreallocation.html#MatMPIBAIJSetPreallocation">MatMPIBAIJSetPreallocation</a>(*J,bs,slice-&gt;d_nz,slice-&gt;d_nnz,slice-&gt;o_nz,slice-&gt;o_nnz);
+<a name="line32"> 32: </a>  <font color="#B22222">/* In general, we have to do extra work to preallocate for scalar (AIJ) matrices so we check whether it will do any</font>
+<a name="line33"> 33: </a><font color="#B22222">  * good before going on with it. */</font>
+<a name="line34"> 34: </a>  <a href="../../../../docs/manualpages/Sys/PetscObjectQueryFunction.html#PetscObjectQueryFunction">PetscObjectQueryFunction</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)*J,<font color="#666666">"MatMPIAIJSetPreallocation_C"</font>,&amp;aij);
+<a name="line35"> 35: </a>  <font color="#4169E1">if</font> (!aij) {
+<a name="line36"> 36: </a>    <a href="../../../../docs/manualpages/Sys/PetscObjectQueryFunction.html#PetscObjectQueryFunction">PetscObjectQueryFunction</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)*J,<font color="#666666">"MatSeqAIJSetPreallocation_C"</font>,&amp;aij);
+<a name="line37"> 37: </a>  }
+<a name="line38"> 38: </a>  <font color="#4169E1">if</font> (aij) {
+<a name="line39"> 39: </a>    <font color="#4169E1">if</font> (bs == 1) {
+<a name="line40"> 40: </a>      <a href="../../../../docs/manualpages/Mat/MatSeqAIJSetPreallocation.html#MatSeqAIJSetPreallocation">MatSeqAIJSetPreallocation</a>(*J,slice-&gt;d_nz,slice-&gt;d_nnz);
+<a name="line41"> 41: </a>      <a href="../../../../docs/manualpages/Mat/MatMPIAIJSetPreallocation.html#MatMPIAIJSetPreallocation">MatMPIAIJSetPreallocation</a>(*J,slice-&gt;d_nz,slice-&gt;d_nnz,slice-&gt;o_nz,slice-&gt;o_nnz);
+<a name="line42"> 42: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (!slice-&gt;d_nnz) {
+<a name="line43"> 43: </a>      <a href="../../../../docs/manualpages/Mat/MatSeqAIJSetPreallocation.html#MatSeqAIJSetPreallocation">MatSeqAIJSetPreallocation</a>(*J,slice-&gt;d_nz*bs,NULL);
+<a name="line44"> 44: </a>      <a href="../../../../docs/manualpages/Mat/MatMPIAIJSetPreallocation.html#MatMPIAIJSetPreallocation">MatMPIAIJSetPreallocation</a>(*J,slice-&gt;d_nz*bs,NULL,slice-&gt;o_nz*bs,NULL);
+<a name="line45"> 45: </a>    } <font color="#4169E1">else</font> {
+<a name="line46"> 46: </a>      <font color="#B22222">/* The user has provided preallocation per block-row, convert it to per scalar-row respecting <a href="../../../../docs/manualpages/DM/DMSlicedSetBlockFills.html#DMSlicedSetBlockFills">DMSlicedSetBlockFills</a>() if applicable */</font>
+<a name="line47"> 47: </a>      <a href="../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(slice-&gt;n*bs,&amp;sd_nnz,(!!slice-&gt;o_nnz)*slice-&gt;n*bs,&amp;so_nnz);
+<a name="line48"> 48: </a>      <font color="#4169E1">for</font> (i=0; i&lt;slice-&gt;n*bs; i++) {
+<a name="line49"> 49: </a>        sd_nnz[i] = (slice-&gt;d_nnz[i/bs]-1) * (slice-&gt;ofill ? slice-&gt;ofill-&gt;i[i%bs+1]-slice-&gt;ofill-&gt;i[i%bs] : bs)
+<a name="line50"> 50: </a>                                           + (slice-&gt;dfill ? slice-&gt;dfill-&gt;i[i%bs+1]-slice-&gt;dfill-&gt;i[i%bs] : bs);
+<a name="line51"> 51: </a>        <font color="#4169E1">if</font> (so_nnz) {
+<a name="line52"> 52: </a>          so_nnz[i] = slice-&gt;o_nnz[i/bs] * (slice-&gt;ofill ? slice-&gt;ofill-&gt;i[i%bs+1]-slice-&gt;ofill-&gt;i[i%bs] : bs);
+<a name="line53"> 53: </a>        }
+<a name="line54"> 54: </a>      }
+<a name="line55"> 55: </a>      <a href="../../../../docs/manualpages/Mat/MatSeqAIJSetPreallocation.html#MatSeqAIJSetPreallocation">MatSeqAIJSetPreallocation</a>(*J,slice-&gt;d_nz*bs,sd_nnz);
+<a name="line56"> 56: </a>      <a href="../../../../docs/manualpages/Mat/MatMPIAIJSetPreallocation.html#MatMPIAIJSetPreallocation">MatMPIAIJSetPreallocation</a>(*J,slice-&gt;d_nz*bs,sd_nnz,slice-&gt;o_nz*bs,so_nnz);
+<a name="line57"> 57: </a>      <a href="../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(sd_nnz,so_nnz);
+<a name="line58"> 58: </a>    }
+<a name="line59"> 59: </a>  }
+
+<a name="line61"> 61: </a>  <font color="#B22222">/* Set up the local to global map.  For the scalar map, we have to translate to entry-wise indexing instead of block-wise. */</font>
+<a name="line62"> 62: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(slice-&gt;n+slice-&gt;Nghosts,&amp;globals);
+<a name="line63"> 63: </a>  <a href="../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(*J,&amp;rstart,NULL);
+<a name="line64"> 64: </a>  <font color="#4169E1">for</font> (i=0; i&lt;slice-&gt;n; i++) globals[i] = rstart/bs + i;
+
+<a name="line66"> 66: </a>  <font color="#4169E1">for</font> (i=0; i&lt;slice-&gt;Nghosts; i++) {
+<a name="line67"> 67: </a>    globals[slice-&gt;n+i] = slice-&gt;ghosts[i];
+<a name="line68"> 68: </a>  }
+<a name="line69"> 69: </a>  <a href="../../../../docs/manualpages/IS/ISLocalToGlobalMappingCreate.html#ISLocalToGlobalMappingCreate">ISLocalToGlobalMappingCreate</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,bs,slice-&gt;n+slice-&gt;Nghosts,globals,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>,&amp;lmap);
+<a name="line70"> 70: </a>  <a href="../../../../docs/manualpages/Mat/MatSetLocalToGlobalMapping.html#MatSetLocalToGlobalMapping">MatSetLocalToGlobalMapping</a>(*J,lmap,lmap);
+<a name="line71"> 71: </a>  <a href="../../../../docs/manualpages/IS/ISLocalToGlobalMappingDestroy.html#ISLocalToGlobalMappingDestroy">ISLocalToGlobalMappingDestroy</a>(&amp;lmap);
+<a name="line72"> 72: </a>  <font color="#4169E1">return</font>(0);
+<a name="line73"> 73: </a>}
+
+<a name="line75"> 75: </a><font color="#B22222">/*@C</font>
+<a name="line76"> 76: </a><font color="#B22222">    <a href="../../../../docs/manualpages/DM/DMSlicedSetGhosts.html#DMSlicedSetGhosts">DMSlicedSetGhosts</a> - Sets the global indices of other processes elements that will</font>
+<a name="line77"> 77: </a><font color="#B22222">      be ghosts on this process</font>
+
+<a name="line79"> 79: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line81"> 81: </a><font color="#B22222">    Input Parameters:</font>
+<a name="line82"> 82: </a><font color="#B22222">+    slice - the <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> object</font>
+<a name="line83"> 83: </a><font color="#B22222">.    bs - block size</font>
+<a name="line84"> 84: </a><font color="#B22222">.    nlocal - number of local (owned, non-ghost) blocks</font>
+<a name="line85"> 85: </a><font color="#B22222">.    Nghosts - number of ghost blocks on this process</font>
+<a name="line86"> 86: </a><font color="#B22222">-    ghosts - global indices of each ghost block</font>
+
+<a name="line88"> 88: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line90"> 90: </a><font color="#B22222">.seealso <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(), <a href="../../../../docs/manualpages/DM/DMCreateGlobalVector.html#DMCreateGlobalVector">DMCreateGlobalVector</a>()</font>
+
+<a name="line92"> 92: </a><font color="#B22222">@*/</font>
+<a name="line93"> 93: </a><strong><font color="#4169E1"><a name="DMSlicedSetGhosts"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/DM/DMSlicedSetGhosts.html#DMSlicedSetGhosts">DMSlicedSetGhosts</a>(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> bs,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nlocal,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nghosts,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> ghosts[])</font></strong>
+<a name="line94"> 94: </a>{
+<a name="line96"> 96: </a>  DM_Sliced      *slice = (DM_Sliced*)dm-&gt;data;
+
+<a name="line100">100: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(slice-&gt;ghosts);
+<a name="line101">101: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(Nghosts,&amp;slice-&gt;ghosts);
+<a name="line102">102: </a>  <a href="../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(slice-&gt;ghosts,ghosts,Nghosts);
+<a name="line103">103: </a>  slice-&gt;bs      = bs;
+<a name="line104">104: </a>  slice-&gt;n       = nlocal;
+<a name="line105">105: </a>  slice-&gt;Nghosts = Nghosts;
+<a name="line106">106: </a>  <font color="#4169E1">return</font>(0);
+<a name="line107">107: </a>}
+
+<a name="line109">109: </a><font color="#B22222">/*@C</font>
+<a name="line110">110: </a><font color="#B22222">    <a href="../../../../docs/manualpages/DM/DMSlicedSetPreallocation.html#DMSlicedSetPreallocation">DMSlicedSetPreallocation</a> - sets the matrix memory preallocation for matrices computed by DMSliced</font>
+
+<a name="line112">112: </a><font color="#B22222">    Not Collective</font>
+
+<a name="line114">114: </a><font color="#B22222">    Input Parameters:</font>
+<a name="line115">115: </a><font color="#B22222">+    slice - the <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> object</font>
+<a name="line116">116: </a><font color="#B22222">.    d_nz  - number of block nonzeros per block row in diagonal portion of local</font>
+<a name="line117">117: </a><font color="#B22222">           submatrix  (same for all local rows)</font>
+<a name="line118">118: </a><font color="#B22222">.    d_nnz - array containing the number of block nonzeros in the various block rows</font>
+<a name="line119">119: </a><font color="#B22222">           of the in diagonal portion of the local (possibly different for each block</font>
+<a name="line120">120: </a><font color="#B22222">           row) or NULL.</font>
+<a name="line121">121: </a><font color="#B22222">.    o_nz  - number of block nonzeros per block row in the off-diagonal portion of local</font>
+<a name="line122">122: </a><font color="#B22222">           submatrix (same for all local rows).</font>
+<a name="line123">123: </a><font color="#B22222">-    o_nnz - array containing the number of nonzeros in the various block rows of the</font>
+<a name="line124">124: </a><font color="#B22222">           off-diagonal portion of the local submatrix (possibly different for</font>
+<a name="line125">125: </a><font color="#B22222">           each block row) or NULL.</font>
+
+<a name="line127">127: </a><font color="#B22222">    Notes:</font>
+<a name="line128">128: </a><font color="#B22222">    See <a href="../../../../docs/manualpages/Mat/MatMPIBAIJSetPreallocation.html#MatMPIBAIJSetPreallocation">MatMPIBAIJSetPreallocation</a>() for more details on preallocation.  If a scalar matrix (AIJ) is</font>
+<a name="line129">129: </a><font color="#B22222">    obtained with DMSlicedGetMatrix(), the correct preallocation will be set, respecting <a href="../../../../docs/manualpages/DM/DMSlicedSetBlockFills.html#DMSlicedSetBlockFills">DMSlicedSetBlockFills</a>().</font>
+
+<a name="line131">131: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line133">133: </a><font color="#B22222">.seealso <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(), <a href="../../../../docs/manualpages/DM/DMCreateGlobalVector.html#DMCreateGlobalVector">DMCreateGlobalVector</a>(), <a href="../../../../docs/manualpages/Mat/MatMPIAIJSetPreallocation.html#MatMPIAIJSetPreallocation">MatMPIAIJSetPreallocation</a>(),</font>
+<a name="line134">134: </a><font color="#B22222">         <a href="../../../../docs/manualpages/Mat/MatMPIBAIJSetPreallocation.html#MatMPIBAIJSetPreallocation">MatMPIBAIJSetPreallocation</a>(), DMSlicedGetMatrix(), <a href="../../../../docs/manualpages/DM/DMSlicedSetBlockFills.html#DMSlicedSetBlockFills">DMSlicedSetBlockFills</a>()</font>
+
+<a name="line136">136: </a><font color="#B22222">@*/</font>
+<a name="line137">137: </a><strong><font color="#4169E1"><a name="DMSlicedSetPreallocation"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/DM/DMSlicedSetPreallocation.html#DMSlicedSetPreallocation">DMSlicedSetPreallocation</a>(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> d_nz,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> d_nnz[],<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> o_nz,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> o_nnz[])</font></strong>
+<a name="line138">138: </a>{
+<a name="line139">139: </a>  DM_Sliced *slice = (DM_Sliced*)dm-&gt;data;
+
+<a name="line143">143: </a>  slice-&gt;d_nz  = d_nz;
+<a name="line144">144: </a>  slice-&gt;d_nnz = (<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*)d_nnz;
+<a name="line145">145: </a>  slice-&gt;o_nz  = o_nz;
+<a name="line146">146: </a>  slice-&gt;o_nnz = (<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*)o_nnz;
+<a name="line147">147: </a>  <font color="#4169E1">return</font>(0);
+<a name="line148">148: </a>}
+
+<a name="line150">150: </a><strong><font color="#4169E1"><a name="DMSlicedSetBlockFills_Private"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> DMSlicedSetBlockFills_Private(<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> bs,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *fill,DMSlicedBlockFills **inf)</font></strong>
+<a name="line151">151: </a>{
+<a name="line152">152: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line153">153: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           i,j,nz,*fi,*fj;
+<a name="line154">154: </a>  DMSlicedBlockFills *f;
+
+<a name="line158">158: </a>  <font color="#4169E1">if</font> (*inf) {<a href="../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(*inf,(*inf)-&gt;i,(*inf)-&gt;j);}
+<a name="line159">159: </a>  <font color="#4169E1">if</font> (!fill) <font color="#4169E1">return</font>(0);
+<a name="line160">160: </a>  <font color="#4169E1">for</font> (i=0,nz=0; i&lt;bs*bs; i++) <font color="#4169E1">if</font> (fill[i]) nz++;
+<a name="line161">161: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc3.html#PetscMalloc3">PetscMalloc3</a>(1,&amp;f,bs+1,&amp;fi,nz,&amp;fj);
+<a name="line162">162: </a>  f-&gt;bs = bs;
+<a name="line163">163: </a>  f-&gt;nz = nz;
+<a name="line164">164: </a>  f-&gt;i  = fi;
+<a name="line165">165: </a>  f-&gt;j  = fj;
+<a name="line166">166: </a>  <font color="#4169E1">for</font> (i=0,nz=0; i&lt;bs; i++) {
+<a name="line167">167: </a>    fi[i] = nz;
+<a name="line168">168: </a>    <font color="#4169E1">for</font> (j=0; j&lt;bs; j++) <font color="#4169E1">if</font> (fill[i*bs+j]) fj[nz++] = j;
+<a name="line169">169: </a>  }
+<a name="line170">170: </a>  fi[i] = nz;
+<a name="line171">171: </a>  *inf  = f;
+<a name="line172">172: </a>  <font color="#4169E1">return</font>(0);
+<a name="line173">173: </a>}
+
+<a name="line175">175: </a><font color="#B22222">/*@C</font>
+<a name="line176">176: </a><font color="#B22222">    <a href="../../../../docs/manualpages/DM/DMSlicedSetBlockFills.html#DMSlicedSetBlockFills">DMSlicedSetBlockFills</a> - Sets the fill pattern in each block for a multi-component problem</font>
+<a name="line177">177: </a><font color="#B22222">    of the matrix returned by DMSlicedGetMatrix().</font>
+
+<a name="line179">179: </a><font color="#B22222">    Logically Collective on dm</font>
+
+<a name="line181">181: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line182">182: </a><font color="#B22222">+   sliced - the <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> object</font>
+<a name="line183">183: </a><font color="#B22222">.   dfill - the fill pattern in the diagonal block (may be NULL, means use dense block)</font>
+<a name="line184">184: </a><font color="#B22222">-   ofill - the fill pattern in the off-diagonal blocks</font>
+
+<a name="line186">186: </a><font color="#B22222">    Notes:</font>
+<a name="line187">187: </a><font color="#B22222">    This only makes sense for multicomponent problems using scalar matrix formats (AIJ).</font>
+<a name="line188">188: </a><font color="#B22222">    See <a href="../../../../docs/manualpages/DMDA/DMDASetBlockFills.html#DMDASetBlockFills">DMDASetBlockFills</a>() for example usage.</font>
+
+<a name="line190">190: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line192">192: </a><font color="#B22222">.seealso DMSlicedGetMatrix(), <a href="../../../../docs/manualpages/DMDA/DMDASetBlockFills.html#DMDASetBlockFills">DMDASetBlockFills</a>()</font>
+<a name="line193">193: </a><font color="#B22222">@*/</font>
+<a name="line194">194: </a><strong><font color="#4169E1"><a name="DMSlicedSetBlockFills"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/DM/DMSlicedSetBlockFills.html#DMSlicedSetBlockFills">DMSlicedSetBlockFills</a>(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *dfill,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *ofill)</font></strong>
+<a name="line195">195: </a>{
+<a name="line196">196: </a>  DM_Sliced      *slice = (DM_Sliced*)dm-&gt;data;
+
+<a name="line201">201: </a>  DMSlicedSetBlockFills_Private(slice-&gt;bs,dfill,&amp;slice-&gt;dfill);
+<a name="line202">202: </a>  DMSlicedSetBlockFills_Private(slice-&gt;bs,ofill,&amp;slice-&gt;ofill);
+<a name="line203">203: </a>  <font color="#4169E1">return</font>(0);
+<a name="line204">204: </a>}
+
+<a name="line206">206: </a><strong><font color="#4169E1"><a name="DMDestroy_Sliced"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  DMDestroy_Sliced(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm)</font></strong>
+<a name="line207">207: </a>{
+<a name="line209">209: </a>  DM_Sliced      *slice = (DM_Sliced*)dm-&gt;data;
+
+<a name="line212">212: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(slice-&gt;ghosts);
+<a name="line213">213: </a>  <font color="#4169E1">if</font> (slice-&gt;dfill) {<a href="../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(slice-&gt;dfill,slice-&gt;dfill-&gt;i,slice-&gt;dfill-&gt;j);}
+<a name="line214">214: </a>  <font color="#4169E1">if</font> (slice-&gt;ofill) {<a href="../../../../docs/manualpages/Sys/PetscFree3.html#PetscFree3">PetscFree3</a>(slice-&gt;ofill,slice-&gt;ofill-&gt;i,slice-&gt;ofill-&gt;j);}
+<a name="line215">215: </a>  <font color="#B22222">/* This was originally freed in <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(), but that prevents reference counting of backend objects */</font>
+<a name="line216">216: </a>  <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(slice);
+<a name="line217">217: </a>  <font color="#4169E1">return</font>(0);
+<a name="line218">218: </a>}
+
+<a name="line220">220: </a><strong><font color="#4169E1"><a name="DMCreateGlobalVector_Sliced"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  DMCreateGlobalVector_Sliced(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> dm,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *gvec)</font></strong>
+<a name="line221">221: </a>{
+<a name="line223">223: </a>  DM_Sliced      *slice = (DM_Sliced*)dm-&gt;data;
+
+<a name="line228">228: </a>  *gvec = 0;
+<a name="line229">229: </a>  <a href="../../../../docs/manualpages/Vec/VecCreateGhostBlock.html#VecCreateGhostBlock">VecCreateGhostBlock</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)dm),slice-&gt;bs,slice-&gt;n*slice-&gt;bs,<a href="../../../../docs/manualpages/Sys/PETSC_DETERMINE.html#PETSC_DETERMINE">PETSC_DETERMINE</a>,slice-&gt;Nghosts,slice-&gt;ghosts,gvec);
+<a name="line230">230: </a>  <a href="../../../../docs/manualpages/DM/VecSetDM.html#VecSetDM">VecSetDM</a>(*gvec,dm);
+<a name="line231">231: </a>  <font color="#4169E1">return</font>(0);
+<a name="line232">232: </a>}
+
+<a name="line234">234: </a><strong><font color="#4169E1"><a name="DMGlobalToLocalBegin_Sliced"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  DMGlobalToLocalBegin_Sliced(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> da,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> g,<a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">InsertMode</a> mode,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> l)</font></strong>
+<a name="line235">235: </a>{
+<a name="line237">237: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flg;
+
+<a name="line240">240: </a>  <a href="../../../../docs/manualpages/Vec/VecGhostIsLocalForm.html#VecGhostIsLocalForm">VecGhostIsLocalForm</a>(g,l,&amp;flg);
+<a name="line241">241: </a>  <font color="#4169E1">if</font> (!flg) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)da),PETSC_ERR_ARG_WRONG,<font color="#666666">"Local vector is not local form of global vector"</font>);
+<a name="line242">242: </a>  <a href="../../../../docs/manualpages/Vec/VecGhostUpdateEnd.html#VecGhostUpdateEnd">VecGhostUpdateEnd</a>(g,mode,<a href="../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line243">243: </a>  <a href="../../../../docs/manualpages/Vec/VecGhostUpdateBegin.html#VecGhostUpdateBegin">VecGhostUpdateBegin</a>(g,mode,<a href="../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line244">244: </a>  <font color="#4169E1">return</font>(0);
+<a name="line245">245: </a>}
+
+<a name="line247">247: </a><strong><font color="#4169E1"><a name="DMGlobalToLocalEnd_Sliced"></a>static <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  DMGlobalToLocalEnd_Sliced(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> da,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> g,<a href="../../../../docs/manualpages/Sys/InsertMode.html#InsertMode">InsertMode</a> mode,<a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> l)</font></strong>
+<a name="line248">248: </a>{
+<a name="line250">250: </a>  <a href="../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flg;
+
+<a name="line253">253: </a>  <a href="../../../../docs/manualpages/Vec/VecGhostIsLocalForm.html#VecGhostIsLocalForm">VecGhostIsLocalForm</a>(g,l,&amp;flg);
+<a name="line254">254: </a>  <font color="#4169E1">if</font> (!flg) <a href="../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)da),PETSC_ERR_ARG_WRONG,<font color="#666666">"Local vector is not local form of global vector"</font>);
+<a name="line255">255: </a>  <a href="../../../../docs/manualpages/Vec/VecGhostUpdateEnd.html#VecGhostUpdateEnd">VecGhostUpdateEnd</a>(g,mode,<a href="../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line256">256: </a>  <font color="#4169E1">return</font>(0);
+<a name="line257">257: </a>}
+
+<a name="line259">259: </a><font color="#B22222">/*MC</font>
+<a name="line260">260: </a><font color="#B22222">   <a href="../../../../docs/manualpages/DM/DMSLICED.html#DMSLICED">DMSLICED</a> = "sliced" - A <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> object that is used to manage data for a general graph. Uses <a href="../../../../docs/manualpages/Vec/VecCreateGhost.html#VecCreateGhost">VecCreateGhost</a>() ghosted vectors for storing the fields</font>
+
+<a name="line262">262: </a><font color="#B22222">   See DMCreateSliced() for details.</font>
+
+<a name="line264">264: </a><font color="#B22222">  Level: intermediate</font>
+
+<a name="line266">266: </a><font color="#B22222">.seealso: <a href="../../../../docs/manualpages/DM/DMType.html#DMType">DMType</a>, <a href="../../../../docs/manualpages/DM/DMCOMPOSITE.html#DMCOMPOSITE">DMCOMPOSITE</a>, DMCreateSliced(), <a href="../../../../docs/manualpages/DM/DMCreate.html#DMCreate">DMCreate</a>()</font>
+<a name="line267">267: </a><font color="#B22222">M*/</font>
+
+<a name="line269">269: </a><strong><font color="#4169E1"><a name="DMCreate_Sliced"></a>PETSC_EXTERN <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> DMCreate_Sliced(<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> p)</font></strong>
+<a name="line270">270: </a>{
+<a name="line272">272: </a>  DM_Sliced      *slice;
+
+<a name="line275">275: </a>  <a href="../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(p,&amp;slice);
+<a name="line276">276: </a>  p-&gt;data = slice;
+
+<a name="line278">278: </a>  p-&gt;ops-&gt;createglobalvector = DMCreateGlobalVector_Sliced;
+<a name="line279">279: </a>  p-&gt;ops-&gt;creatematrix       = DMCreateMatrix_Sliced;
+<a name="line280">280: </a>  p-&gt;ops-&gt;globaltolocalbegin = DMGlobalToLocalBegin_Sliced;
+<a name="line281">281: </a>  p-&gt;ops-&gt;globaltolocalend   = DMGlobalToLocalEnd_Sliced;
+<a name="line282">282: </a>  p-&gt;ops-&gt;destroy            = DMDestroy_Sliced;
+<a name="line283">283: </a>  <font color="#4169E1">return</font>(0);
+<a name="line284">284: </a>}
+
+<a name="line286">286: </a><font color="#B22222">/*@C</font>
+<a name="line287">287: </a><font color="#B22222">    <a href="../../../../docs/manualpages/DM/DMSlicedCreate.html#DMSlicedCreate">DMSlicedCreate</a> - Creates a <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> object, used to manage data for a unstructured problem</font>
+
+<a name="line289">289: </a><font color="#B22222">    Collective</font>
+
+<a name="line291">291: </a><font color="#B22222">    Input Parameter:</font>
+<a name="line292">292: </a><font color="#B22222">+   comm - the processors that will share the global vector</font>
+<a name="line293">293: </a><font color="#B22222">.   bs - the block size</font>
+<a name="line294">294: </a><font color="#B22222">.   nlocal - number of vector entries on this process</font>
+<a name="line295">295: </a><font color="#B22222">.   Nghosts - number of ghost points needed on this process</font>
+<a name="line296">296: </a><font color="#B22222">.   ghosts - global indices of all ghost points for this process</font>
+<a name="line297">297: </a><font color="#B22222">.   d_nnz - matrix preallocation information representing coupling within this process</font>
+<a name="line298">298: </a><font color="#B22222">-   o_nnz - matrix preallocation information representing coupling between this process and other processes</font>
+
+<a name="line300">300: </a><font color="#B22222">    Output Parameters:</font>
+<a name="line301">301: </a><font color="#B22222">.   slice - the slice object</font>
+
+<a name="line303">303: </a><font color="#B22222">    Notes:</font>
+<a name="line304">304: </a><font color="#B22222">        This <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> does not support <a href="../../../../docs/manualpages/DM/DMCreateLocalVector.html#DMCreateLocalVector">DMCreateLocalVector</a>(), <a href="../../../../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(), and <a href="../../../../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>() instead one directly uses</font>
+<a name="line305">305: </a><font color="#B22222">        <a href="../../../../docs/manualpages/Vec/VecGhostGetLocalForm.html#VecGhostGetLocalForm">VecGhostGetLocalForm</a>() and <a href="../../../../docs/manualpages/Vec/VecGhostRestoreLocalForm.html#VecGhostRestoreLocalForm">VecGhostRestoreLocalForm</a>() to access the local representation and <a href="../../../../docs/manualpages/Vec/VecGhostUpdateBegin.html#VecGhostUpdateBegin">VecGhostUpdateBegin</a>() and <a href="../../../../docs/manualpages/Vec/VecGhostUpdateEnd.html#VecGhostUpdateEnd">VecGhostUpdateEnd</a>() to update</font>
+<a name="line306">306: </a><font color="#B22222">        the ghost points.</font>
+
+<a name="line308">308: </a><font color="#B22222">        One can use <a href="../../../../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(), and <a href="../../../../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>() instead of <a href="../../../../docs/manualpages/Vec/VecGhostUpdateBegin.html#VecGhostUpdateBegin">VecGhostUpdateBegin</a>() and <a href="../../../../docs/manualpages/Vec/VecGhostUpdateEnd.html#VecGhostUpdateEnd">VecGhostUpdateEnd</a>().</font>
+
+<a name="line310">310: </a><font color="#B22222">    Level: advanced</font>
+
+<a name="line312">312: </a><font color="#B22222">.seealso <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(), <a href="../../../../docs/manualpages/DM/DMCreateGlobalVector.html#DMCreateGlobalVector">DMCreateGlobalVector</a>(), <a href="../../../../docs/manualpages/DM/DMSetType.html#DMSetType">DMSetType</a>(), <a href="../../../../docs/manualpages/DM/DMSLICED.html#DMSLICED">DMSLICED</a>, <a href="../../../../docs/manualpages/DM/DMSlicedSetGhosts.html#DMSlicedSetGhosts">DMSlicedSetGhosts</a>(), <a href="../../../../docs/manualpages/DM/DMSlicedSetPreallocation.html#DMSlicedSetPreallocation">DMSlicedSetPreallocation</a>(), <a href="../../../../docs/manualpages/Vec/VecGhostUpdateBegin.html#VecGhostUpdateBegin">VecGhostUpdateBegin</a>(), <a href="../../../../docs/manualpages/Vec/VecGhostUpdateEnd.html#VecGhostUpdateEnd">VecGhostUpdateEnd</a>(),</font>
+<a name="line313">313: </a><font color="#B22222">         <a href="../../../../docs/manualpages/Vec/VecGhostGetLocalForm.html#VecGhostGetLocalForm">VecGhostGetLocalForm</a>(), <a href="../../../../docs/manualpages/Vec/VecGhostRestoreLocalForm.html#VecGhostRestoreLocalForm">VecGhostRestoreLocalForm</a>()</font>
+
+<a name="line315">315: </a><font color="#B22222">@*/</font>
+<a name="line316">316: </a><strong><font color="#4169E1"><a name="DMSlicedCreate"></a><a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../docs/manualpages/DM/DMSlicedCreate.html#DMSlicedCreate">DMSlicedCreate</a>(<a href="../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a> comm,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> bs,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> nlocal,<a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> Nghosts,const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> ghosts[], const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> d_nnz[],const <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> o_nnz[],<a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a> *dm)</font></strong>
+<a name="line317">317: </a>{
+
+<a name="line322">322: </a>  <a href="../../../../docs/manualpages/DM/DMCreate.html#DMCreate">DMCreate</a>(comm,dm);
+<a name="line323">323: </a>  <a href="../../../../docs/manualpages/DM/DMSetType.html#DMSetType">DMSetType</a>(*dm,<a href="../../../../docs/manualpages/DM/DMSLICED.html#DMSLICED">DMSLICED</a>);
+<a name="line324">324: </a>  <a href="../../../../docs/manualpages/DM/DMSlicedSetGhosts.html#DMSlicedSetGhosts">DMSlicedSetGhosts</a>(*dm,bs,nlocal,Nghosts,ghosts);
+<a name="line325">325: </a>  <font color="#4169E1">if</font> (d_nnz) {
+<a name="line326">326: </a>    <a href="../../../../docs/manualpages/DM/DMSlicedSetPreallocation.html#DMSlicedSetPreallocation">DMSlicedSetPreallocation</a>(*dm,0, d_nnz,0,o_nnz);
+<a name="line327">327: </a>  }
+<a name="line328">328: </a>  <font color="#4169E1">return</font>(0);
+<a name="line329">329: </a>}
+
+</pre>
+</body>
+
+</html>

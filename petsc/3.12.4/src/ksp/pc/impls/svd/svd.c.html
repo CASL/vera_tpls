@@ -1,0 +1,403 @@
+<center><a href="svd.c">Actual source code: svd.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/pc/impls/svd/svd.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:12:43+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/pc/impls/svd/svd.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a> #include <A href="../../../../../include/petsc/private/pcimpl.h.html">&lt;petsc/private/pcimpl.h&gt;</A>
+<a name="line3">  3: </a> #include <A href="../../../../../include/petscblaslapack.h.html">&lt;petscblaslapack.h&gt;</A>
+
+<a name="line5">  5: </a><font color="#B22222">/*</font>
+<a name="line6">  6: </a><font color="#B22222">   Private context (data structure) for the SVD preconditioner.</font>
+<a name="line7">  7: </a><font color="#B22222">*/</font>
+<a name="line8">  8: </a><font color="#4169E1">typedef</font> <font color="#4169E1">struct</font> {
+<a name="line9">  9: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>         diag,work;
+<a name="line10"> 10: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>         A,U,Vt;
+<a name="line11"> 11: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    nzero;
+<a name="line12"> 12: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>   zerosing;         <font color="#B22222">/* measure of smallest singular value treated as nonzero */</font>
+<a name="line13"> 13: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>    essrank;          <font color="#B22222">/* essential rank of operator */</font>
+<a name="line14"> 14: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>  left2red,right2red;
+<a name="line15"> 15: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>         leftred,rightred;
+<a name="line16"> 16: </a>  <a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> monitor;
+<a name="line17"> 17: </a>} PC_SVD;
+
+<a name="line19"> 19: </a><font color="#4169E1">typedef</font> <font color="#4169E1">enum</font> {READ=1, WRITE=2, READ_WRITE=3} AccessMode;
+
+<a name="line21"> 21: </a><font color="#B22222">/* -------------------------------------------------------------------------- */</font>
+<a name="line22"> 22: </a><font color="#B22222">/*</font>
+<a name="line23"> 23: </a><font color="#B22222">   PCSetUp_SVD - Prepares for the use of the SVD preconditioner</font>
+<a name="line24"> 24: </a><font color="#B22222">                    by setting data structures and options.</font>
+
+<a name="line26"> 26: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line27"> 27: </a><font color="#B22222">.  pc - the preconditioner context</font>
+
+<a name="line29"> 29: </a><font color="#B22222">   Application Interface Routine: <a href="../../../../../docs/manualpages/PC/PCSetUp.html#PCSetUp">PCSetUp</a>()</font>
+
+<a name="line31"> 31: </a><font color="#B22222">   Notes:</font>
+<a name="line32"> 32: </a><font color="#B22222">   The interface routine <a href="../../../../../docs/manualpages/PC/PCSetUp.html#PCSetUp">PCSetUp</a>() is not usually called directly by</font>
+<a name="line33"> 33: </a><font color="#B22222">   the user, but instead is called by <a href="../../../../../docs/manualpages/PC/PCApply.html#PCApply">PCApply</a>() if necessary.</font>
+<a name="line34"> 34: </a><font color="#B22222">*/</font>
+<a name="line35"> 35: </a><strong><font color="#4169E1"><a name="PCSetUp_SVD"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUp_SVD(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line36"> 36: </a>{
+<a name="line37"> 37: </a><font color="#A020F0">#if defined(PETSC_MISSING_LAPACK_GESVD)</font>
+<a name="line38"> 38: </a>  <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),PETSC_ERR_SUP,<font color="#666666">"GESVD - Lapack routine is unavailable\nNot able to provide singular value estimates."</font>);
+<a name="line39"> 39: </a><font color="#A020F0">#else</font>
+<a name="line40"> 40: </a>  PC_SVD         *jac = (PC_SVD*)pc-&gt;data;
+<a name="line42"> 42: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *a,*u,*v,*d,*work;
+<a name="line43"> 43: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a>   nb,lwork;
+<a name="line44"> 44: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       i,n;
+<a name="line45"> 45: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+
+<a name="line48"> 48: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;jac-&gt;A);
+<a name="line49"> 49: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc-&gt;pmat)-&gt;comm,&amp;size);
+<a name="line50"> 50: </a>  <font color="#4169E1">if</font> (size &gt; 1) {
+<a name="line51"> 51: </a>    <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> redmat;
+
+<a name="line53"> 53: </a>    <a href="../../../../../docs/manualpages/Mat/MatCreateRedundantMatrix.html#MatCreateRedundantMatrix">MatCreateRedundantMatrix</a>(pc-&gt;pmat,size,<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;redmat);
+<a name="line54"> 54: </a>    <a href="../../../../../docs/manualpages/Mat/MatConvert.html#MatConvert">MatConvert</a>(redmat,<a href="../../../../../docs/manualpages/Mat/MATSEQDENSE.html#MATSEQDENSE">MATSEQDENSE</a>,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;jac-&gt;A);
+<a name="line55"> 55: </a>    <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;redmat);
+<a name="line56"> 56: </a>  } <font color="#4169E1">else</font> {
+<a name="line57"> 57: </a>    <a href="../../../../../docs/manualpages/Mat/MatConvert.html#MatConvert">MatConvert</a>(pc-&gt;pmat,<a href="../../../../../docs/manualpages/Mat/MATSEQDENSE.html#MATSEQDENSE">MATSEQDENSE</a>,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;jac-&gt;A);
+<a name="line58"> 58: </a>  }
+<a name="line59"> 59: </a>  <font color="#4169E1">if</font> (!jac-&gt;diag) {    <font color="#B22222">/* assume square matrices */</font>
+<a name="line60"> 60: </a>    <a href="../../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(jac-&gt;A,&amp;jac-&gt;diag,&amp;jac-&gt;work);
+<a name="line61"> 61: </a>  }
+<a name="line62"> 62: </a>  <font color="#4169E1">if</font> (!jac-&gt;U) {
+<a name="line63"> 63: </a>    <a href="../../../../../docs/manualpages/Mat/MatDuplicate.html#MatDuplicate">MatDuplicate</a>(jac-&gt;A,<a href="../../../../../docs/manualpages/Mat/MatDuplicateOption.html#MatDuplicateOption">MAT_DO_NOT_COPY_VALUES</a>,&amp;jac-&gt;U);
+<a name="line64"> 64: </a>    <a href="../../../../../docs/manualpages/Mat/MatDuplicate.html#MatDuplicate">MatDuplicate</a>(jac-&gt;A,<a href="../../../../../docs/manualpages/Mat/MatDuplicateOption.html#MatDuplicateOption">MAT_DO_NOT_COPY_VALUES</a>,&amp;jac-&gt;Vt);
+<a name="line65"> 65: </a>  }
+<a name="line66"> 66: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetSize.html#MatGetSize">MatGetSize</a>(jac-&gt;A,&amp;n,NULL);
+<a name="line67"> 67: </a>  <font color="#4169E1">if</font> (!n) {
+<a name="line68"> 68: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscInfo.html#PetscInfo">PetscInfo</a>(pc,<font color="#666666">"Matrix has zero rows, skipping svd\n"</font>);
+<a name="line69"> 69: </a>    <font color="#4169E1">return</font>(0);
+<a name="line70"> 70: </a>  }
+<a name="line71"> 71: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBLASIntCast.html#PetscBLASIntCast">PetscBLASIntCast</a>(n,&amp;nb);
+<a name="line72"> 72: </a>  lwork = 5*nb;
+<a name="line73"> 73: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(lwork,&amp;work);
+<a name="line74"> 74: </a>  <a href="../../../../../docs/manualpages/Mat/MatDenseGetArray.html#MatDenseGetArray">MatDenseGetArray</a>(jac-&gt;A,&amp;a);
+<a name="line75"> 75: </a>  <a href="../../../../../docs/manualpages/Mat/MatDenseGetArray.html#MatDenseGetArray">MatDenseGetArray</a>(jac-&gt;U,&amp;u);
+<a name="line76"> 76: </a>  <a href="../../../../../docs/manualpages/Mat/MatDenseGetArray.html#MatDenseGetArray">MatDenseGetArray</a>(jac-&gt;Vt,&amp;v);
+<a name="line77"> 77: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(jac-&gt;diag,&amp;d);
+<a name="line78"> 78: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line79"> 79: </a>  {
+<a name="line80"> 80: </a>    <a href="../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a> lierr;
+<a name="line81"> 81: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFPTrapPush.html#PetscFPTrapPush">PetscFPTrapPush</a>(PETSC_FP_TRAP_OFF);
+<a name="line82"> 82: </a>    PetscStackCallBLAS(<font color="#666666">"LAPACKgesvd"</font>,LAPACKgesvd_(<font color="#666666">"A"</font>,<font color="#666666">"A"</font>,&amp;nb,&amp;nb,a,&amp;nb,d,u,&amp;nb,v,&amp;nb,work,&amp;lwork,&amp;lierr));
+<a name="line83"> 83: </a>    <font color="#4169E1">if</font> (lierr) <a href="../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"gesv() error %d"</font>,lierr);
+<a name="line84"> 84: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFPTrapPop.html#PetscFPTrapPop">PetscFPTrapPop</a>();
+<a name="line85"> 85: </a>  }
+<a name="line86"> 86: </a><font color="#A020F0">#else</font>
+<a name="line87"> 87: </a>  {
+<a name="line88"> 88: </a>    <a href="../../../../../docs/manualpages/Sys/PetscBLASInt.html#PetscBLASInt">PetscBLASInt</a> lierr;
+<a name="line89"> 89: </a>    <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>    *rwork,*dd;
+<a name="line90"> 90: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(5*nb,&amp;rwork);
+<a name="line91"> 91: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(nb,&amp;dd);
+<a name="line92"> 92: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFPTrapPush.html#PetscFPTrapPush">PetscFPTrapPush</a>(PETSC_FP_TRAP_OFF);
+<a name="line93"> 93: </a>    PetscStackCallBLAS(<font color="#666666">"LAPACKgesvd"</font>,LAPACKgesvd_(<font color="#666666">"A"</font>,<font color="#666666">"A"</font>,&amp;nb,&amp;nb,a,&amp;nb,dd,u,&amp;nb,v,&amp;nb,work,&amp;lwork,rwork,&amp;lierr));
+<a name="line94"> 94: </a>    <font color="#4169E1">if</font> (lierr) <a href="../../../../../docs/manualpages/Sys/SETERRQ1.html#SETERRQ1">SETERRQ1</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_LIB,<font color="#666666">"gesv() error %d"</font>,lierr);
+<a name="line95"> 95: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(rwork);
+<a name="line96"> 96: </a>    <font color="#4169E1">for</font> (i=0; i&lt;n; i++) d[i] = dd[i];
+<a name="line97"> 97: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(dd);
+<a name="line98"> 98: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFPTrapPop.html#PetscFPTrapPop">PetscFPTrapPop</a>();
+<a name="line99"> 99: </a>  }
+<a name="line100">100: </a><font color="#A020F0">#endif</font>
+<a name="line101">101: </a>  <a href="../../../../../docs/manualpages/Mat/MatDenseRestoreArray.html#MatDenseRestoreArray">MatDenseRestoreArray</a>(jac-&gt;A,&amp;a);
+<a name="line102">102: </a>  <a href="../../../../../docs/manualpages/Mat/MatDenseRestoreArray.html#MatDenseRestoreArray">MatDenseRestoreArray</a>(jac-&gt;U,&amp;u);
+<a name="line103">103: </a>  <a href="../../../../../docs/manualpages/Mat/MatDenseRestoreArray.html#MatDenseRestoreArray">MatDenseRestoreArray</a>(jac-&gt;Vt,&amp;v);
+<a name="line104">104: </a>  <font color="#4169E1">for</font> (i=n-1; i&gt;=0; i--) <font color="#4169E1">if</font> (<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[i]) &gt; jac-&gt;zerosing) <font color="#4169E1">break</font>;
+<a name="line105">105: </a>  jac-&gt;nzero = n-1-i;
+<a name="line106">106: </a>  <font color="#4169E1">if</font> (jac-&gt;monitor) {
+<a name="line107">107: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIAddTab.html#PetscViewerASCIIAddTab">PetscViewerASCIIAddTab</a>(jac-&gt;monitor,((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc)-&gt;tablevel);
+<a name="line108">108: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(jac-&gt;monitor,<font color="#666666">"    SVD: condition number %14.12e, %D of %D singular values are (nearly) zero\n"</font>,(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[0]/d[n-1]),jac-&gt;nzero,n);
+<a name="line109">109: </a>    <font color="#4169E1">if</font> (n &gt;= 10) {              <font color="#B22222">/* print 5 smallest and 5 largest */</font>
+<a name="line110">110: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(jac-&gt;monitor,<font color="#666666">"    SVD: smallest singular values: %14.12e %14.12e %14.12e %14.12e %14.12e\n"</font>,(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[n-1]),(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[n-2]),(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[n-3]),(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[n-4]),(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[n-5]));
+<a name="line111">111: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(jac-&gt;monitor,<font color="#666666">"    SVD: largest singular values : %14.12e %14.12e %14.12e %14.12e %14.12e\n"</font>,(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[4]),(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[3]),(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[2]),(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[1]),(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[0]));
+<a name="line112">112: </a>    } <font color="#4169E1">else</font> {                    <font color="#B22222">/* print all singular values */</font>
+<a name="line113">113: </a>      char     buf[256],*p;
+<a name="line114">114: </a>      size_t   left = <font color="#4169E1">sizeof</font>(buf),used;
+<a name="line115">115: </a>      <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> thisline;
+<a name="line116">116: </a>      <font color="#4169E1">for</font> (p=buf,i=n-1,thisline=1; i&gt;=0; i--,thisline++) {
+<a name="line117">117: </a>        <a href="../../../../../docs/manualpages/Sys/PetscSNPrintfCount.html#PetscSNPrintfCount">PetscSNPrintfCount</a>(p,left,<font color="#666666">" %14.12e"</font>,&amp;used,(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[i]));
+<a name="line118">118: </a>        left -= used;
+<a name="line119">119: </a>        p    += used;
+<a name="line120">120: </a>        <font color="#4169E1">if</font> (thisline &gt; 4 || i==0) {
+<a name="line121">121: </a>          <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(jac-&gt;monitor,<font color="#666666">"    SVD: singular values:%s\n"</font>,buf);
+<a name="line122">122: </a>          p        = buf;
+<a name="line123">123: </a>          thisline = 0;
+<a name="line124">124: </a>        }
+<a name="line125">125: </a>      }
+<a name="line126">126: </a>    }
+<a name="line127">127: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIISubtractTab.html#PetscViewerASCIISubtractTab">PetscViewerASCIISubtractTab</a>(jac-&gt;monitor,((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc)-&gt;tablevel);
+<a name="line128">128: </a>  }
+<a name="line129">129: </a>  PetscInfo2(pc,<font color="#666666">"Largest and smallest singular values %14.12e %14.12e\n"</font>,(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[0]),(double)<a href="../../../../../docs/manualpages/Sys/PetscRealPart.html#PetscRealPart">PetscRealPart</a>(d[n-1]));
+<a name="line130">130: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n-jac-&gt;nzero; i++) d[i] = 1.0/d[i];
+<a name="line131">131: </a>  <font color="#4169E1">for</font> (; i&lt;n; i++) d[i] = 0.0;
+<a name="line132">132: </a>  <font color="#4169E1">if</font> (jac-&gt;essrank &gt; 0) <font color="#4169E1">for</font> (i=0; i&lt;n-jac-&gt;nzero-jac-&gt;essrank; i++) d[i] = 0.0; <font color="#B22222">/* Skip all but essrank eigenvalues */</font>
+<a name="line133">133: </a>  PetscInfo1(pc,<font color="#666666">"Number of zero or nearly singular values %D\n"</font>,jac-&gt;nzero);
+<a name="line134">134: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(jac-&gt;diag,&amp;d);
+<a name="line135">135: </a><font color="#A020F0">#if defined(foo)</font>
+<a name="line136">136: </a>  {
+<a name="line137">137: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer;
+<a name="line138">138: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,<font color="#666666">"joe"</font>,<a href="../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">FILE_MODE_WRITE</a>,&amp;viewer);
+<a name="line139">139: </a>    <a href="../../../../../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(jac-&gt;A,viewer);
+<a name="line140">140: </a>    <a href="../../../../../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(jac-&gt;U,viewer);
+<a name="line141">141: </a>    <a href="../../../../../docs/manualpages/Mat/MatView.html#MatView">MatView</a>(jac-&gt;Vt,viewer);
+<a name="line142">142: </a>    <a href="../../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(jac-&gt;diag,viewer);
+<a name="line143">143: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(viewer);
+<a name="line144">144: </a>  }
+<a name="line145">145: </a><font color="#A020F0">#endif</font>
+<a name="line146">146: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(work);
+<a name="line147">147: </a>  <font color="#4169E1">return</font>(0);
+<a name="line148">148: </a><font color="#A020F0">#endif</font>
+<a name="line149">149: </a>}
+
+<a name="line151">151: </a><strong><font color="#4169E1"><a name="PCSVDGetVec"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSVDGetVec(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PCSide</a> side,AccessMode amode,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *xred)</font></strong>
+<a name="line152">152: </a>{
+<a name="line153">153: </a>  PC_SVD         *jac = (PC_SVD*)pc-&gt;data;
+<a name="line155">155: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+
+<a name="line158">158: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),&amp;size);
+<a name="line159">159: </a>  *xred = NULL;
+<a name="line160">160: </a>  <font color="#4169E1">switch</font> (side) {
+<a name="line161">161: </a>  <font color="#4169E1">case</font> <a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>:
+<a name="line162">162: </a>    <font color="#4169E1">if</font> (size == 1) *xred = x;
+<a name="line163">163: </a>    <font color="#4169E1">else</font> {
+<a name="line164">164: </a>      <font color="#4169E1">if</font> (!jac-&gt;left2red) {<a href="../../../../../docs/manualpages/Vec/VecScatterCreateToAll.html#VecScatterCreateToAll">VecScatterCreateToAll</a>(x,&amp;jac-&gt;left2red,&amp;jac-&gt;leftred);}
+<a name="line165">165: </a>      <font color="#4169E1">if</font> (amode &amp; READ) {
+<a name="line166">166: </a>        <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(jac-&gt;left2red,x,jac-&gt;leftred,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line167">167: </a>        <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(jac-&gt;left2red,x,jac-&gt;leftred,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line168">168: </a>      }
+<a name="line169">169: </a>      *xred = jac-&gt;leftred;
+<a name="line170">170: </a>    }
+<a name="line171">171: </a>    <font color="#4169E1">break</font>;
+<a name="line172">172: </a>  <font color="#4169E1">case</font> <a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_RIGHT</a>:
+<a name="line173">173: </a>    <font color="#4169E1">if</font> (size == 1) *xred = x;
+<a name="line174">174: </a>    <font color="#4169E1">else</font> {
+<a name="line175">175: </a>      <font color="#4169E1">if</font> (!jac-&gt;right2red) {<a href="../../../../../docs/manualpages/Vec/VecScatterCreateToAll.html#VecScatterCreateToAll">VecScatterCreateToAll</a>(x,&amp;jac-&gt;right2red,&amp;jac-&gt;rightred);}
+<a name="line176">176: </a>      <font color="#4169E1">if</font> (amode &amp; READ) {
+<a name="line177">177: </a>        <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(jac-&gt;right2red,x,jac-&gt;rightred,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line178">178: </a>        <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(jac-&gt;right2red,x,jac-&gt;rightred,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line179">179: </a>      }
+<a name="line180">180: </a>      *xred = jac-&gt;rightred;
+<a name="line181">181: </a>    }
+<a name="line182">182: </a>    <font color="#4169E1">break</font>;
+<a name="line183">183: </a><strong><font color="#FF0000">  default:</font></strong> <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),PETSC_ERR_PLIB,<font color="#666666">"Side must be LEFT or RIGHT"</font>);
+<a name="line184">184: </a>  }
+<a name="line185">185: </a>  <font color="#4169E1">return</font>(0);
+<a name="line186">186: </a>}
+
+<a name="line188">188: </a><strong><font color="#4169E1"><a name="PCSVDRestoreVec"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSVDRestoreVec(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PCSide</a> side,AccessMode amode,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> *xred)</font></strong>
+<a name="line189">189: </a>{
+<a name="line190">190: </a>  PC_SVD         *jac = (PC_SVD*)pc-&gt;data;
+<a name="line192">192: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    size;
+
+<a name="line195">195: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),&amp;size);
+<a name="line196">196: </a>  <font color="#4169E1">switch</font> (side) {
+<a name="line197">197: </a>  <font color="#4169E1">case</font> <a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>:
+<a name="line198">198: </a>    <font color="#4169E1">if</font> (size != 1 &amp;&amp; amode &amp; WRITE) {
+<a name="line199">199: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(jac-&gt;left2red,jac-&gt;leftred,x,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>);
+<a name="line200">200: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(jac-&gt;left2red,jac-&gt;leftred,x,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>);
+<a name="line201">201: </a>    }
+<a name="line202">202: </a>    <font color="#4169E1">break</font>;
+<a name="line203">203: </a>  <font color="#4169E1">case</font> <a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_RIGHT</a>:
+<a name="line204">204: </a>    <font color="#4169E1">if</font> (size != 1 &amp;&amp; amode &amp; WRITE) {
+<a name="line205">205: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(jac-&gt;right2red,jac-&gt;rightred,x,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>);
+<a name="line206">206: </a>      <a href="../../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(jac-&gt;right2red,jac-&gt;rightred,x,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../../docs/manualpages/Vec/SCATTER_REVERSE.html#SCATTER_REVERSE">SCATTER_REVERSE</a>);
+<a name="line207">207: </a>    }
+<a name="line208">208: </a>    <font color="#4169E1">break</font>;
+<a name="line209">209: </a><strong><font color="#FF0000">  default:</font></strong> <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),PETSC_ERR_PLIB,<font color="#666666">"Side must be LEFT or RIGHT"</font>);
+<a name="line210">210: </a>  }
+<a name="line211">211: </a>  *xred = NULL;
+<a name="line212">212: </a>  <font color="#4169E1">return</font>(0);
+<a name="line213">213: </a>}
+
+<a name="line215">215: </a><font color="#B22222">/* -------------------------------------------------------------------------- */</font>
+<a name="line216">216: </a><font color="#B22222">/*</font>
+<a name="line217">217: </a><font color="#B22222">   PCApply_SVD - Applies the SVD preconditioner to a vector.</font>
+
+<a name="line219">219: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line220">220: </a><font color="#B22222">.  pc - the preconditioner context</font>
+<a name="line221">221: </a><font color="#B22222">.  x - input vector</font>
+
+<a name="line223">223: </a><font color="#B22222">   Output Parameter:</font>
+<a name="line224">224: </a><font color="#B22222">.  y - output vector</font>
+
+<a name="line226">226: </a><font color="#B22222">   Application Interface Routine: <a href="../../../../../docs/manualpages/PC/PCApply.html#PCApply">PCApply</a>()</font>
+<a name="line227">227: </a><font color="#B22222"> */</font>
+<a name="line228">228: </a><strong><font color="#4169E1"><a name="PCApply_SVD"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApply_SVD(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line229">229: </a>{
+<a name="line230">230: </a>  PC_SVD         *jac = (PC_SVD*)pc-&gt;data;
+<a name="line231">231: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            work = jac-&gt;work,xred,yred;
+
+<a name="line235">235: </a>  PCSVDGetVec(pc,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_RIGHT</a>,READ,x,&amp;xred);
+<a name="line236">236: </a>  PCSVDGetVec(pc,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>,WRITE,y,&amp;yred);
+<a name="line237">237: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line238">238: </a>  <a href="../../../../../docs/manualpages/Mat/MatMultTranspose.html#MatMultTranspose">MatMultTranspose</a>(jac-&gt;U,xred,work);
+<a name="line239">239: </a><font color="#A020F0">#else</font>
+<a name="line240">240: </a>  <a href="../../../../../docs/manualpages/Mat/MatMultHermitianTranspose.html#MatMultHermitianTranspose">MatMultHermitianTranspose</a>(jac-&gt;U,xred,work);
+<a name="line241">241: </a><font color="#A020F0">#endif</font>
+<a name="line242">242: </a>  <a href="../../../../../docs/manualpages/Vec/VecPointwiseMult.html#VecPointwiseMult">VecPointwiseMult</a>(work,work,jac-&gt;diag);
+<a name="line243">243: </a><font color="#A020F0">#if !defined(PETSC_USE_COMPLEX)</font>
+<a name="line244">244: </a>  <a href="../../../../../docs/manualpages/Mat/MatMultTranspose.html#MatMultTranspose">MatMultTranspose</a>(jac-&gt;Vt,work,yred);
+<a name="line245">245: </a><font color="#A020F0">#else</font>
+<a name="line246">246: </a>  <a href="../../../../../docs/manualpages/Mat/MatMultHermitianTranspose.html#MatMultHermitianTranspose">MatMultHermitianTranspose</a>(jac-&gt;Vt,work,yred);
+<a name="line247">247: </a><font color="#A020F0">#endif</font>
+<a name="line248">248: </a>  PCSVDRestoreVec(pc,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_RIGHT</a>,READ,x,&amp;xred);
+<a name="line249">249: </a>  PCSVDRestoreVec(pc,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>,WRITE,y,&amp;yred);
+<a name="line250">250: </a>  <font color="#4169E1">return</font>(0);
+<a name="line251">251: </a>}
+
+<a name="line253">253: </a><strong><font color="#4169E1"><a name="PCApplyTranspose_SVD"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApplyTranspose_SVD(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line254">254: </a>{
+<a name="line255">255: </a>  PC_SVD         *jac = (PC_SVD*)pc-&gt;data;
+<a name="line256">256: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>            work = jac-&gt;work,xred,yred;
+
+<a name="line260">260: </a>  PCSVDGetVec(pc,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>,READ,x,&amp;xred);
+<a name="line261">261: </a>  PCSVDGetVec(pc,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_RIGHT</a>,WRITE,y,&amp;yred);
+<a name="line262">262: </a>  <a href="../../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a>(jac-&gt;Vt,xred,work);
+<a name="line263">263: </a>  <a href="../../../../../docs/manualpages/Vec/VecPointwiseMult.html#VecPointwiseMult">VecPointwiseMult</a>(work,work,jac-&gt;diag);
+<a name="line264">264: </a>  <a href="../../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a>(jac-&gt;U,work,yred);
+<a name="line265">265: </a>  PCSVDRestoreVec(pc,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_LEFT</a>,READ,x,&amp;xred);
+<a name="line266">266: </a>  PCSVDRestoreVec(pc,<a href="../../../../../docs/manualpages/PC/PCSide.html#PCSide">PC_RIGHT</a>,WRITE,y,&amp;yred);
+<a name="line267">267: </a>  <font color="#4169E1">return</font>(0);
+<a name="line268">268: </a>}
+
+<a name="line270">270: </a><strong><font color="#4169E1"><a name="PCReset_SVD"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCReset_SVD(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line271">271: </a>{
+<a name="line272">272: </a>  PC_SVD         *jac = (PC_SVD*)pc-&gt;data;
+
+<a name="line276">276: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;jac-&gt;A);
+<a name="line277">277: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;jac-&gt;U);
+<a name="line278">278: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;jac-&gt;Vt);
+<a name="line279">279: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;jac-&gt;diag);
+<a name="line280">280: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;jac-&gt;work);
+<a name="line281">281: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;jac-&gt;right2red);
+<a name="line282">282: </a>  <a href="../../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;jac-&gt;left2red);
+<a name="line283">283: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;jac-&gt;rightred);
+<a name="line284">284: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;jac-&gt;leftred);
+<a name="line285">285: </a>  <font color="#4169E1">return</font>(0);
+<a name="line286">286: </a>}
+
+<a name="line288">288: </a><font color="#B22222">/* -------------------------------------------------------------------------- */</font>
+<a name="line289">289: </a><font color="#B22222">/*</font>
+<a name="line290">290: </a><font color="#B22222">   PCDestroy_SVD - Destroys the private context for the SVD preconditioner</font>
+<a name="line291">291: </a><font color="#B22222">   that was created with PCCreate_SVD().</font>
+
+<a name="line293">293: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line294">294: </a><font color="#B22222">.  pc - the preconditioner context</font>
+
+<a name="line296">296: </a><font color="#B22222">   Application Interface Routine: <a href="../../../../../docs/manualpages/PC/PCDestroy.html#PCDestroy">PCDestroy</a>()</font>
+<a name="line297">297: </a><font color="#B22222">*/</font>
+<a name="line298">298: </a><strong><font color="#4169E1"><a name="PCDestroy_SVD"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCDestroy_SVD(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line299">299: </a>{
+<a name="line300">300: </a>  PC_SVD         *jac = (PC_SVD*)pc-&gt;data;
+
+<a name="line304">304: </a>  PCReset_SVD(pc);
+<a name="line305">305: </a>  <a href="../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(&amp;jac-&gt;monitor);
+<a name="line306">306: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pc-&gt;data);
+<a name="line307">307: </a>  <font color="#4169E1">return</font>(0);
+<a name="line308">308: </a>}
+
+<a name="line310">310: </a><strong><font color="#4169E1"><a name="PCSetFromOptions_SVD"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetFromOptions_SVD(PetscOptionItems *PetscOptionsObject,<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line311">311: </a>{
+<a name="line313">313: </a>  PC_SVD         *jac = (PC_SVD*)pc-&gt;data;
+<a name="line314">314: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flg,set;
+
+<a name="line317">317: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsHead.html#PetscOptionsHead">PetscOptionsHead</a>(PetscOptionsObject,<font color="#666666">"SVD options"</font>);
+<a name="line318">318: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsReal.html#PetscOptionsReal">PetscOptionsReal</a>(<font color="#666666">"-pc_svd_zero_sing"</font>,<font color="#666666">"Singular values smaller than this treated as zero"</font>,<font color="#666666">"None"</font>,jac-&gt;zerosing,&amp;jac-&gt;zerosing,NULL);
+<a name="line319">319: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-pc_svd_ess_rank"</font>,<font color="#666666">"Essential rank of operator (0 to use entire operator)"</font>,<font color="#666666">"None"</font>,jac-&gt;essrank,&amp;jac-&gt;essrank,NULL);
+<a name="line320">320: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsBool.html#PetscOptionsBool">PetscOptionsBool</a>(<font color="#666666">"-pc_svd_monitor"</font>,<font color="#666666">"Monitor the conditioning, and extremal singular values"</font>,<font color="#666666">"None"</font>,jac-&gt;monitor ? <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,&amp;flg,&amp;set);
+<a name="line321">321: </a>  <font color="#4169E1">if</font> (set) {                    <font color="#B22222">/* Should make PCSVDSetMonitor() */</font>
+<a name="line322">322: </a>    <font color="#4169E1">if</font> (flg &amp;&amp; !jac-&gt;monitor) {
+<a name="line323">323: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIOpen.html#PetscViewerASCIIOpen">PetscViewerASCIIOpen</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),<font color="#666666">"stdout"</font>,&amp;jac-&gt;monitor);
+<a name="line324">324: </a>    } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (!flg) {
+<a name="line325">325: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(&amp;jac-&gt;monitor);
+<a name="line326">326: </a>    }
+<a name="line327">327: </a>  }
+<a name="line328">328: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsTail.html#PetscOptionsTail">PetscOptionsTail</a>();
+<a name="line329">329: </a>  <font color="#4169E1">return</font>(0);
+<a name="line330">330: </a>}
+
+<a name="line332">332: </a><strong><font color="#4169E1"><a name="PCView_SVD"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCView_SVD(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line333">333: </a>{
+<a name="line334">334: </a>  PC_SVD         *svd = (PC_SVD*)pc-&gt;data;
+<a name="line336">336: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      iascii;
+
+<a name="line339">339: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../../docs/manualpages/Viewer/PETSCVIEWERASCII.html#PETSCVIEWERASCII">PETSCVIEWERASCII</a>,&amp;iascii);
+<a name="line340">340: </a>  <font color="#4169E1">if</font> (iascii) {
+<a name="line341">341: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  All singular values smaller than %g treated as zero\n"</font>,(double)svd-&gt;zerosing);
+<a name="line342">342: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Provided essential rank of the matrix %D (all other eigenvalues are zeroed)\n"</font>,svd-&gt;essrank);
+<a name="line343">343: </a>  }
+<a name="line344">344: </a>  <font color="#4169E1">return</font>(0);
+<a name="line345">345: </a>}
+<a name="line346">346: </a><font color="#B22222">/* -------------------------------------------------------------------------- */</font>
+<a name="line347">347: </a><font color="#B22222">/*</font>
+<a name="line348">348: </a><font color="#B22222">   PCCreate_SVD - Creates a SVD preconditioner context, PC_SVD,</font>
+<a name="line349">349: </a><font color="#B22222">   and sets this as the private data within the generic preconditioning</font>
+<a name="line350">350: </a><font color="#B22222">   context, <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>, that was created within <a href="../../../../../docs/manualpages/PC/PCCreate.html#PCCreate">PCCreate</a>().</font>
+
+<a name="line352">352: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line353">353: </a><font color="#B22222">.  pc - the preconditioner context</font>
+
+<a name="line355">355: </a><font color="#B22222">   Application Interface Routine: <a href="../../../../../docs/manualpages/PC/PCCreate.html#PCCreate">PCCreate</a>()</font>
+<a name="line356">356: </a><font color="#B22222">*/</font>
+
+<a name="line358">358: </a><font color="#B22222">/*MC</font>
+<a name="line359">359: </a><font color="#B22222">     <a href="../../../../../docs/manualpages/PC/PCSVD.html#PCSVD">PCSVD</a> - Use pseudo inverse defined by SVD of operator</font>
+
+<a name="line361">361: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line363">363: </a><font color="#B22222">  Options Database:</font>
+<a name="line364">364: </a><font color="#B22222">+  -pc_svd_zero_sing &lt;rtol&gt; Singular values smaller than this are treated as zero</font>
+<a name="line365">365: </a><font color="#B22222">-  -pc_svd_monitor  Print information on the extreme singular values of the operator</font>
+
+<a name="line367">367: </a><font color="#B22222">  Developer Note:</font>
+<a name="line368">368: </a><font color="#B22222">  This implementation automatically creates a redundant copy of the</font>
+<a name="line369">369: </a><font color="#B22222">   matrix on each process and uses a sequential SVD solve. Why does it do this instead</font>
+<a name="line370">370: </a><font color="#B22222">   of using the composable <a href="../../../../../docs/manualpages/PC/PCREDUNDANT.html#PCREDUNDANT">PCREDUNDANT</a> object?</font>
+
+<a name="line372">372: </a><font color="#B22222">.seealso:  <a href="../../../../../docs/manualpages/PC/PCCreate.html#PCCreate">PCCreate</a>(), <a href="../../../../../docs/manualpages/PC/PCSetType.html#PCSetType">PCSetType</a>(), <a href="../../../../../docs/manualpages/PC/PCType.html#PCType">PCType</a> (for list of available types), <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a></font>
+<a name="line373">373: </a><font color="#B22222">M*/</font>
+
+<a name="line375">375: </a><strong><font color="#4169E1"><a name="PCCreate_SVD"></a>PETSC_EXTERN <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCCreate_SVD(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line376">376: </a>{
+<a name="line377">377: </a>  PC_SVD         *jac;
+
+<a name="line381">381: </a>  <font color="#B22222">/*</font>
+<a name="line382">382: </a><font color="#B22222">     Creates the private data structure for this preconditioner and</font>
+<a name="line383">383: </a><font color="#B22222">     attach it to the <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> object.</font>
+<a name="line384">384: </a><font color="#B22222">  */</font>
+<a name="line385">385: </a>  <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(pc,&amp;jac);
+<a name="line386">386: </a>  jac-&gt;zerosing = 1.e-12;
+<a name="line387">387: </a>  pc-&gt;data      = (void*)jac;
+
+<a name="line389">389: </a>  <font color="#B22222">/*</font>
+<a name="line390">390: </a><font color="#B22222">      Set the pointers for the functions that are provided above.</font>
+<a name="line391">391: </a><font color="#B22222">      Now when the user-level routines (such as <a href="../../../../../docs/manualpages/PC/PCApply.html#PCApply">PCApply</a>(), <a href="../../../../../docs/manualpages/PC/PCDestroy.html#PCDestroy">PCDestroy</a>(), etc.)</font>
+<a name="line392">392: </a><font color="#B22222">      are called, they will automatically call these functions.  Note we</font>
+<a name="line393">393: </a><font color="#B22222">      choose not to provide a couple of these functions since they are</font>
+<a name="line394">394: </a><font color="#B22222">      not needed.</font>
+<a name="line395">395: </a><font color="#B22222">  */</font>
+<a name="line396">396: </a>  pc-&gt;ops-&gt;apply           = PCApply_SVD;
+<a name="line397">397: </a>  pc-&gt;ops-&gt;applytranspose  = PCApplyTranspose_SVD;
+<a name="line398">398: </a>  pc-&gt;ops-&gt;setup           = PCSetUp_SVD;
+<a name="line399">399: </a>  pc-&gt;ops-&gt;reset           = PCReset_SVD;
+<a name="line400">400: </a>  pc-&gt;ops-&gt;destroy         = PCDestroy_SVD;
+<a name="line401">401: </a>  pc-&gt;ops-&gt;setfromoptions  = PCSetFromOptions_SVD;
+<a name="line402">402: </a>  pc-&gt;ops-&gt;view            = PCView_SVD;
+<a name="line403">403: </a>  pc-&gt;ops-&gt;applyrichardson = 0;
+<a name="line404">404: </a>  <font color="#4169E1">return</font>(0);
+<a name="line405">405: </a>}
+
+</pre>
+</body>
+
+</html>

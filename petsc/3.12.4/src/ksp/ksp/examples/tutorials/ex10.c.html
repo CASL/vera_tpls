@@ -1,0 +1,315 @@
+<center><a href="ex10.c">Actual source code: ex10.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/ksp/examples/tutorials/ex10.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:18:53+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/ksp/examples/tutorials/ex10.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a>static char help[] = <font color="#666666">"Solve a small system and a large system through preloading\n\</font>
+<a name="line3">  3: </a><font color="#666666">  Input arguments are:\n\</font>
+<a name="line4">  4: </a><font color="#666666">   -f0 &lt;small_sys_binary&gt; -f1 &lt;large_sys_binary&gt; \n\n"</font>;
+
+<a name="line6">  6: </a><font color="#B22222">/*T</font>
+<a name="line7">  7: </a><font color="#B22222">   Concepts: <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>^basic parallel example</font>
+<a name="line8">  8: </a><font color="#B22222">   Concepts: <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>^loading a binary matrix and vector;</font>
+<a name="line9">  9: </a><font color="#B22222">   Concepts: PetscLog^preloading executable</font>
+<a name="line10"> 10: </a><font color="#B22222">   Processors: n</font>
+<a name="line11"> 11: </a><font color="#B22222">T*/</font>
+
+<a name="line13"> 13: </a><font color="#B22222">/*</font>
+<a name="line14"> 14: </a><font color="#B22222">  Include "petscksp.h" so that we can use <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> solvers.  Note that this file</font>
+<a name="line15"> 15: </a><font color="#B22222">  automatically includes:</font>
+<a name="line16"> 16: </a><font color="#B22222">     petscsys.h       - base PETSc routines   petscvec.h - vectors</font>
+<a name="line17"> 17: </a><font color="#B22222">     petscmat.h - matrices</font>
+<a name="line18"> 18: </a><font color="#B22222">     petscis.h     - index sets            petscksp.h - Krylov subspace methods</font>
+<a name="line19"> 19: </a><font color="#B22222">     petscviewer.h - viewers               petscpc.h  - preconditioners</font>
+<a name="line20"> 20: </a><font color="#B22222">*/</font>
+<a name="line21"> 21: </a> #include <A href="../../../../../include/petscksp.h.html">&lt;petscksp.h&gt;</A>
+
+<a name="line23"> 23: </a><font color="#4169E1">typedef</font> <font color="#4169E1">enum</font> {
+<a name="line24"> 24: </a>  RHS_FILE,
+<a name="line25"> 25: </a>  RHS_ONE,
+<a name="line26"> 26: </a>  RHS_RANDOM
+<a name="line27"> 27: </a>} RHSType;
+<a name="line28"> 28: </a>const char *const RHSTypes[] = {<font color="#666666">"FILE"</font>, <font color="#666666">"ONE"</font>, <font color="#666666">"RANDOM"</font>, <font color="#666666">"RHSType"</font>, <font color="#666666">"RHS_"</font>, NULL};
+
+<a name="line30"> 30: </a><font color="#B22222">/* ATTENTION: this is the example used in the Profiling chaper of the PETSc manual,</font>
+<a name="line31"> 31: </a><font color="#B22222">   where we referenced its profiling stages, preloading and output etc.</font>
+<a name="line32"> 32: </a><font color="#B22222">   When you modify it, please make sure it is still consistent with the manual.</font>
+<a name="line33"> 33: </a><font color="#B22222"> */</font>
+<a name="line34"> 34: </a><strong><font color="#4169E1"><a name="main"></a>int main(int argc,char **args)</font></strong>
+<a name="line35"> 35: </a>{
+<a name="line36"> 36: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>    ierr;
+<a name="line37"> 37: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>               x,b,b2;
+<a name="line38"> 38: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>               A;           <font color="#B22222">/* linear system matrix */</font>
+<a name="line39"> 39: </a>  <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>               ksp;         <font color="#B22222">/* Krylov subspace method context */</font>
+<a name="line40"> 40: </a>  <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a>         norm;        <font color="#B22222">/* norm of solution error */</font>
+<a name="line41"> 41: </a>  char              file[2][PETSC_MAX_PATH_LEN];
+<a name="line42"> 42: </a>  <a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>       viewer;      <font color="#B22222">/* viewer */</font>
+<a name="line43"> 43: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>         flg,preload=<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>,same,trans=<a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line44"> 44: </a>  RHSType           rhstype = RHS_FILE;
+<a name="line45"> 45: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>          its,j,len,start,idx,n1,n2;
+<a name="line46"> 46: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a> *val;
+
+<a name="line48"> 48: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(&amp;argc,&amp;args,(char*)0,help);<font color="#4169E1">if</font> (ierr) <font color="#4169E1">return</font> ierr;
+
+<a name="line50"> 50: </a>  <font color="#B22222">/*</font>
+<a name="line51"> 51: </a><font color="#B22222">     Determine files from which we read the two linear systems</font>
+<a name="line52"> 52: </a><font color="#B22222">     (matrix and right-hand-side vector).</font>
+<a name="line53"> 53: </a><font color="#B22222">  */</font>
+<a name="line54"> 54: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetBool.html#PetscOptionsGetBool">PetscOptionsGetBool</a>(NULL,NULL,<font color="#666666">"-trans"</font>,&amp;trans,&amp;flg);
+<a name="line55"> 55: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetString.html#PetscOptionsGetString">PetscOptionsGetString</a>(NULL,NULL,<font color="#666666">"-f"</font>,file[0],PETSC_MAX_PATH_LEN,&amp;flg);
+<a name="line56"> 56: </a>  <font color="#4169E1">if</font> (flg) {
+<a name="line57"> 57: </a>    <a href="../../../../../docs/manualpages/Sys/PetscStrcpy.html#PetscStrcpy">PetscStrcpy</a>(file[1],file[0]);
+<a name="line58"> 58: </a>    preload = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line59"> 59: </a>  } <font color="#4169E1">else</font> {
+<a name="line60"> 60: </a>    <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetString.html#PetscOptionsGetString">PetscOptionsGetString</a>(NULL,NULL,<font color="#666666">"-f0"</font>,file[0],PETSC_MAX_PATH_LEN,&amp;flg);
+<a name="line61"> 61: </a>    <font color="#4169E1">if</font> (!flg) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,1,<font color="#666666">"Must indicate binary file with the -f0 or -f option"</font>);
+<a name="line62"> 62: </a>    <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetString.html#PetscOptionsGetString">PetscOptionsGetString</a>(NULL,NULL,<font color="#666666">"-f1"</font>,file[1],PETSC_MAX_PATH_LEN,&amp;flg);
+<a name="line63"> 63: </a>    <font color="#4169E1">if</font> (!flg) preload = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;   <font color="#B22222">/* don't bother with second system */</font>
+<a name="line64"> 64: </a>  }
+<a name="line65"> 65: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsGetEnum.html#PetscOptionsGetEnum">PetscOptionsGetEnum</a>(NULL,NULL,<font color="#666666">"-rhs"</font>,RHSTypes,(<a href="../../../../../docs/manualpages/Sys/PetscEnum.html#PetscEnum">PetscEnum</a>*)&amp;rhstype,NULL);
+
+<a name="line67"> 67: </a>  <font color="#B22222">/*</font>
+<a name="line68"> 68: </a><font color="#B22222">    To use preloading, one usually has code like the following:</font>
+
+<a name="line70"> 70: </a><font color="#B22222">    <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadBegin.html#PetscPreLoadBegin">PetscPreLoadBegin</a>(preload,"first stage);</font>
+<a name="line71"> 71: </a><font color="#B22222">      lines of code</font>
+<a name="line72"> 72: </a><font color="#B22222">    <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadStage.html#PetscPreLoadStage">PetscPreLoadStage</a>("second stage");</font>
+<a name="line73"> 73: </a><font color="#B22222">      lines of code</font>
+<a name="line74"> 74: </a><font color="#B22222">    <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadEnd.html#PetscPreLoadEnd">PetscPreLoadEnd</a>();</font>
+
+<a name="line76"> 76: </a><font color="#B22222">    The two macro <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadBegin.html#PetscPreLoadBegin">PetscPreLoadBegin</a>() and <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadEnd.html#PetscPreLoadEnd">PetscPreLoadEnd</a>() implicitly form a</font>
+<a name="line77"> 77: </a><font color="#B22222">    loop with maximal two iterations, depending whether preloading is turned on or</font>
+<a name="line78"> 78: </a><font color="#B22222">    not. If it is, either through the preload arg of <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadBegin.html#PetscPreLoadBegin">PetscPreLoadBegin</a> or through</font>
+<a name="line79"> 79: </a><font color="#B22222">    -preload command line, the trip count is 2, otherwise it is 1. One can use the</font>
+<a name="line80"> 80: </a><font color="#B22222">    predefined variable PetscPreLoadIt within the loop body to get the current</font>
+<a name="line81"> 81: </a><font color="#B22222">    iteration number, which is 0 or 1. If preload is turned on, the runtime doesn't</font>
+<a name="line82"> 82: </a><font color="#B22222">    do profiling for the first iteration, but it will do profiling for the second</font>
+<a name="line83"> 83: </a><font color="#B22222">    iteration instead.</font>
+
+<a name="line85"> 85: </a><font color="#B22222">    One can solve a small system in the first iteration and a large system in</font>
+<a name="line86"> 86: </a><font color="#B22222">    the second iteration. This process preloads the instructions with the small</font>
+<a name="line87"> 87: </a><font color="#B22222">    system so that more accurate performance monitoring (via -log_view) can be done</font>
+<a name="line88"> 88: </a><font color="#B22222">    with the large one (that actually is the system of interest).</font>
+
+<a name="line90"> 90: </a><font color="#B22222">    But in this example, we turned off preloading and duplicated the code for</font>
+<a name="line91"> 91: </a><font color="#B22222">    the large system. In general, it is a bad practice and one should not duplicate</font>
+<a name="line92"> 92: </a><font color="#B22222">    code. We do that because we want to show profiling stages for both the small</font>
+<a name="line93"> 93: </a><font color="#B22222">    system and the large system.</font>
+<a name="line94"> 94: </a><font color="#B22222">  */</font>
+<a name="line95"> 95: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadBegin.html#PetscPreLoadBegin">PetscPreLoadBegin</a>(preload,<font color="#666666">"Load System 0"</font>);
+
+<a name="line97"> 97: </a>  <font color="#B22222">/*=========================</font>
+<a name="line98"> 98: </a><font color="#B22222">      solve a small system</font>
+<a name="line99"> 99: </a><font color="#B22222">    =========================*/</font>
+
+<a name="line101">101: </a>  <font color="#B22222">/* open binary file. Note that we use <a href="../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">FILE_MODE_READ</a> to indicate reading from this file */</font>
+<a name="line102">102: </a>  <a href="../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,file[0],<a href="../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">FILE_MODE_READ</a>,&amp;viewer);
+
+<a name="line104">104: </a>  <font color="#B22222">/* load the matrix and vector; then destroy the viewer */</font>
+<a name="line105">105: </a>  <a href="../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;A);
+<a name="line106">106: </a>  <a href="../../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(A);
+<a name="line107">107: </a>  <a href="../../../../../docs/manualpages/Mat/MatLoad.html#MatLoad">MatLoad</a>(A,viewer);
+<a name="line108">108: </a>  <font color="#4169E1">switch</font> (rhstype) {
+<a name="line109">109: </a>  <font color="#4169E1">case</font> RHS_FILE:
+<a name="line110">110: </a>    <font color="#B22222">/* Vectors in the file might a different size than the matrix so we need a</font>
+<a name="line111">111: </a><font color="#B22222">     * <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> whose size hasn't been set yet.  It'll get fixed below.  Otherwise we</font>
+<a name="line112">112: </a><font color="#B22222">     * can create the correct size <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>. */</font>
+<a name="line113">113: </a>    <a href="../../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;b);
+<a name="line114">114: </a>    <a href="../../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(b,viewer);
+<a name="line115">115: </a>    <font color="#4169E1">break</font>;
+<a name="line116">116: </a>  <font color="#4169E1">case</font> RHS_ONE:
+<a name="line117">117: </a>    <a href="../../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(A,&amp;b,NULL);
+<a name="line118">118: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(b,1.0);
+<a name="line119">119: </a>    <font color="#4169E1">break</font>;
+<a name="line120">120: </a>  <font color="#4169E1">case</font> RHS_RANDOM:
+<a name="line121">121: </a>    <a href="../../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(A,&amp;b,NULL);
+<a name="line122">122: </a>    <a href="../../../../../docs/manualpages/Vec/VecSetRandom.html#VecSetRandom">VecSetRandom</a>(b,NULL);
+<a name="line123">123: </a>    <font color="#4169E1">break</font>;
+<a name="line124">124: </a>  }
+<a name="line125">125: </a>  <a href="../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(&amp;viewer);
+
+<a name="line127">127: </a>  <font color="#B22222">/* if the loaded matrix is larger than the vector (due to being padded</font>
+<a name="line128">128: </a><font color="#B22222">     to match the block size of the system), then create a new padded vector</font>
+<a name="line129">129: </a><font color="#B22222">   */</font>
+<a name="line130">130: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetLocalSize.html#MatGetLocalSize">MatGetLocalSize</a>(A,NULL,&amp;n1);
+<a name="line131">131: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(b,&amp;n2);
+<a name="line132">132: </a>  same = (n1 == n2)? <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line133">133: </a>  <a href="../../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(MPI_IN_PLACE,&amp;same,1,MPIU_BOOL,MPI_LAND,<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>);
+
+<a name="line135">135: </a>  <font color="#4169E1">if</font> (!same) { <font color="#B22222">/* create a new vector b by padding the old one */</font>
+<a name="line136">136: </a>    <a href="../../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;b2);
+<a name="line137">137: </a>    <a href="../../../../../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a>(b2,n1,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>);
+<a name="line138">138: </a>    <a href="../../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>(b2);
+<a name="line139">139: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(b,&amp;start,NULL);
+<a name="line140">140: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(b,&amp;len);
+<a name="line141">141: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(b,&amp;val);
+<a name="line142">142: </a>    <font color="#4169E1">for</font> (j=0; j&lt;len; j++) {
+<a name="line143">143: </a>      idx = start+j;
+<a name="line144">144: </a>      <a href="../../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>(b2,1,&amp;idx,val+j,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line145">145: </a>    }
+<a name="line146">146: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(b,&amp;val);
+<a name="line147">147: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;b);
+<a name="line148">148: </a>    <a href="../../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a>(b2);
+<a name="line149">149: </a>    <a href="../../../../../docs/manualpages/Vec/VecAssemblyEnd.html#VecAssemblyEnd">VecAssemblyEnd</a>(b2);
+<a name="line150">150: </a>    b    = b2;
+<a name="line151">151: </a>  }
+<a name="line152">152: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(b,&amp;x);
+
+<a name="line154">154: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadStage.html#PetscPreLoadStage">PetscPreLoadStage</a>(<font color="#666666">"<a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a> 0"</font>);
+<a name="line155">155: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;ksp);
+<a name="line156">156: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(ksp,A,A);
+<a name="line157">157: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(ksp);
+
+<a name="line159">159: </a>  <font color="#B22222">/*</font>
+<a name="line160">160: </a><font color="#B22222">    Here we explicitly call <a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>() and <a href="../../../../../docs/manualpages/KSP/KSPSetUpOnBlocks.html#KSPSetUpOnBlocks">KSPSetUpOnBlocks</a>() to</font>
+<a name="line161">161: </a><font color="#B22222">    enable more precise profiling of setting up the preconditioner.</font>
+<a name="line162">162: </a><font color="#B22222">    These calls are optional, since both will be called within</font>
+<a name="line163">163: </a><font color="#B22222">    <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>() if they haven't been called already.</font>
+<a name="line164">164: </a><font color="#B22222">  */</font>
+<a name="line165">165: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>(ksp);
+<a name="line166">166: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetUpOnBlocks.html#KSPSetUpOnBlocks">KSPSetUpOnBlocks</a>(ksp);
+
+<a name="line168">168: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadStage.html#PetscPreLoadStage">PetscPreLoadStage</a>(<font color="#666666">"<a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a> 0"</font>);
+<a name="line169">169: </a>  <font color="#4169E1">if</font> (trans) {<a href="../../../../../docs/manualpages/KSP/KSPSolveTranspose.html#KSPSolveTranspose">KSPSolveTranspose</a>(ksp,b,x);}
+<a name="line170">170: </a>  <font color="#4169E1">else</font>       {<a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(ksp,b,x);}
+
+<a name="line172">172: </a>  <a href="../../../../../docs/manualpages/KSP/KSPGetTotalIterations.html#KSPGetTotalIterations">KSPGetTotalIterations</a>(ksp,&amp;its);
+<a name="line173">173: </a>  <a href="../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"Number of iterations = %d\n"</font>,its);
+
+<a name="line175">175: </a>  <a href="../../../../../docs/manualpages/KSP/KSPGetResidualNorm.html#KSPGetResidualNorm">KSPGetResidualNorm</a>(ksp,&amp;norm);
+<a name="line176">176: </a>  <font color="#4169E1">if</font> (norm &lt; 1.e-12) {
+<a name="line177">177: </a>    <a href="../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"Residual norm &lt; 1.e-12\n"</font>);
+<a name="line178">178: </a>  } <font color="#4169E1">else</font> {
+<a name="line179">179: </a>    <a href="../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"Residual norm %e\n"</font>,(double)norm);
+<a name="line180">180: </a>  }
+
+<a name="line182">182: </a>  <a href="../../../../../docs/manualpages/KSP/KSPDestroy.html#KSPDestroy">KSPDestroy</a>(&amp;ksp);
+<a name="line183">183: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;A);
+<a name="line184">184: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;x);
+<a name="line185">185: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;b);
+
+<a name="line187">187: </a>  <font color="#B22222">/*=========================</font>
+<a name="line188">188: </a><font color="#B22222">    solve a large system</font>
+<a name="line189">189: </a><font color="#B22222">    =========================*/</font>
+<a name="line190">190: </a>  <font color="#B22222">/* the code is duplicated. Bad practice. See comments above */</font>
+<a name="line191">191: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadStage.html#PetscPreLoadStage">PetscPreLoadStage</a>(<font color="#666666">"Load System 1"</font>);
+<a name="line192">192: </a>  <a href="../../../../../docs/manualpages/Viewer/PetscViewerBinaryOpen.html#PetscViewerBinaryOpen">PetscViewerBinaryOpen</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,file[1],<a href="../../../../../docs/manualpages/Sys/PetscFileMode.html#PetscFileMode">FILE_MODE_READ</a>,&amp;viewer);
+
+<a name="line194">194: </a>  <font color="#B22222">/* load the matrix and vector; then destroy the viewer */</font>
+<a name="line195">195: </a>  <a href="../../../../../docs/manualpages/Mat/MatCreate.html#MatCreate">MatCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;A);
+<a name="line196">196: </a>  <a href="../../../../../docs/manualpages/Mat/MatSetFromOptions.html#MatSetFromOptions">MatSetFromOptions</a>(A);
+<a name="line197">197: </a>  <a href="../../../../../docs/manualpages/Mat/MatLoad.html#MatLoad">MatLoad</a>(A,viewer);
+<a name="line198">198: </a>  <font color="#4169E1">switch</font> (rhstype) {
+<a name="line199">199: </a>  <font color="#4169E1">case</font> RHS_FILE:
+<a name="line200">200: </a>    <font color="#B22222">/* Vectors in the file might a different size than the matrix so we need a</font>
+<a name="line201">201: </a><font color="#B22222">     * <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> whose size hasn't been set yet.  It'll get fixed below.  Otherwise we</font>
+<a name="line202">202: </a><font color="#B22222">     * can create the correct size <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>. */</font>
+<a name="line203">203: </a>    <a href="../../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;b);
+<a name="line204">204: </a>    <a href="../../../../../docs/manualpages/Vec/VecLoad.html#VecLoad">VecLoad</a>(b,viewer);
+<a name="line205">205: </a>    <font color="#4169E1">break</font>;
+<a name="line206">206: </a>  <font color="#4169E1">case</font> RHS_ONE:
+<a name="line207">207: </a>    <a href="../../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(A,&amp;b,NULL);
+<a name="line208">208: </a>    <a href="../../../../../docs/manualpages/Vec/VecSet.html#VecSet">VecSet</a>(b,1.0);
+<a name="line209">209: </a>    <font color="#4169E1">break</font>;
+<a name="line210">210: </a>  <font color="#4169E1">case</font> RHS_RANDOM:
+<a name="line211">211: </a>    <a href="../../../../../docs/manualpages/Mat/MatCreateVecs.html#MatCreateVecs">MatCreateVecs</a>(A,&amp;b,NULL);
+<a name="line212">212: </a>    <a href="../../../../../docs/manualpages/Vec/VecSetRandom.html#VecSetRandom">VecSetRandom</a>(b,NULL);
+<a name="line213">213: </a>    <font color="#4169E1">break</font>;
+<a name="line214">214: </a>  }
+<a name="line215">215: </a>  <a href="../../../../../docs/manualpages/Viewer/PetscViewerDestroy.html#PetscViewerDestroy">PetscViewerDestroy</a>(&amp;viewer);
+
+<a name="line217">217: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetLocalSize.html#MatGetLocalSize">MatGetLocalSize</a>(A,NULL,&amp;n1);
+<a name="line218">218: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(b,&amp;n2);
+<a name="line219">219: </a>  same = (n1 == n2)? <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a> : <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line220">220: </a>  <a href="../../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(MPI_IN_PLACE,&amp;same,1,MPIU_BOOL,MPI_LAND,<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>);
+
+<a name="line222">222: </a>  <font color="#4169E1">if</font> (!same) { <font color="#B22222">/* create a new vector b by padding the old one */</font>
+<a name="line223">223: </a>    <a href="../../../../../docs/manualpages/Vec/VecCreate.html#VecCreate">VecCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;b2);
+<a name="line224">224: </a>    <a href="../../../../../docs/manualpages/Vec/VecSetSizes.html#VecSetSizes">VecSetSizes</a>(b2,n1,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>);
+<a name="line225">225: </a>    <a href="../../../../../docs/manualpages/Vec/VecSetFromOptions.html#VecSetFromOptions">VecSetFromOptions</a>(b2);
+<a name="line226">226: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(b,&amp;start,NULL);
+<a name="line227">227: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetLocalSize.html#VecGetLocalSize">VecGetLocalSize</a>(b,&amp;len);
+<a name="line228">228: </a>    <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(b,&amp;val);
+<a name="line229">229: </a>    <font color="#4169E1">for</font> (j=0; j&lt;len; j++) {
+<a name="line230">230: </a>      idx = start+j;
+<a name="line231">231: </a>      <a href="../../../../../docs/manualpages/Vec/VecSetValues.html#VecSetValues">VecSetValues</a>(b2,1,&amp;idx,val+j,<a href="../../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>);
+<a name="line232">232: </a>    }
+<a name="line233">233: </a>    <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(b,&amp;val);
+<a name="line234">234: </a>    <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;b);
+<a name="line235">235: </a>    <a href="../../../../../docs/manualpages/Vec/VecAssemblyBegin.html#VecAssemblyBegin">VecAssemblyBegin</a>(b2);
+<a name="line236">236: </a>    <a href="../../../../../docs/manualpages/Vec/VecAssemblyEnd.html#VecAssemblyEnd">VecAssemblyEnd</a>(b2);
+<a name="line237">237: </a>    b    = b2;
+<a name="line238">238: </a>  }
+<a name="line239">239: </a>  <a href="../../../../../docs/manualpages/Vec/VecDuplicate.html#VecDuplicate">VecDuplicate</a>(b,&amp;x);
+
+<a name="line241">241: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadStage.html#PetscPreLoadStage">PetscPreLoadStage</a>(<font color="#666666">"<a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a> 1"</font>);
+<a name="line242">242: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,&amp;ksp);
+<a name="line243">243: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(ksp,A,A);
+<a name="line244">244: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(ksp);
+<a name="line245">245: </a>  <font color="#B22222">/*</font>
+<a name="line246">246: </a><font color="#B22222">    Here we explicitly call <a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>() and <a href="../../../../../docs/manualpages/KSP/KSPSetUpOnBlocks.html#KSPSetUpOnBlocks">KSPSetUpOnBlocks</a>() to</font>
+<a name="line247">247: </a><font color="#B22222">    enable more precise profiling of setting up the preconditioner.</font>
+<a name="line248">248: </a><font color="#B22222">    These calls are optional, since both will be called within</font>
+<a name="line249">249: </a><font color="#B22222">    <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>() if they haven't been called already.</font>
+<a name="line250">250: </a><font color="#B22222">  */</font>
+<a name="line251">251: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>(ksp);
+<a name="line252">252: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetUpOnBlocks.html#KSPSetUpOnBlocks">KSPSetUpOnBlocks</a>(ksp);
+
+<a name="line254">254: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadStage.html#PetscPreLoadStage">PetscPreLoadStage</a>(<font color="#666666">"<a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a> 1"</font>);
+<a name="line255">255: </a>  <font color="#4169E1">if</font> (trans) {<a href="../../../../../docs/manualpages/KSP/KSPSolveTranspose.html#KSPSolveTranspose">KSPSolveTranspose</a>(ksp,b,x);}
+<a name="line256">256: </a>  <font color="#4169E1">else</font>       {<a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(ksp,b,x);}
+
+<a name="line258">258: </a>  <a href="../../../../../docs/manualpages/KSP/KSPGetTotalIterations.html#KSPGetTotalIterations">KSPGetTotalIterations</a>(ksp,&amp;its);
+<a name="line259">259: </a>  <a href="../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"Number of iterations = %d\n"</font>,its);
+
+<a name="line261">261: </a>  <a href="../../../../../docs/manualpages/KSP/KSPGetResidualNorm.html#KSPGetResidualNorm">KSPGetResidualNorm</a>(ksp,&amp;norm);
+<a name="line262">262: </a>  <font color="#4169E1">if</font> (norm &lt; 1.e-12) {
+<a name="line263">263: </a>    <a href="../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"Residual norm &lt; 1.e-12\n"</font>);
+<a name="line264">264: </a>  } <font color="#4169E1">else</font> {
+<a name="line265">265: </a>    <a href="../../../../../docs/manualpages/Sys/PetscPrintf.html#PetscPrintf">PetscPrintf</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<font color="#666666">"Residual norm %e\n"</font>,(double)norm);
+<a name="line266">266: </a>  }
+
+<a name="line268">268: </a>  <a href="../../../../../docs/manualpages/KSP/KSPDestroy.html#KSPDestroy">KSPDestroy</a>(&amp;ksp);
+<a name="line269">269: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;A);
+<a name="line270">270: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;x);
+<a name="line271">271: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;b);
+<a name="line272">272: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscPreLoadEnd.html#PetscPreLoadEnd">PetscPreLoadEnd</a>();
+<a name="line273">273: </a>  <font color="#B22222">/*</font>
+<a name="line274">274: </a><font color="#B22222">     Always call <a href="../../../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>() before exiting a program.  This routine</font>
+<a name="line275">275: </a><font color="#B22222">       - finalizes the PETSc libraries as well as MPI</font>
+<a name="line276">276: </a><font color="#B22222">       - provides summary and diagnostic information if certain runtime</font>
+<a name="line277">277: </a><font color="#B22222">         options are chosen (e.g., -log_view).</font>
+<a name="line278">278: </a><font color="#B22222">  */</font>
+<a name="line279">279: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>();
+<a name="line280">280: </a>  <font color="#4169E1">return</font> ierr;
+<a name="line281">281: </a>}
+
+<a name="line283">283: </a><font color="#B22222">/*TEST</font>
+
+<a name="line285">285: </a><font color="#B22222">   test:</font>
+<a name="line286">286: </a><font color="#B22222">      nsize: 4</font>
+<a name="line287">287: </a><font color="#B22222">      output_file: output/ex10_1.out</font>
+<a name="line288">288: </a><font color="#B22222">      requires: datafilespath double !complex !define(PETSC_USE_64BIT_INDICES)</font>
+<a name="line289">289: </a><font color="#B22222">      args: -f0 ${DATAFILESPATH}/matrices/medium -f1 ${DATAFILESPATH}/matrices/arco6 -ksp_gmres_classicalgramschmidt -mat_type baij -matload_block_size 3 -pc_type bjacobi</font>
+
+<a name="line291">291: </a><font color="#B22222">   test:</font>
+<a name="line292">292: </a><font color="#B22222">      suffix: 2</font>
+<a name="line293">293: </a><font color="#B22222">      nsize: 4</font>
+<a name="line294">294: </a><font color="#B22222">      output_file: output/ex10_2.out</font>
+<a name="line295">295: </a><font color="#B22222">      requires: datafilespath double !complex !define(PETSC_USE_64BIT_INDICES)</font>
+<a name="line296">296: </a><font color="#B22222">      args: -f0 ${DATAFILESPATH}/matrices/medium -f1 ${DATAFILESPATH}/matrices/arco6 -ksp_gmres_classicalgramschmidt -mat_type baij -matload_block_size 3 -pc_type bjacobi -trans</font>
+
+<a name="line298">298: </a><font color="#B22222">TEST*/</font>
+</pre>
+</body>
+
+</html>

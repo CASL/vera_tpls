@@ -1,0 +1,179 @@
+<center><a href="ex6.c">Actual source code: ex6.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/dm/examples/tutorials/ex6.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:07:42+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/dm/examples/tutorials/ex6.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a>static char help[] = <font color="#666666">"\n\n"</font>;
+
+<a name="line4">  4: </a><font color="#B22222">/*</font>
+<a name="line5">  5: </a><font color="#B22222">     Demonstrates using <a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_GHOSTED</a> how to handle a rotated boundary conditions where one edge</font>
+<a name="line6">  6: </a><font color="#B22222">    is connected to its immediate neighbor</font>
+
+<a name="line8">  8: </a><font color="#B22222">    Consider the domain (with natural numbering)</font>
+
+<a name="line10"> 10: </a><font color="#B22222">     6   7   8</font>
+<a name="line11"> 11: </a><font color="#B22222">     3   4   5</font>
+<a name="line12"> 12: </a><font color="#B22222">     0   1   2</font>
+
+<a name="line14"> 14: </a><font color="#B22222">    The ghost points along the bottom (directly below the three columns above) should be 0 3 and 6</font>
+<a name="line15"> 15: </a><font color="#B22222">    while the ghost points along the left side should be 0 1 2</font>
+
+<a name="line17"> 17: </a><font color="#B22222">    Note that the ghosted local vectors extend in both the x and y directions so, for example if we have a </font>
+<a name="line18"> 18: </a><font color="#B22222">    single MPI process the ghosted vector has (in the original natural numbering)</font>
+
+<a name="line20"> 20: </a><font color="#B22222">     x  x  x  x  x</font>
+<a name="line21"> 21: </a><font color="#B22222">     2  6  7  8  x</font>
+<a name="line22"> 22: </a><font color="#B22222">     1  3  4  5  x</font>
+<a name="line23"> 23: </a><font color="#B22222">     0  0  1  2  x</font>
+<a name="line24"> 24: </a><font color="#B22222">     x  0  3  6  x</font>
+
+<a name="line26"> 26: </a><font color="#B22222">    where x indicates a location that is not updated by the communication and should be used.</font>
+
+<a name="line28"> 28: </a><font color="#B22222">    For this to make sense the number of grid points in the x and y directions must be the same</font>
+
+<a name="line30"> 30: </a><font color="#B22222">    This ghost point mapping was suggested by: Wenbo Zhao &lt;zhaowenbo.npic@gmail.com&gt;</font>
+<a name="line31"> 31: </a><font color="#B22222">*/</font>
+
+<a name="line33"> 33: </a> #include <A href="../../../../include/petscdm.h.html">&lt;petscdm.h&gt;</A>
+<a name="line34"> 34: </a> #include <A href="../../../../include/petscdmda.h.html">&lt;petscdmda.h&gt;</A>
+
+<a name="line36"> 36: </a><strong><font color="#4169E1"><a name="main"></a>int main(int argc,char **argv)</font></strong>
+<a name="line37"> 37: </a>{
+<a name="line38"> 38: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>         M = 6;
+<a name="line39"> 39: </a>  <a href="../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>   ierr;
+<a name="line40"> 40: </a>  <a href="../../../../docs/manualpages/DM/DM.html#DM">DM</a>               da;
+<a name="line41"> 41: </a>  <a href="../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>              local,global,natural;
+<a name="line42"> 42: </a>  <a href="../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>         i,start,end,*ifrom,x,y,xm,ym;
+<a name="line43"> 43: </a>  <a href="../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>      *xnatural;
+<a name="line44"> 44: </a>  <a href="../../../../docs/manualpages/IS/IS.html#IS">IS</a>               from,to;
+<a name="line45"> 45: </a>  <a href="../../../../docs/manualpages/AO/AO.html#AO">AO</a>               ao;
+<a name="line46"> 46: </a>  <a href="../../../../docs/manualpages/Vec/VecScatter.html#VecScatter">VecScatter</a>       scatter1,scatter2;
+<a name="line47"> 47: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>      subviewer;
+
+<a name="line49"> 49: </a>  <a href="../../../../docs/manualpages/Sys/PetscInitialize.html#PetscInitialize">PetscInitialize</a>(&amp;argc,&amp;argv,(char*)0,help);<font color="#4169E1">if</font> (ierr) <font color="#4169E1">return</font> ierr;
+
+<a name="line51"> 51: </a>  <font color="#B22222">/* Create distributed array and get vectors */</font>
+<a name="line52"> 52: </a>  <a href="../../../../docs/manualpages/DMDA/DMDACreate2d.html#DMDACreate2d">DMDACreate2d</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,<a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_GHOSTED</a>,<a href="../../../../docs/manualpages/DM/DMBoundaryType.html#DMBoundaryType">DM_BOUNDARY_GHOSTED</a>,<a href="../../../../docs/manualpages/DMDA/DMDAStencilType.html#DMDAStencilType">DMDA_STENCIL_STAR</a>,M,M,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,<a href="../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,1,1,NULL,NULL,&amp;da);
+<a name="line53"> 53: </a>  <a href="../../../../docs/manualpages/DM/DMSetUp.html#DMSetUp">DMSetUp</a>(da);
+<a name="line54"> 54: </a>  <a href="../../../../docs/manualpages/DM/DMCreateGlobalVector.html#DMCreateGlobalVector">DMCreateGlobalVector</a>(da,&amp;global);
+<a name="line55"> 55: </a>  <a href="../../../../docs/manualpages/DM/DMCreateLocalVector.html#DMCreateLocalVector">DMCreateLocalVector</a>(da,&amp;local);
+
+<a name="line57"> 57: </a>  <font color="#B22222">/* construct global to local scatter for the left side of the domain to the ghost on the bottom */</font>
+<a name="line58"> 58: </a>  <a href="../../../../docs/manualpages/DMDA/DMDAGetCorners.html#DMDAGetCorners">DMDAGetCorners</a>(da,&amp;x,&amp;y,NULL,&amp;xm,&amp;ym,NULL);
+<a name="line59"> 59: </a>  <font color="#4169E1">if</font> (!y) { <font color="#B22222">/* only processes on the bottom of the domain fill up the ghost locations */</font>
+<a name="line60"> 60: </a>    <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,xm,1,1,&amp;to);
+<a name="line61"> 61: </a>  } <font color="#4169E1">else</font> {
+<a name="line62"> 62: </a>    <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,0,0,0,&amp;to);
+<a name="line63"> 63: </a>  }
+<a name="line64"> 64: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(xm,&amp;ifrom);
+<a name="line65"> 65: </a>  <font color="#4169E1">for</font> (i=x;i&lt;x+xm;i++) {
+<a name="line66"> 66: </a>    ifrom[i-x] = M*i;
+<a name="line67"> 67: </a>  }
+<a name="line68"> 68: </a>  <a href="../../../../docs/manualpages/DMDA/DMDAGetAO.html#DMDAGetAO">DMDAGetAO</a>(da,&amp;ao);
+<a name="line69"> 69: </a>  <a href="../../../../docs/manualpages/AO/AOApplicationToPetsc.html#AOApplicationToPetsc">AOApplicationToPetsc</a>(ao,xm,ifrom);
+<a name="line70"> 70: </a>  <font color="#4169E1">if</font> (!y) {
+<a name="line71"> 71: </a>    <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,xm,ifrom,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>,&amp;from);
+<a name="line72"> 72: </a>  } <font color="#4169E1">else</font> {
+<a name="line73"> 73: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(ifrom);
+<a name="line74"> 74: </a>    <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,0,NULL,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;from);
+<a name="line75"> 75: </a>  }
+<a name="line76"> 76: </a>  <a href="../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(global,from,local,to,&amp;scatter1);
+<a name="line77"> 77: </a>  <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;to);
+<a name="line78"> 78: </a>  <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;from);
+
+<a name="line80"> 80: </a>  <font color="#B22222">/* construct global to local scatter for the bottom side of the domain to the ghost on the right */</font>
+<a name="line81"> 81: </a>  <font color="#4169E1">if</font> (!x) { <font color="#B22222">/* only processes on the left side of the domain fill up the ghost locations */</font>
+<a name="line82"> 82: </a>    <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,ym,xm+2,xm+2,&amp;to);
+<a name="line83"> 83: </a>  } <font color="#4169E1">else</font> {
+<a name="line84"> 84: </a>    <a href="../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,0,0,0,&amp;to);
+<a name="line85"> 85: </a>  }
+<a name="line86"> 86: </a>  <a href="../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(ym,&amp;ifrom);
+<a name="line87"> 87: </a>  <font color="#4169E1">for</font> (i=y;i&lt;y+ym;i++) {
+<a name="line88"> 88: </a>    ifrom[i-y] = i;
+<a name="line89"> 89: </a>  }
+<a name="line90"> 90: </a>  <a href="../../../../docs/manualpages/DMDA/DMDAGetAO.html#DMDAGetAO">DMDAGetAO</a>(da,&amp;ao);
+<a name="line91"> 91: </a>  <a href="../../../../docs/manualpages/AO/AOApplicationToPetsc.html#AOApplicationToPetsc">AOApplicationToPetsc</a>(ao,ym,ifrom);
+<a name="line92"> 92: </a>  <font color="#4169E1">if</font> (!x) {
+<a name="line93"> 93: </a>    <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,ym,ifrom,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_OWN_POINTER</a>,&amp;from);
+<a name="line94"> 94: </a>  } <font color="#4169E1">else</font> {
+<a name="line95"> 95: </a>    <a href="../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(ifrom);
+<a name="line96"> 96: </a>    <a href="../../../../docs/manualpages/IS/ISCreateGeneral.html#ISCreateGeneral">ISCreateGeneral</a>(<a href="../../../../docs/manualpages/Sys/PETSC_COMM_WORLD.html#PETSC_COMM_WORLD">PETSC_COMM_WORLD</a>,0,NULL,<a href="../../../../docs/manualpages/Sys/PetscCopyMode.html#PetscCopyMode">PETSC_COPY_VALUES</a>,&amp;from);
+<a name="line97"> 97: </a>  }
+<a name="line98"> 98: </a>  <a href="../../../../docs/manualpages/Vec/VecScatterCreate.html#VecScatterCreate">VecScatterCreate</a>(global,from,local,to,&amp;scatter2);
+<a name="line99"> 99: </a>  <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;to);
+<a name="line100">100: </a>  <a href="../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;from);
+
+<a name="line102">102: </a>  <font color="#B22222">/*</font>
+<a name="line103">103: </a><font color="#B22222">     fill the global vector with the natural global numbering for each local entry</font>
+<a name="line104">104: </a><font color="#B22222">     this is only done for testing purposes since it is easy to see if the scatter worked correctly</font>
+<a name="line105">105: </a><font color="#B22222">  */</font>
+<a name="line106">106: </a>  <a href="../../../../docs/manualpages/DMDA/DMDACreateNaturalVector.html#DMDACreateNaturalVector">DMDACreateNaturalVector</a>(da,&amp;natural);
+<a name="line107">107: </a>  <a href="../../../../docs/manualpages/Vec/VecGetOwnershipRange.html#VecGetOwnershipRange">VecGetOwnershipRange</a>(natural,&amp;start,&amp;end);
+<a name="line108">108: </a>  <a href="../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(natural,&amp;xnatural);
+<a name="line109">109: </a>  <font color="#4169E1">for</font> (i=start; i&lt;end; i++) {
+<a name="line110">110: </a>    xnatural[i-start] = i;
+<a name="line111">111: </a>  }
+<a name="line112">112: </a>  <a href="../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(natural,&amp;xnatural);
+<a name="line113">113: </a>  <a href="../../../../docs/manualpages/DMDA/DMDANaturalToGlobalBegin.html#DMDANaturalToGlobalBegin">DMDANaturalToGlobalBegin</a>(da,natural,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,global);
+<a name="line114">114: </a>  <a href="../../../../docs/manualpages/DMDA/DMDANaturalToGlobalEnd.html#DMDANaturalToGlobalEnd">DMDANaturalToGlobalEnd</a>(da,natural,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,global);
+<a name="line115">115: </a>  <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;natural);
+
+<a name="line117">117: </a>  <font color="#B22222">/* scatter from global to local */</font>
+<a name="line118">118: </a>  <a href="../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(scatter1,global,local,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line119">119: </a>  <a href="../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(scatter1,global,local,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line120">120: </a>  <a href="../../../../docs/manualpages/Vec/VecScatterBegin.html#VecScatterBegin">VecScatterBegin</a>(scatter2,global,local,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line121">121: </a>  <a href="../../../../docs/manualpages/Vec/VecScatterEnd.html#VecScatterEnd">VecScatterEnd</a>(scatter2,global,local,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,<a href="../../../../docs/manualpages/Vec/SCATTER_FORWARD.html#SCATTER_FORWARD">SCATTER_FORWARD</a>);
+<a name="line122">122: </a>  <font color="#B22222">/*</font>
+<a name="line123">123: </a><font color="#B22222">     normally here you would also call</font>
+<a name="line124">124: </a><font color="#B22222">  <a href="../../../../docs/manualpages/DM/DMGlobalToLocalBegin.html#DMGlobalToLocalBegin">DMGlobalToLocalBegin</a>(da,global,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,local);</font>
+<a name="line125">125: </a><font color="#B22222">  <a href="../../../../docs/manualpages/DM/DMGlobalToLocalEnd.html#DMGlobalToLocalEnd">DMGlobalToLocalEnd</a>(da,global,<a href="../../../../docs/manualpages/Sys/INSERT_VALUES.html#INSERT_VALUES">INSERT_VALUES</a>,local);</font>
+<a name="line126">126: </a><font color="#B22222">    to update all the interior ghost cells between neighboring processes.</font>
+<a name="line127">127: </a><font color="#B22222">    We don't do it here since this is only a test of "special" ghost points.</font>
+<a name="line128">128: </a><font color="#B22222">  */</font>
+
+<a name="line130">130: </a>  <font color="#B22222">/* view each local ghosted vector */</font>
+<a name="line131">131: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerGetSubViewer.html#PetscViewerGetSubViewer">PetscViewerGetSubViewer</a>(<a href="../../../../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_WORLD.html#PETSC_VIEWER_STDOUT_WORLD">PETSC_VIEWER_STDOUT_WORLD</a>,<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;subviewer);
+<a name="line132">132: </a>  <a href="../../../../docs/manualpages/Vec/VecView.html#VecView">VecView</a>(local,subviewer);
+<a name="line133">133: </a>  <a href="../../../../docs/manualpages/Viewer/PetscViewerRestoreSubViewer.html#PetscViewerRestoreSubViewer">PetscViewerRestoreSubViewer</a>(<a href="../../../../docs/manualpages/Viewer/PETSC_VIEWER_STDOUT_WORLD.html#PETSC_VIEWER_STDOUT_WORLD">PETSC_VIEWER_STDOUT_WORLD</a>,<a href="../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;subviewer);
+
+<a name="line135">135: </a>  <a href="../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;scatter1);
+<a name="line136">136: </a>  <a href="../../../../docs/manualpages/Vec/VecScatterDestroy.html#VecScatterDestroy">VecScatterDestroy</a>(&amp;scatter2);
+<a name="line137">137: </a>  <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;local);
+<a name="line138">138: </a>  <a href="../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;global);
+<a name="line139">139: </a>  <a href="../../../../docs/manualpages/DM/DMDestroy.html#DMDestroy">DMDestroy</a>(&amp;da);
+<a name="line140">140: </a>  <a href="../../../../docs/manualpages/Sys/PetscFinalize.html#PetscFinalize">PetscFinalize</a>();
+<a name="line141">141: </a>  <font color="#4169E1">return</font> ierr;
+<a name="line142">142: </a>}
+
+
+
+<a name="line146">146: </a><font color="#B22222">/*TEST</font>
+
+<a name="line148">148: </a><font color="#B22222">   test:</font>
+
+<a name="line150">150: </a><font color="#B22222">   test:</font>
+<a name="line151">151: </a><font color="#B22222">      suffix: 2</font>
+<a name="line152">152: </a><font color="#B22222">      nsize: 2</font>
+
+<a name="line154">154: </a><font color="#B22222">   test:</font>
+<a name="line155">155: </a><font color="#B22222">      suffix: 4</font>
+<a name="line156">156: </a><font color="#B22222">      nsize: 4</font>
+
+<a name="line158">158: </a><font color="#B22222">   test:</font>
+<a name="line159">159: </a><font color="#B22222">      suffix: 9</font>
+<a name="line160">160: </a><font color="#B22222">      nsize: 9</font>
+
+<a name="line162">162: </a><font color="#B22222">TEST*/</font>
+</pre>
+</body>
+
+</html>

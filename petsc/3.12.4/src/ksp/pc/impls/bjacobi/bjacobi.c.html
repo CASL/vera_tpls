@@ -1,0 +1,1245 @@
+<center><a href="bjacobi.c">Actual source code: bjacobi.c</a></center><br>
+
+<html>
+<head> <link rel="canonical" href="http://www.mcs.anl.gov/petsc/petsc-current/src/ksp/pc/impls/bjacobi/bjacobi.c.html" />
+<title></title>
+<meta name="generator" content="c2html 0.9.4">
+<meta name="date" content="2020-02-04T17:10:21+00:00">
+</head>
+
+<body bgcolor="#FFFFFF">
+   <div id="version" align=right><b>petsc-3.12.4 2020-02-04</b></div>
+   <div id="bugreport" align=right><a href="mailto:petsc-maint@mcs.anl.gov?subject=Typo or Error in Documentation &body=Please describe the typo or error in the documentation: petsc-3.12.4 v3.12.4 src/ksp/pc/impls/bjacobi/bjacobi.c.html "><small>Report Typos and Errors</small></a></div>
+<pre width="80">
+
+<a name="line2">  2: </a><font color="#B22222">/*</font>
+<a name="line3">  3: </a><font color="#B22222">   Defines a block Jacobi preconditioner.</font>
+<a name="line4">  4: </a><font color="#B22222">*/</font>
+
+<a name="line6">  6: </a> #include <A href="../../../../../include/../src/ksp/pc/impls/bjacobi/bjacobi.h.html">&lt;../src/ksp/pc/impls/bjacobi/bjacobi.h&gt;</A>
+
+<a name="line8">  8: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUp_BJacobi_Singleblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>)</font></strong>;
+<a name="line9">  9: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUp_BJacobi_Multiblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>)</font></strong>;
+<a name="line10"> 10: </a><strong><font color="#4169E1">static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUp_BJacobi_Multiproc(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>)</font></strong>;
+
+<a name="line12"> 12: </a><strong><font color="#4169E1"><a name="PCSetUp_BJacobi"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUp_BJacobi(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line13"> 13: </a>{
+<a name="line14"> 14: </a>  PC_BJacobi     *jac = (PC_BJacobi*)pc-&gt;data;
+<a name="line15"> 15: </a>  <a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a>            mat  = pc-&gt;mat,pmat = pc-&gt;pmat;
+<a name="line17"> 17: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      hasop;
+<a name="line18"> 18: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       N,M,start,i,sum,end;
+<a name="line19"> 19: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       bs,i_start=-1,i_end=-1;
+<a name="line20"> 20: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    rank,size;
+<a name="line21"> 21: </a>  const char     *pprefix,*mprefix;
+
+<a name="line24"> 24: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),&amp;rank);
+<a name="line25"> 25: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),&amp;size);
+<a name="line26"> 26: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetLocalSize.html#MatGetLocalSize">MatGetLocalSize</a>(pc-&gt;pmat,&amp;M,&amp;N);
+<a name="line27"> 27: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetBlockSize.html#MatGetBlockSize">MatGetBlockSize</a>(pc-&gt;pmat,&amp;bs);
+
+<a name="line29"> 29: </a>  <font color="#4169E1">if</font> (jac-&gt;n &gt; 0 &amp;&amp; jac-&gt;n &lt; size) {
+<a name="line30"> 30: </a>    PCSetUp_BJacobi_Multiproc(pc);
+<a name="line31"> 31: </a>    <font color="#4169E1">return</font>(0);
+<a name="line32"> 32: </a>  }
+
+<a name="line34"> 34: </a>  <font color="#B22222">/* --------------------------------------------------------------------------</font>
+<a name="line35"> 35: </a><font color="#B22222">      Determines the number of blocks assigned to each processor</font>
+<a name="line36"> 36: </a><font color="#B22222">  -----------------------------------------------------------------------------*/</font>
+
+<a name="line38"> 38: </a>  <font color="#B22222">/*   local block count  given */</font>
+<a name="line39"> 39: </a>  <font color="#4169E1">if</font> (jac-&gt;n_local &gt; 0 &amp;&amp; jac-&gt;n &lt; 0) {
+<a name="line40"> 40: </a>    <a href="../../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;jac-&gt;n_local,&amp;jac-&gt;n,1,<a href="../../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,MPI_SUM,<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc));
+<a name="line41"> 41: </a>    <font color="#4169E1">if</font> (jac-&gt;l_lens) { <font color="#B22222">/* check that user set these correctly */</font>
+<a name="line42"> 42: </a>      sum = 0;
+<a name="line43"> 43: </a>      <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n_local; i++) {
+<a name="line44"> 44: </a>        <font color="#4169E1">if</font> (jac-&gt;l_lens[i]/bs*bs !=jac-&gt;l_lens[i]) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_SIZ,<font color="#666666">"<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> blocksize doesn't match block Jacobi layout"</font>);
+<a name="line45"> 45: </a>        sum += jac-&gt;l_lens[i];
+<a name="line46"> 46: </a>      }
+<a name="line47"> 47: </a>      <font color="#4169E1">if</font> (sum != M) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_SIZ,<font color="#666666">"Local lens set incorrectly"</font>);
+<a name="line48"> 48: </a>    } <font color="#4169E1">else</font> {
+<a name="line49"> 49: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(jac-&gt;n_local,&amp;jac-&gt;l_lens);
+<a name="line50"> 50: </a>      <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n_local; i++) jac-&gt;l_lens[i] = bs*((M/bs)/jac-&gt;n_local + (((M/bs) % jac-&gt;n_local) &gt; i));
+<a name="line51"> 51: </a>    }
+<a name="line52"> 52: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (jac-&gt;n &gt; 0 &amp;&amp; jac-&gt;n_local &lt; 0) { <font color="#B22222">/* global block count given */</font>
+<a name="line53"> 53: </a>    <font color="#B22222">/* global blocks given: determine which ones are local */</font>
+<a name="line54"> 54: </a>    <font color="#4169E1">if</font> (jac-&gt;g_lens) {
+<a name="line55"> 55: </a>      <font color="#B22222">/* check if the g_lens is has valid entries */</font>
+<a name="line56"> 56: </a>      <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n; i++) {
+<a name="line57"> 57: </a>        <font color="#4169E1">if</font> (!jac-&gt;g_lens[i]) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_SIZ,<font color="#666666">"Zero block not allowed"</font>);
+<a name="line58"> 58: </a>        <font color="#4169E1">if</font> (jac-&gt;g_lens[i]/bs*bs != jac-&gt;g_lens[i]) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_SIZ,<font color="#666666">"<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> blocksize doesn't match block Jacobi layout"</font>);
+<a name="line59"> 59: </a>      }
+<a name="line60"> 60: </a>      <font color="#4169E1">if</font> (size == 1) {
+<a name="line61"> 61: </a>        jac-&gt;n_local = jac-&gt;n;
+<a name="line62"> 62: </a>        <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(jac-&gt;n_local,&amp;jac-&gt;l_lens);
+<a name="line63"> 63: </a>        <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(jac-&gt;l_lens,jac-&gt;g_lens,jac-&gt;n_local);
+<a name="line64"> 64: </a>        <font color="#B22222">/* check that user set these correctly */</font>
+<a name="line65"> 65: </a>        sum = 0;
+<a name="line66"> 66: </a>        <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n_local; i++) sum += jac-&gt;l_lens[i];
+<a name="line67"> 67: </a>        <font color="#4169E1">if</font> (sum != M) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_SIZ,<font color="#666666">"Global lens set incorrectly"</font>);
+<a name="line68"> 68: </a>      } <font color="#4169E1">else</font> {
+<a name="line69"> 69: </a>        <a href="../../../../../docs/manualpages/Mat/MatGetOwnershipRange.html#MatGetOwnershipRange">MatGetOwnershipRange</a>(pc-&gt;pmat,&amp;start,&amp;end);
+<a name="line70"> 70: </a>        <font color="#B22222">/* loop over blocks determing first one owned by me */</font>
+<a name="line71"> 71: </a>        sum = 0;
+<a name="line72"> 72: </a>        <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n+1; i++) {
+<a name="line73"> 73: </a>          <font color="#4169E1">if</font> (sum == start) { i_start = i; <font color="#4169E1">goto</font> start_1;}
+<a name="line74"> 74: </a>          <font color="#4169E1">if</font> (i &lt; jac-&gt;n) sum += jac-&gt;g_lens[i];
+<a name="line75"> 75: </a>        }
+<a name="line76"> 76: </a>        <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_SIZ,<font color="#666666">"Block sizes used in <a href="../../../../../docs/manualpages/PC/PCBJacobiSetTotalBlocks.html#PCBJacobiSetTotalBlocks">PCBJacobiSetTotalBlocks</a>()\nare not compatible with parallel matrix layout"</font>);
+<a name="line77"> 77: </a><strong><font color="#FF0000">start_1:</font></strong>
+<a name="line78"> 78: </a>        <font color="#4169E1">for</font> (i=i_start; i&lt;jac-&gt;n+1; i++) {
+<a name="line79"> 79: </a>          <font color="#4169E1">if</font> (sum == end) { i_end = i; <font color="#4169E1">goto</font> end_1; }
+<a name="line80"> 80: </a>          <font color="#4169E1">if</font> (i &lt; jac-&gt;n) sum += jac-&gt;g_lens[i];
+<a name="line81"> 81: </a>        }
+<a name="line82"> 82: </a>        <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_SIZ,<font color="#666666">"Block sizes used in <a href="../../../../../docs/manualpages/PC/PCBJacobiSetTotalBlocks.html#PCBJacobiSetTotalBlocks">PCBJacobiSetTotalBlocks</a>()\nare not compatible with parallel matrix layout"</font>);
+<a name="line83"> 83: </a><strong><font color="#FF0000">end_1:</font></strong>
+<a name="line84"> 84: </a>        jac-&gt;n_local = i_end - i_start;
+<a name="line85"> 85: </a>        <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(jac-&gt;n_local,&amp;jac-&gt;l_lens);
+<a name="line86"> 86: </a>        <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(jac-&gt;l_lens,jac-&gt;g_lens+i_start,jac-&gt;n_local);
+<a name="line87"> 87: </a>      }
+<a name="line88"> 88: </a>    } <font color="#4169E1">else</font> { <font color="#B22222">/* no global blocks given, determine then using default layout */</font>
+<a name="line89"> 89: </a>      jac-&gt;n_local = jac-&gt;n/size + ((jac-&gt;n % size) &gt; rank);
+<a name="line90"> 90: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(jac-&gt;n_local,&amp;jac-&gt;l_lens);
+<a name="line91"> 91: </a>      <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n_local; i++) {
+<a name="line92"> 92: </a>        jac-&gt;l_lens[i] = ((M/bs)/jac-&gt;n_local + (((M/bs) % jac-&gt;n_local) &gt; i))*bs;
+<a name="line93"> 93: </a>        <font color="#4169E1">if</font> (!jac-&gt;l_lens[i]) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_SIZ,<font color="#666666">"Too many blocks given"</font>);
+<a name="line94"> 94: </a>      }
+<a name="line95"> 95: </a>    }
+<a name="line96"> 96: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (jac-&gt;n &lt; 0 &amp;&amp; jac-&gt;n_local &lt; 0) { <font color="#B22222">/* no blocks given */</font>
+<a name="line97"> 97: </a>    jac-&gt;n         = size;
+<a name="line98"> 98: </a>    jac-&gt;n_local   = 1;
+<a name="line99"> 99: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(1,&amp;jac-&gt;l_lens);
+<a name="line100">100: </a>    jac-&gt;l_lens[0] = M;
+<a name="line101">101: </a>  } <font color="#4169E1">else</font> { <font color="#B22222">/* jac-&gt;n &gt; 0 &amp;&amp; jac-&gt;n_local &gt; 0 */</font>
+<a name="line102">102: </a>    <font color="#4169E1">if</font> (!jac-&gt;l_lens) {
+<a name="line103">103: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(jac-&gt;n_local,&amp;jac-&gt;l_lens);
+<a name="line104">104: </a>      <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n_local; i++) jac-&gt;l_lens[i] = bs*((M/bs)/jac-&gt;n_local + (((M/bs) % jac-&gt;n_local) &gt; i));
+<a name="line105">105: </a>    }
+<a name="line106">106: </a>  }
+<a name="line107">107: </a>  <font color="#4169E1">if</font> (jac-&gt;n_local &lt; 1) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Number of blocks is less than number of processors"</font>);
+
+<a name="line109">109: </a>  <font color="#B22222">/* -------------------------</font>
+<a name="line110">110: </a><font color="#B22222">      Determines mat and pmat</font>
+<a name="line111">111: </a><font color="#B22222">  ---------------------------*/</font>
+<a name="line112">112: </a>  <a href="../../../../../docs/manualpages/Mat/MatHasOperation.html#MatHasOperation">MatHasOperation</a>(pc-&gt;mat,MATOP_GET_DIAGONAL_BLOCK,&amp;hasop);
+<a name="line113">113: </a>  <font color="#4169E1">if</font> (!hasop &amp;&amp; size == 1) {
+<a name="line114">114: </a>    mat  = pc-&gt;mat;
+<a name="line115">115: </a>    pmat = pc-&gt;pmat;
+<a name="line116">116: </a>  } <font color="#4169E1">else</font> {
+<a name="line117">117: </a>    <font color="#4169E1">if</font> (pc-&gt;useAmat) {
+<a name="line118">118: </a>      <font color="#B22222">/* use block from Amat matrix, not Pmat for local <a href="../../../../../docs/manualpages/Mat/MatMult.html#MatMult">MatMult</a>() */</font>
+<a name="line119">119: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetDiagonalBlock.html#MatGetDiagonalBlock">MatGetDiagonalBlock</a>(pc-&gt;mat,&amp;mat);
+<a name="line120">120: </a>      <font color="#B22222">/* make submatrix have same prefix as entire matrix */</font>
+<a name="line121">121: </a>      <a href="../../../../../docs/manualpages/Sys/PetscObjectGetOptionsPrefix.html#PetscObjectGetOptionsPrefix">PetscObjectGetOptionsPrefix</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc-&gt;mat,&amp;mprefix);
+<a name="line122">122: </a>      <a href="../../../../../docs/manualpages/Sys/PetscObjectSetOptionsPrefix.html#PetscObjectSetOptionsPrefix">PetscObjectSetOptionsPrefix</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat,mprefix);
+<a name="line123">123: </a>    }
+<a name="line124">124: </a>    <font color="#4169E1">if</font> (pc-&gt;pmat != pc-&gt;mat || !pc-&gt;useAmat) {
+<a name="line125">125: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetDiagonalBlock.html#MatGetDiagonalBlock">MatGetDiagonalBlock</a>(pc-&gt;pmat,&amp;pmat);
+<a name="line126">126: </a>      <font color="#B22222">/* make submatrix have same prefix as entire matrix */</font>
+<a name="line127">127: </a>      <a href="../../../../../docs/manualpages/Sys/PetscObjectGetOptionsPrefix.html#PetscObjectGetOptionsPrefix">PetscObjectGetOptionsPrefix</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc-&gt;pmat,&amp;pprefix);
+<a name="line128">128: </a>      <a href="../../../../../docs/manualpages/Sys/PetscObjectSetOptionsPrefix.html#PetscObjectSetOptionsPrefix">PetscObjectSetOptionsPrefix</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pmat,pprefix);
+<a name="line129">129: </a>    } <font color="#4169E1">else</font> pmat = mat;
+<a name="line130">130: </a>  }
+
+<a name="line132">132: </a>  <font color="#B22222">/* ------</font>
+<a name="line133">133: </a><font color="#B22222">     Setup code depends on the number of blocks</font>
+<a name="line134">134: </a><font color="#B22222">  */</font>
+<a name="line135">135: </a>  <font color="#4169E1">if</font> (jac-&gt;n_local == 1) {
+<a name="line136">136: </a>    PCSetUp_BJacobi_Singleblock(pc,mat,pmat);
+<a name="line137">137: </a>  } <font color="#4169E1">else</font> {
+<a name="line138">138: </a>    PCSetUp_BJacobi_Multiblock(pc,mat,pmat);
+<a name="line139">139: </a>  }
+<a name="line140">140: </a>  <font color="#4169E1">return</font>(0);
+<a name="line141">141: </a>}
+
+<a name="line143">143: </a><font color="#B22222">/* Default destroy, if it has never been setup */</font>
+<a name="line144">144: </a><strong><font color="#4169E1"><a name="PCDestroy_BJacobi"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCDestroy_BJacobi(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line145">145: </a>{
+<a name="line146">146: </a>  PC_BJacobi     *jac = (PC_BJacobi*)pc-&gt;data;
+
+<a name="line150">150: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(jac-&gt;g_lens);
+<a name="line151">151: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(jac-&gt;l_lens);
+<a name="line152">152: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pc-&gt;data);
+<a name="line153">153: </a>  <font color="#4169E1">return</font>(0);
+<a name="line154">154: </a>}
+
+
+<a name="line157">157: </a><strong><font color="#4169E1"><a name="PCSetFromOptions_BJacobi"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetFromOptions_BJacobi(PetscOptionItems *PetscOptionsObject,<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line158">158: </a>{
+<a name="line159">159: </a>  PC_BJacobi     *jac = (PC_BJacobi*)pc-&gt;data;
+<a name="line161">161: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>       blocks,i;
+<a name="line162">162: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>      flg;
+
+<a name="line165">165: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsHead.html#PetscOptionsHead">PetscOptionsHead</a>(PetscOptionsObject,<font color="#666666">"Block Jacobi options"</font>);
+<a name="line166">166: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-pc_bjacobi_blocks"</font>,<font color="#666666">"Total number of blocks"</font>,<font color="#666666">"<a href="../../../../../docs/manualpages/PC/PCBJacobiSetTotalBlocks.html#PCBJacobiSetTotalBlocks">PCBJacobiSetTotalBlocks</a>"</font>,jac-&gt;n,&amp;blocks,&amp;flg);
+<a name="line167">167: </a>  <font color="#4169E1">if</font> (flg) {<a href="../../../../../docs/manualpages/PC/PCBJacobiSetTotalBlocks.html#PCBJacobiSetTotalBlocks">PCBJacobiSetTotalBlocks</a>(pc,blocks,NULL);}
+<a name="line168">168: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsInt.html#PetscOptionsInt">PetscOptionsInt</a>(<font color="#666666">"-pc_bjacobi_local_blocks"</font>,<font color="#666666">"Local number of blocks"</font>,<font color="#666666">"<a href="../../../../../docs/manualpages/PC/PCBJacobiSetLocalBlocks.html#PCBJacobiSetLocalBlocks">PCBJacobiSetLocalBlocks</a>"</font>,jac-&gt;n_local,&amp;blocks,&amp;flg);
+<a name="line169">169: </a>  <font color="#4169E1">if</font> (flg) {<a href="../../../../../docs/manualpages/PC/PCBJacobiSetLocalBlocks.html#PCBJacobiSetLocalBlocks">PCBJacobiSetLocalBlocks</a>(pc,blocks,NULL);}
+<a name="line170">170: </a>  <font color="#4169E1">if</font> (jac-&gt;ksp) {
+<a name="line171">171: </a>    <font color="#B22222">/* The sub-<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> has already been set up (e.g., PCSetUp_BJacobi_Singleblock), but <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a> was not called</font>
+<a name="line172">172: </a><font color="#B22222">     * unless we had already been called. */</font>
+<a name="line173">173: </a>    <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n_local; i++) {
+<a name="line174">174: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(jac-&gt;ksp[i]);
+<a name="line175">175: </a>    }
+<a name="line176">176: </a>  }
+<a name="line177">177: </a>  <a href="../../../../../docs/manualpages/Sys/PetscOptionsTail.html#PetscOptionsTail">PetscOptionsTail</a>();
+<a name="line178">178: </a>  <font color="#4169E1">return</font>(0);
+<a name="line179">179: </a>}
+
+<a name="line181">181: </a> #include <A href="../../../../../include/petscdraw.h.html">&lt;petscdraw.h&gt;</A>
+<a name="line182">182: </a><strong><font color="#4169E1"><a name="PCView_BJacobi"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCView_BJacobi(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a> viewer)</font></strong>
+<a name="line183">183: </a>{
+<a name="line184">184: </a>  PC_BJacobi           *jac   = (PC_BJacobi*)pc-&gt;data;
+<a name="line185">185: </a>  PC_BJacobi_Multiproc *mpjac = (PC_BJacobi_Multiproc*)jac-&gt;data;
+<a name="line186">186: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>       ierr;
+<a name="line187">187: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>          rank;
+<a name="line188">188: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>             i;
+<a name="line189">189: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>            iascii,isstring,isdraw;
+<a name="line190">190: </a>  <a href="../../../../../docs/manualpages/Viewer/PetscViewer.html#PetscViewer">PetscViewer</a>          sviewer;
+
+<a name="line193">193: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../../docs/manualpages/Viewer/PETSCVIEWERASCII.html#PETSCVIEWERASCII">PETSCVIEWERASCII</a>,&amp;iascii);
+<a name="line194">194: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../../docs/manualpages/Viewer/PETSCVIEWERSTRING.html#PETSCVIEWERSTRING">PETSCVIEWERSTRING</a>,&amp;isstring);
+<a name="line195">195: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)viewer,<a href="../../../../../docs/manualpages/Viewer/PETSCVIEWERDRAW.html#PETSCVIEWERDRAW">PETSCVIEWERDRAW</a>,&amp;isdraw);
+<a name="line196">196: </a>  <font color="#4169E1">if</font> (iascii) {
+<a name="line197">197: </a>    <font color="#4169E1">if</font> (pc-&gt;useAmat) {
+<a name="line198">198: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  using Amat local matrix, number of blocks = %D\n"</font>,jac-&gt;n);
+<a name="line199">199: </a>    }
+<a name="line200">200: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  number of blocks = %D\n"</font>,jac-&gt;n);
+<a name="line201">201: </a>    <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),&amp;rank);
+<a name="line202">202: </a>    <font color="#4169E1">if</font> (jac-&gt;same_local_solves) {
+<a name="line203">203: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Local solve is same for all blocks, in the following <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> and <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> objects:\n"</font>);
+<a name="line204">204: </a>      <font color="#4169E1">if</font> (jac-&gt;ksp &amp;&amp; !jac-&gt;psubcomm) {
+<a name="line205">205: </a>        <a href="../../../../../docs/manualpages/Viewer/PetscViewerGetSubViewer.html#PetscViewerGetSubViewer">PetscViewerGetSubViewer</a>(viewer,<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;sviewer);
+<a name="line206">206: </a>        <font color="#4169E1">if</font> (!rank) {
+<a name="line207">207: </a>          <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPushTab.html#PetscViewerASCIIPushTab">PetscViewerASCIIPushTab</a>(viewer);
+<a name="line208">208: </a>          <a href="../../../../../docs/manualpages/KSP/KSPView.html#KSPView">KSPView</a>(jac-&gt;ksp[0],sviewer);
+<a name="line209">209: </a>          <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPopTab.html#PetscViewerASCIIPopTab">PetscViewerASCIIPopTab</a>(viewer);
+<a name="line210">210: </a>        }
+<a name="line211">211: </a>        <a href="../../../../../docs/manualpages/Viewer/PetscViewerRestoreSubViewer.html#PetscViewerRestoreSubViewer">PetscViewerRestoreSubViewer</a>(viewer,<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;sviewer);
+<a name="line212">212: </a>      } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (mpjac &amp;&amp; jac-&gt;ksp &amp;&amp; mpjac-&gt;psubcomm) {
+<a name="line213">213: </a>        <a href="../../../../../docs/manualpages/Viewer/PetscViewerGetSubViewer.html#PetscViewerGetSubViewer">PetscViewerGetSubViewer</a>(viewer,mpjac-&gt;psubcomm-&gt;child,&amp;sviewer);
+<a name="line214">214: </a>        <font color="#4169E1">if</font> (!mpjac-&gt;psubcomm-&gt;color) {
+<a name="line215">215: </a>          <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPushTab.html#PetscViewerASCIIPushTab">PetscViewerASCIIPushTab</a>(viewer);
+<a name="line216">216: </a>          <a href="../../../../../docs/manualpages/KSP/KSPView.html#KSPView">KSPView</a>(*(jac-&gt;ksp),sviewer);
+<a name="line217">217: </a>          <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPopTab.html#PetscViewerASCIIPopTab">PetscViewerASCIIPopTab</a>(viewer);
+<a name="line218">218: </a>        }
+<a name="line219">219: </a>        <a href="../../../../../docs/manualpages/Viewer/PetscViewerRestoreSubViewer.html#PetscViewerRestoreSubViewer">PetscViewerRestoreSubViewer</a>(viewer,mpjac-&gt;psubcomm-&gt;child,&amp;sviewer);
+<a name="line220">220: </a>      }
+<a name="line221">221: </a>    } <font color="#4169E1">else</font> {
+<a name="line222">222: </a>      <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> n_global;
+<a name="line223">223: </a>      <a href="../../../../../docs/manualpages/Sys/MPIU_Allreduce.html#MPIU_Allreduce">MPIU_Allreduce</a>(&amp;jac-&gt;n_local,&amp;n_global,1,<a href="../../../../../docs/manualpages/Sys/MPIU_INT.html#MPIU_INT">MPIU_INT</a>,MPI_MAX,<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc));
+<a name="line224">224: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPushSynchronized.html#PetscViewerASCIIPushSynchronized">PetscViewerASCIIPushSynchronized</a>(viewer);
+<a name="line225">225: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPrintf.html#PetscViewerASCIIPrintf">PetscViewerASCIIPrintf</a>(viewer,<font color="#666666">"  Local solve info for each block is in the following <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> and <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> objects:\n"</font>);
+<a name="line226">226: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"[%d] number of local blocks = %D, first local block number = %D\n"</font>,
+<a name="line227">227: </a>                                                rank,jac-&gt;n_local,jac-&gt;first_local);
+<a name="line228">228: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPushTab.html#PetscViewerASCIIPushTab">PetscViewerASCIIPushTab</a>(viewer);
+<a name="line229">229: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerGetSubViewer.html#PetscViewerGetSubViewer">PetscViewerGetSubViewer</a>(viewer,<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;sviewer);
+<a name="line230">230: </a>      <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n_local; i++) {
+<a name="line231">231: </a>        <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"[%d] local block number %D\n"</font>,rank,i);
+<a name="line232">232: </a>        <a href="../../../../../docs/manualpages/KSP/KSPView.html#KSPView">KSPView</a>(jac-&gt;ksp[i],sviewer);
+<a name="line233">233: </a>        <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIISynchronizedPrintf.html#PetscViewerASCIISynchronizedPrintf">PetscViewerASCIISynchronizedPrintf</a>(viewer,<font color="#666666">"- - - - - - - - - - - - - - - - - -\n"</font>);
+<a name="line234">234: </a>      }
+<a name="line235">235: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerRestoreSubViewer.html#PetscViewerRestoreSubViewer">PetscViewerRestoreSubViewer</a>(viewer,<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;sviewer);
+<a name="line236">236: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPopTab.html#PetscViewerASCIIPopTab">PetscViewerASCIIPopTab</a>(viewer);
+<a name="line237">237: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerFlush.html#PetscViewerFlush">PetscViewerFlush</a>(viewer);
+<a name="line238">238: </a>      <a href="../../../../../docs/manualpages/Viewer/PetscViewerASCIIPopSynchronized.html#PetscViewerASCIIPopSynchronized">PetscViewerASCIIPopSynchronized</a>(viewer);
+<a name="line239">239: </a>    }
+<a name="line240">240: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isstring) {
+<a name="line241">241: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerStringSPrintf.html#PetscViewerStringSPrintf">PetscViewerStringSPrintf</a>(viewer,<font color="#666666">" blks=%D"</font>,jac-&gt;n);
+<a name="line242">242: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerGetSubViewer.html#PetscViewerGetSubViewer">PetscViewerGetSubViewer</a>(viewer,<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;sviewer);
+<a name="line243">243: </a>    <font color="#4169E1">if</font> (jac-&gt;ksp) {<a href="../../../../../docs/manualpages/KSP/KSPView.html#KSPView">KSPView</a>(jac-&gt;ksp[0],sviewer);}
+<a name="line244">244: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerRestoreSubViewer.html#PetscViewerRestoreSubViewer">PetscViewerRestoreSubViewer</a>(viewer,<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;sviewer);
+<a name="line245">245: </a>  } <font color="#4169E1">else</font> <font color="#4169E1">if</font> (isdraw) {
+<a name="line246">246: </a>    <a href="../../../../../docs/manualpages/Draw/PetscDraw.html#PetscDraw">PetscDraw</a> draw;
+<a name="line247">247: </a>    char      str[25];
+<a name="line248">248: </a>    <a href="../../../../../docs/manualpages/Sys/PetscReal.html#PetscReal">PetscReal</a> x,y,bottom,h;
+
+<a name="line250">250: </a>    <a href="../../../../../docs/manualpages/Viewer/PetscViewerDrawGetDraw.html#PetscViewerDrawGetDraw">PetscViewerDrawGetDraw</a>(viewer,0,&amp;draw);
+<a name="line251">251: </a>    <a href="../../../../../docs/manualpages/Draw/PetscDrawGetCurrentPoint.html#PetscDrawGetCurrentPoint">PetscDrawGetCurrentPoint</a>(draw,&amp;x,&amp;y);
+<a name="line252">252: </a>    <a href="../../../../../docs/manualpages/Sys/PetscSNPrintf.html#PetscSNPrintf">PetscSNPrintf</a>(str,25,<font color="#666666">"Number blocks %D"</font>,jac-&gt;n);
+<a name="line253">253: </a>    <a href="../../../../../docs/manualpages/Draw/PetscDrawStringBoxed.html#PetscDrawStringBoxed">PetscDrawStringBoxed</a>(draw,x,y,PETSC_DRAW_RED,PETSC_DRAW_BLACK,str,NULL,&amp;h);
+<a name="line254">254: </a>    bottom = y - h;
+<a name="line255">255: </a>    <a href="../../../../../docs/manualpages/Draw/PetscDrawPushCurrentPoint.html#PetscDrawPushCurrentPoint">PetscDrawPushCurrentPoint</a>(draw,x,bottom);
+<a name="line256">256: </a>    <font color="#B22222">/* warning the communicator on viewer is different then on ksp in parallel */</font>
+<a name="line257">257: </a>    <font color="#4169E1">if</font> (jac-&gt;ksp) {<a href="../../../../../docs/manualpages/KSP/KSPView.html#KSPView">KSPView</a>(jac-&gt;ksp[0],viewer);}
+<a name="line258">258: </a>    <a href="../../../../../docs/manualpages/Draw/PetscDrawPopCurrentPoint.html#PetscDrawPopCurrentPoint">PetscDrawPopCurrentPoint</a>(draw);
+<a name="line259">259: </a>  }
+<a name="line260">260: </a>  <font color="#4169E1">return</font>(0);
+<a name="line261">261: </a>}
+
+<a name="line263">263: </a><font color="#B22222">/* -------------------------------------------------------------------------------------*/</font>
+
+<a name="line265">265: </a><strong><font color="#4169E1"><a name="PCBJacobiGetSubKSP_BJacobi"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  PCBJacobiGetSubKSP_BJacobi(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *n_local,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *first_local,<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> **ksp)</font></strong>
+<a name="line266">266: </a>{
+<a name="line267">267: </a>  PC_BJacobi *jac = (PC_BJacobi*)pc-&gt;data;
+
+<a name="line270">270: </a>  <font color="#4169E1">if</font> (!pc-&gt;setupcalled) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),PETSC_ERR_ARG_WRONGSTATE,<font color="#666666">"Must call <a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>() or <a href="../../../../../docs/manualpages/PC/PCSetUp.html#PCSetUp">PCSetUp</a>() first"</font>);
+
+<a name="line272">272: </a>  <font color="#4169E1">if</font> (n_local) *n_local = jac-&gt;n_local;
+<a name="line273">273: </a>  <font color="#4169E1">if</font> (first_local) *first_local = jac-&gt;first_local;
+<a name="line274">274: </a>  *ksp                   = jac-&gt;ksp;
+<a name="line275">275: </a>  jac-&gt;same_local_solves = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;        <font color="#B22222">/* Assume that local solves are now different;</font>
+<a name="line276">276: </a><font color="#B22222">                                                  not necessarily true though!  This flag is</font>
+<a name="line277">277: </a><font color="#B22222">                                                  used only for PCView_BJacobi() */</font>
+<a name="line278">278: </a>  <font color="#4169E1">return</font>(0);
+<a name="line279">279: </a>}
+
+<a name="line281">281: </a><strong><font color="#4169E1"><a name="PCBJacobiSetTotalBlocks_BJacobi"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  PCBJacobiSetTotalBlocks_BJacobi(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> blocks,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *lens)</font></strong>
+<a name="line282">282: </a>{
+<a name="line283">283: </a>  PC_BJacobi     *jac = (PC_BJacobi*)pc-&gt;data;
+
+<a name="line287">287: </a>  <font color="#4169E1">if</font> (pc-&gt;setupcalled &gt; 0 &amp;&amp; jac-&gt;n!=blocks) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),PETSC_ERR_ORDER,<font color="#666666">"Cannot alter number of blocks after <a href="../../../../../docs/manualpages/PC/PCSetUp.html#PCSetUp">PCSetUp</a>()/<a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>() has been called"</font>);
+<a name="line288">288: </a>  jac-&gt;n = blocks;
+<a name="line289">289: </a>  <font color="#4169E1">if</font> (!lens) jac-&gt;g_lens = 0;
+<a name="line290">290: </a>  <font color="#4169E1">else</font> {
+<a name="line291">291: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(blocks,&amp;jac-&gt;g_lens);
+<a name="line292">292: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,blocks*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>));
+<a name="line293">293: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(jac-&gt;g_lens,lens,blocks);
+<a name="line294">294: </a>  }
+<a name="line295">295: </a>  <font color="#4169E1">return</font>(0);
+<a name="line296">296: </a>}
+
+<a name="line298">298: </a><strong><font color="#4169E1"><a name="PCBJacobiGetTotalBlocks_BJacobi"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  PCBJacobiGetTotalBlocks_BJacobi(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc, <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *blocks, const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *lens[])</font></strong>
+<a name="line299">299: </a>{
+<a name="line300">300: </a>  PC_BJacobi *jac = (PC_BJacobi*) pc-&gt;data;
+
+<a name="line303">303: </a>  *blocks = jac-&gt;n;
+<a name="line304">304: </a>  <font color="#4169E1">if</font> (lens) *lens = jac-&gt;g_lens;
+<a name="line305">305: </a>  <font color="#4169E1">return</font>(0);
+<a name="line306">306: </a>}
+
+<a name="line308">308: </a><strong><font color="#4169E1"><a name="PCBJacobiSetLocalBlocks_BJacobi"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  PCBJacobiSetLocalBlocks_BJacobi(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> blocks,const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> lens[])</font></strong>
+<a name="line309">309: </a>{
+<a name="line310">310: </a>  PC_BJacobi     *jac;
+
+<a name="line314">314: </a>  jac = (PC_BJacobi*)pc-&gt;data;
+
+<a name="line316">316: </a>  jac-&gt;n_local = blocks;
+<a name="line317">317: </a>  <font color="#4169E1">if</font> (!lens) jac-&gt;l_lens = 0;
+<a name="line318">318: </a>  <font color="#4169E1">else</font> {
+<a name="line319">319: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(blocks,&amp;jac-&gt;l_lens);
+<a name="line320">320: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,blocks*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>));
+<a name="line321">321: </a>    <a href="../../../../../docs/manualpages/Sys/PetscArraycpy.html#PetscArraycpy">PetscArraycpy</a>(jac-&gt;l_lens,lens,blocks);
+<a name="line322">322: </a>  }
+<a name="line323">323: </a>  <font color="#4169E1">return</font>(0);
+<a name="line324">324: </a>}
+
+<a name="line326">326: </a><strong><font color="#4169E1"><a name="PCBJacobiGetLocalBlocks_BJacobi"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  PCBJacobiGetLocalBlocks_BJacobi(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc, <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *blocks, const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *lens[])</font></strong>
+<a name="line327">327: </a>{
+<a name="line328">328: </a>  PC_BJacobi *jac = (PC_BJacobi*) pc-&gt;data;
+
+<a name="line331">331: </a>  *blocks = jac-&gt;n_local;
+<a name="line332">332: </a>  <font color="#4169E1">if</font> (lens) *lens = jac-&gt;l_lens;
+<a name="line333">333: </a>  <font color="#4169E1">return</font>(0);
+<a name="line334">334: </a>}
+
+<a name="line336">336: </a><font color="#B22222">/* -------------------------------------------------------------------------------------*/</font>
+
+<a name="line338">338: </a><font color="#B22222">/*@C</font>
+<a name="line339">339: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCBJacobiGetSubKSP.html#PCBJacobiGetSubKSP">PCBJacobiGetSubKSP</a> - Gets the local <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> contexts for all blocks on</font>
+<a name="line340">340: </a><font color="#B22222">   this processor.</font>
+
+<a name="line342">342: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line344">344: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line345">345: </a><font color="#B22222">.  pc - the preconditioner context</font>
+
+<a name="line347">347: </a><font color="#B22222">   Output Parameters:</font>
+<a name="line348">348: </a><font color="#B22222">+  n_local - the number of blocks on this processor, or NULL</font>
+<a name="line349">349: </a><font color="#B22222">.  first_local - the global number of the first block on this processor, or NULL</font>
+<a name="line350">350: </a><font color="#B22222">-  ksp - the array of <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> contexts</font>
+
+<a name="line352">352: </a><font color="#B22222">   Notes:</font>
+<a name="line353">353: </a><font color="#B22222">   After <a href="../../../../../docs/manualpages/PC/PCBJacobiGetSubKSP.html#PCBJacobiGetSubKSP">PCBJacobiGetSubKSP</a>() the array of <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> contexts is not to be freed.</font>
+
+<a name="line355">355: </a><font color="#B22222">   Currently for some matrix implementations only 1 block per processor</font>
+<a name="line356">356: </a><font color="#B22222">   is supported.</font>
+
+<a name="line358">358: </a><font color="#B22222">   You must call <a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>() or <a href="../../../../../docs/manualpages/PC/PCSetUp.html#PCSetUp">PCSetUp</a>() before calling <a href="../../../../../docs/manualpages/PC/PCBJacobiGetSubKSP.html#PCBJacobiGetSubKSP">PCBJacobiGetSubKSP</a>().</font>
+
+<a name="line360">360: </a><font color="#B22222">   Fortran Usage: You must pass in a <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> array that is large enough to contain all the local KSPs.</font>
+<a name="line361">361: </a><font color="#B22222">      You can call <a href="../../../../../docs/manualpages/PC/PCBJacobiGetSubKSP.html#PCBJacobiGetSubKSP">PCBJacobiGetSubKSP</a>(pc,nlocal,firstlocal,PETSC_NULL_KSP,ierr) to determine how large the</font>
+<a name="line362">362: </a><font color="#B22222">      <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> array must be.</font>
+
+<a name="line364">364: </a><font color="#B22222">   Level: advanced</font>
+
+<a name="line366">366: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/PC/PCBJacobiGetSubKSP.html#PCBJacobiGetSubKSP">PCBJacobiGetSubKSP</a>()</font>
+<a name="line367">367: </a><font color="#B22222">@*/</font>
+<a name="line368">368: </a><strong><font color="#4169E1"><a name="PCBJacobiGetSubKSP"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../../docs/manualpages/PC/PCBJacobiGetSubKSP.html#PCBJacobiGetSubKSP">PCBJacobiGetSubKSP</a>(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *n_local,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *first_local,<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> *ksp[])</font></strong>
+<a name="line369">369: </a>{
+
+<a name="line374">374: </a>  PetscUseMethod(pc,<font color="#666666">"PCBJacobiGetSubKSP_C"</font>,(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*,<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> **),(pc,n_local,first_local,ksp));
+<a name="line375">375: </a>  <font color="#4169E1">return</font>(0);
+<a name="line376">376: </a>}
+
+<a name="line378">378: </a><font color="#B22222">/*@</font>
+<a name="line379">379: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCBJacobiSetTotalBlocks.html#PCBJacobiSetTotalBlocks">PCBJacobiSetTotalBlocks</a> - Sets the global number of blocks for the block</font>
+<a name="line380">380: </a><font color="#B22222">   Jacobi preconditioner.</font>
+
+<a name="line382">382: </a><font color="#B22222">   Collective on <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a></font>
+
+<a name="line384">384: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line385">385: </a><font color="#B22222">+  pc - the preconditioner context</font>
+<a name="line386">386: </a><font color="#B22222">.  blocks - the number of blocks</font>
+<a name="line387">387: </a><font color="#B22222">-  lens - [optional] integer array containing the size of each block</font>
+
+<a name="line389">389: </a><font color="#B22222">   Options Database Key:</font>
+<a name="line390">390: </a><font color="#B22222">.  -pc_bjacobi_blocks &lt;blocks&gt; - Sets the number of global blocks</font>
+
+<a name="line392">392: </a><font color="#B22222">   Notes:</font>
+<a name="line393">393: </a><font color="#B22222">   Currently only a limited number of blocking configurations are supported.</font>
+<a name="line394">394: </a><font color="#B22222">   All processors sharing the <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> must call this routine with the same data.</font>
+
+<a name="line396">396: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line398">398: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/PC/PCSetUseAmat.html#PCSetUseAmat">PCSetUseAmat</a>(), <a href="../../../../../docs/manualpages/PC/PCBJacobiSetLocalBlocks.html#PCBJacobiSetLocalBlocks">PCBJacobiSetLocalBlocks</a>()</font>
+<a name="line399">399: </a><font color="#B22222">@*/</font>
+<a name="line400">400: </a><strong><font color="#4169E1"><a name="PCBJacobiSetTotalBlocks"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../../docs/manualpages/PC/PCBJacobiSetTotalBlocks.html#PCBJacobiSetTotalBlocks">PCBJacobiSetTotalBlocks</a>(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> blocks,const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> lens[])</font></strong>
+<a name="line401">401: </a>{
+
+<a name="line406">406: </a>  <font color="#4169E1">if</font> (blocks &lt;= 0) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Must have positive blocks"</font>);
+<a name="line407">407: </a>  PetscTryMethod(pc,<font color="#666666">"PCBJacobiSetTotalBlocks_C"</font>,(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>[]),(pc,blocks,lens));
+<a name="line408">408: </a>  <font color="#4169E1">return</font>(0);
+<a name="line409">409: </a>}
+
+<a name="line411">411: </a><font color="#B22222">/*@C</font>
+<a name="line412">412: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCBJacobiGetTotalBlocks.html#PCBJacobiGetTotalBlocks">PCBJacobiGetTotalBlocks</a> - Gets the global number of blocks for the block</font>
+<a name="line413">413: </a><font color="#B22222">   Jacobi preconditioner.</font>
+
+<a name="line415">415: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line417">417: </a><font color="#B22222">   Input Parameter:</font>
+<a name="line418">418: </a><font color="#B22222">.  pc - the preconditioner context</font>
+
+<a name="line420">420: </a><font color="#B22222">   Output parameters:</font>
+<a name="line421">421: </a><font color="#B22222">+  blocks - the number of blocks</font>
+<a name="line422">422: </a><font color="#B22222">-  lens - integer array containing the size of each block</font>
+
+<a name="line424">424: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line426">426: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/PC/PCSetUseAmat.html#PCSetUseAmat">PCSetUseAmat</a>(), <a href="../../../../../docs/manualpages/PC/PCBJacobiGetLocalBlocks.html#PCBJacobiGetLocalBlocks">PCBJacobiGetLocalBlocks</a>()</font>
+<a name="line427">427: </a><font color="#B22222">@*/</font>
+<a name="line428">428: </a><strong><font color="#4169E1"><a name="PCBJacobiGetTotalBlocks"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../../docs/manualpages/PC/PCBJacobiGetTotalBlocks.html#PCBJacobiGetTotalBlocks">PCBJacobiGetTotalBlocks</a>(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc, <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *blocks, const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *lens[])</font></strong>
+<a name="line429">429: </a>{
+
+<a name="line435">435: </a>  PetscUseMethod(pc,<font color="#666666">"PCBJacobiGetTotalBlocks_C"</font>,(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*, const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *[]),(pc,blocks,lens));
+<a name="line436">436: </a>  <font color="#4169E1">return</font>(0);
+<a name="line437">437: </a>}
+
+<a name="line439">439: </a><font color="#B22222">/*@</font>
+<a name="line440">440: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCBJacobiSetLocalBlocks.html#PCBJacobiSetLocalBlocks">PCBJacobiSetLocalBlocks</a> - Sets the local number of blocks for the block</font>
+<a name="line441">441: </a><font color="#B22222">   Jacobi preconditioner.</font>
+
+<a name="line443">443: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line445">445: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line446">446: </a><font color="#B22222">+  pc - the preconditioner context</font>
+<a name="line447">447: </a><font color="#B22222">.  blocks - the number of blocks</font>
+<a name="line448">448: </a><font color="#B22222">-  lens - [optional] integer array containing size of each block</font>
+
+<a name="line450">450: </a><font color="#B22222">   Options Database Key:</font>
+<a name="line451">451: </a><font color="#B22222">.  -pc_bjacobi_local_blocks &lt;blocks&gt; - Sets the number of local blocks</font>
+
+<a name="line453">453: </a><font color="#B22222">   Note:</font>
+<a name="line454">454: </a><font color="#B22222">   Currently only a limited number of blocking configurations are supported.</font>
+
+<a name="line456">456: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line458">458: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/PC/PCSetUseAmat.html#PCSetUseAmat">PCSetUseAmat</a>(), <a href="../../../../../docs/manualpages/PC/PCBJacobiSetTotalBlocks.html#PCBJacobiSetTotalBlocks">PCBJacobiSetTotalBlocks</a>()</font>
+<a name="line459">459: </a><font color="#B22222">@*/</font>
+<a name="line460">460: </a><strong><font color="#4169E1"><a name="PCBJacobiSetLocalBlocks"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../../docs/manualpages/PC/PCBJacobiSetLocalBlocks.html#PCBJacobiSetLocalBlocks">PCBJacobiSetLocalBlocks</a>(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> blocks,const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> lens[])</font></strong>
+<a name="line461">461: </a>{
+
+<a name="line466">466: </a>  <font color="#4169E1">if</font> (blocks &lt; 0) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Must have nonegative blocks"</font>);
+<a name="line467">467: </a>  PetscTryMethod(pc,<font color="#666666">"PCBJacobiSetLocalBlocks_C"</font>,(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>,const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> []),(pc,blocks,lens));
+<a name="line468">468: </a>  <font color="#4169E1">return</font>(0);
+<a name="line469">469: </a>}
+
+<a name="line471">471: </a><font color="#B22222">/*@C</font>
+<a name="line472">472: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCBJacobiGetLocalBlocks.html#PCBJacobiGetLocalBlocks">PCBJacobiGetLocalBlocks</a> - Gets the local number of blocks for the block</font>
+<a name="line473">473: </a><font color="#B22222">   Jacobi preconditioner.</font>
+
+<a name="line475">475: </a><font color="#B22222">   Not Collective</font>
+
+<a name="line477">477: </a><font color="#B22222">   Input Parameters:</font>
+<a name="line478">478: </a><font color="#B22222">+  pc - the preconditioner context</font>
+<a name="line479">479: </a><font color="#B22222">.  blocks - the number of blocks</font>
+<a name="line480">480: </a><font color="#B22222">-  lens - [optional] integer array containing size of each block</font>
+
+<a name="line482">482: </a><font color="#B22222">   Note:</font>
+<a name="line483">483: </a><font color="#B22222">   Currently only a limited number of blocking configurations are supported.</font>
+
+<a name="line485">485: </a><font color="#B22222">   Level: intermediate</font>
+
+<a name="line487">487: </a><font color="#B22222">.seealso: <a href="../../../../../docs/manualpages/PC/PCSetUseAmat.html#PCSetUseAmat">PCSetUseAmat</a>(), <a href="../../../../../docs/manualpages/PC/PCBJacobiGetTotalBlocks.html#PCBJacobiGetTotalBlocks">PCBJacobiGetTotalBlocks</a>()</font>
+<a name="line488">488: </a><font color="#B22222">@*/</font>
+<a name="line489">489: </a><strong><font color="#4169E1"><a name="PCBJacobiGetLocalBlocks"></a><a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>  <a href="../../../../../docs/manualpages/PC/PCBJacobiGetLocalBlocks.html#PCBJacobiGetLocalBlocks">PCBJacobiGetLocalBlocks</a>(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc, <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *blocks, const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *lens[])</font></strong>
+<a name="line490">490: </a>{
+
+<a name="line496">496: </a>  PetscUseMethod(pc,<font color="#666666">"PCBJacobiGetLocalBlocks_C"</font>,(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,<a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>*, const <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a> *[]),(pc,blocks,lens));
+<a name="line497">497: </a>  <font color="#4169E1">return</font>(0);
+<a name="line498">498: </a>}
+
+<a name="line500">500: </a><font color="#B22222">/* -----------------------------------------------------------------------------------*/</font>
+
+<a name="line502">502: </a><font color="#B22222">/*MC</font>
+<a name="line503">503: </a><font color="#B22222">   <a href="../../../../../docs/manualpages/PC/PCBJACOBI.html#PCBJACOBI">PCBJACOBI</a> - Use block Jacobi preconditioning, each block is (approximately) solved with</font>
+<a name="line504">504: </a><font color="#B22222">           its own <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> object.</font>
+
+<a name="line506">506: </a><font color="#B22222">   Options Database Keys:</font>
+<a name="line507">507: </a><font color="#B22222">+  -pc_use_amat - use Amat to apply block of operator in inner Krylov method</font>
+<a name="line508">508: </a><font color="#B22222">-  -pc_bjacobi_blocks &lt;n&gt; - use n total blocks</font>
+
+<a name="line510">510: </a><font color="#B22222">   Notes:</font>
+<a name="line511">511: </a><font color="#B22222">    Each processor can have one or more blocks, or a single block can be shared by several processes. Defaults to one block per processor.</font>
+
+<a name="line513">513: </a><font color="#B22222">     To set options on the solvers for each block append -sub_ to all the <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>, <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>, and <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a></font>
+<a name="line514">514: </a><font color="#B22222">        options database keys. For example, -sub_pc_type ilu -sub_pc_factor_levels 1 -sub_ksp_type preonly</font>
+
+<a name="line516">516: </a><font color="#B22222">     To set the options on the solvers separate for each block call <a href="../../../../../docs/manualpages/PC/PCBJacobiGetSubKSP.html#PCBJacobiGetSubKSP">PCBJacobiGetSubKSP</a>()</font>
+<a name="line517">517: </a><font color="#B22222">         and set the options directly on the resulting <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> object (you can access its <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a></font>
+<a name="line518">518: </a><font color="#B22222">         <a href="../../../../../docs/manualpages/KSP/KSPGetPC.html#KSPGetPC">KSPGetPC</a>())</font>
+
+<a name="line520">520: </a><font color="#B22222">     For GPU-based vectors (CUDA, ViennaCL) it is recommended to use exactly one block per MPI process for best</font>
+<a name="line521">521: </a><font color="#B22222">         performance.  Different block partitioning may lead to additional data transfers</font>
+<a name="line522">522: </a><font color="#B22222">         between host and GPU that lead to degraded performance.</font>
+
+<a name="line524">524: </a><font color="#B22222">     The options prefix for each block is sub_, for example -sub_pc_type lu.</font>
+
+<a name="line526">526: </a><font color="#B22222">     When multiple processes share a single block, each block encompasses exactly all the unknowns owned its set of processes.</font>
+
+<a name="line528">528: </a><font color="#B22222">   Level: beginner</font>
+
+<a name="line530">530: </a><font color="#B22222">.seealso:  <a href="../../../../../docs/manualpages/PC/PCCreate.html#PCCreate">PCCreate</a>(), <a href="../../../../../docs/manualpages/PC/PCSetType.html#PCSetType">PCSetType</a>(), <a href="../../../../../docs/manualpages/PC/PCType.html#PCType">PCType</a> (for list of available types), <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>,</font>
+<a name="line531">531: </a><font color="#B22222">           <a href="../../../../../docs/manualpages/PC/PCASM.html#PCASM">PCASM</a>, <a href="../../../../../docs/manualpages/PC/PCSetUseAmat.html#PCSetUseAmat">PCSetUseAmat</a>(), <a href="../../../../../docs/manualpages/PC/PCGetUseAmat.html#PCGetUseAmat">PCGetUseAmat</a>(), <a href="../../../../../docs/manualpages/PC/PCBJacobiGetSubKSP.html#PCBJacobiGetSubKSP">PCBJacobiGetSubKSP</a>(), <a href="../../../../../docs/manualpages/PC/PCBJacobiSetTotalBlocks.html#PCBJacobiSetTotalBlocks">PCBJacobiSetTotalBlocks</a>(),</font>
+<a name="line532">532: </a><font color="#B22222">           <a href="../../../../../docs/manualpages/PC/PCBJacobiSetLocalBlocks.html#PCBJacobiSetLocalBlocks">PCBJacobiSetLocalBlocks</a>(), <a href="../../../../../docs/manualpages/PC/PCSetModifySubMatrices.html#PCSetModifySubMatrices">PCSetModifySubMatrices</a>()</font>
+<a name="line533">533: </a><font color="#B22222">M*/</font>
+
+<a name="line535">535: </a><strong><font color="#4169E1"><a name="PCCreate_BJacobi"></a>PETSC_EXTERN <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCCreate_BJacobi(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line536">536: </a>{
+<a name="line538">538: </a>  <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a>    rank;
+<a name="line539">539: </a>  PC_BJacobi     *jac;
+
+<a name="line542">542: </a>  <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(pc,&amp;jac);
+<a name="line543">543: </a>  <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),&amp;rank);
+
+<a name="line545">545: </a>  pc-&gt;ops-&gt;apply           = 0;
+<a name="line546">546: </a>  pc-&gt;ops-&gt;applytranspose  = 0;
+<a name="line547">547: </a>  pc-&gt;ops-&gt;setup           = PCSetUp_BJacobi;
+<a name="line548">548: </a>  pc-&gt;ops-&gt;destroy         = PCDestroy_BJacobi;
+<a name="line549">549: </a>  pc-&gt;ops-&gt;setfromoptions  = PCSetFromOptions_BJacobi;
+<a name="line550">550: </a>  pc-&gt;ops-&gt;view            = PCView_BJacobi;
+<a name="line551">551: </a>  pc-&gt;ops-&gt;applyrichardson = 0;
+
+<a name="line553">553: </a>  pc-&gt;data               = (void*)jac;
+<a name="line554">554: </a>  jac-&gt;n                 = -1;
+<a name="line555">555: </a>  jac-&gt;n_local           = -1;
+<a name="line556">556: </a>  jac-&gt;first_local       = rank;
+<a name="line557">557: </a>  jac-&gt;ksp               = 0;
+<a name="line558">558: </a>  jac-&gt;same_local_solves = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line559">559: </a>  jac-&gt;g_lens            = 0;
+<a name="line560">560: </a>  jac-&gt;l_lens            = 0;
+<a name="line561">561: </a>  jac-&gt;psubcomm          = 0;
+
+<a name="line563">563: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#666666">"PCBJacobiGetSubKSP_C"</font>,PCBJacobiGetSubKSP_BJacobi);
+<a name="line564">564: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#666666">"PCBJacobiSetTotalBlocks_C"</font>,PCBJacobiSetTotalBlocks_BJacobi);
+<a name="line565">565: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#666666">"PCBJacobiGetTotalBlocks_C"</font>,PCBJacobiGetTotalBlocks_BJacobi);
+<a name="line566">566: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#666666">"PCBJacobiSetLocalBlocks_C"</font>,PCBJacobiSetLocalBlocks_BJacobi);
+<a name="line567">567: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectComposeFunction.html#PetscObjectComposeFunction">PetscObjectComposeFunction</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#666666">"PCBJacobiGetLocalBlocks_C"</font>,PCBJacobiGetLocalBlocks_BJacobi);
+<a name="line568">568: </a>  <font color="#4169E1">return</font>(0);
+<a name="line569">569: </a>}
+
+<a name="line571">571: </a><font color="#B22222">/* --------------------------------------------------------------------------------------------*/</font>
+<a name="line572">572: </a><font color="#B22222">/*</font>
+<a name="line573">573: </a><font color="#B22222">        These are for a single block per processor; works for AIJ, BAIJ; Seq and MPI</font>
+<a name="line574">574: </a><font color="#B22222">*/</font>
+<a name="line575">575: </a><strong><font color="#4169E1"><a name="PCReset_BJacobi_Singleblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCReset_BJacobi_Singleblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line576">576: </a>{
+<a name="line577">577: </a>  PC_BJacobi             *jac  = (PC_BJacobi*)pc-&gt;data;
+<a name="line578">578: </a>  PC_BJacobi_Singleblock *bjac = (PC_BJacobi_Singleblock*)jac-&gt;data;
+<a name="line579">579: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+
+<a name="line582">582: </a>  <a href="../../../../../docs/manualpages/KSP/KSPReset.html#KSPReset">KSPReset</a>(jac-&gt;ksp[0]);
+<a name="line583">583: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;bjac-&gt;x);
+<a name="line584">584: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;bjac-&gt;y);
+<a name="line585">585: </a>  <font color="#4169E1">return</font>(0);
+<a name="line586">586: </a>}
+
+<a name="line588">588: </a><strong><font color="#4169E1"><a name="PCDestroy_BJacobi_Singleblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCDestroy_BJacobi_Singleblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line589">589: </a>{
+<a name="line590">590: </a>  PC_BJacobi             *jac  = (PC_BJacobi*)pc-&gt;data;
+<a name="line591">591: </a>  PC_BJacobi_Singleblock *bjac = (PC_BJacobi_Singleblock*)jac-&gt;data;
+<a name="line592">592: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+
+<a name="line595">595: </a>  PCReset_BJacobi_Singleblock(pc);
+<a name="line596">596: </a>  <a href="../../../../../docs/manualpages/KSP/KSPDestroy.html#KSPDestroy">KSPDestroy</a>(&amp;jac-&gt;ksp[0]);
+<a name="line597">597: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(jac-&gt;ksp);
+<a name="line598">598: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(jac-&gt;l_lens);
+<a name="line599">599: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(jac-&gt;g_lens);
+<a name="line600">600: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(bjac);
+<a name="line601">601: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pc-&gt;data);
+<a name="line602">602: </a>  <font color="#4169E1">return</font>(0);
+<a name="line603">603: </a>}
+
+<a name="line605">605: </a><strong><font color="#4169E1"><a name="PCSetUpOnBlocks_BJacobi_Singleblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUpOnBlocks_BJacobi_Singleblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line606">606: </a>{
+<a name="line607">607: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line608">608: </a>  PC_BJacobi         *jac = (PC_BJacobi*)pc-&gt;data;
+<a name="line609">609: </a>  <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>                subksp = jac-&gt;ksp[0];
+<a name="line610">610: </a>  <a href="../../../../../docs/manualpages/KSP/KSPConvergedReason.html#KSPConvergedReason">KSPConvergedReason</a> reason;
+
+<a name="line613">613: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>(subksp);
+<a name="line614">614: </a>  <a href="../../../../../docs/manualpages/KSP/KSPGetConvergedReason.html#KSPGetConvergedReason">KSPGetConvergedReason</a>(subksp,&amp;reason);
+<a name="line615">615: </a>  <font color="#4169E1">if</font> (reason == <a href="../../../../../docs/manualpages/KSP/KSP_DIVERGED_PC_FAILED.html#KSP_DIVERGED_PC_FAILED">KSP_DIVERGED_PC_FAILED</a>) {
+<a name="line616">616: </a>    pc-&gt;failedreason = <a href="../../../../../docs/manualpages/PC/PCFailedReason.html#PCFailedReason">PC_SUBPC_ERROR</a>;
+<a name="line617">617: </a>  }
+<a name="line618">618: </a>  <font color="#4169E1">return</font>(0);
+<a name="line619">619: </a>}
+
+<a name="line621">621: </a><strong><font color="#4169E1"><a name="PCApply_BJacobi_Singleblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApply_BJacobi_Singleblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line622">622: </a>{
+<a name="line623">623: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+<a name="line624">624: </a>  PC_BJacobi             *jac  = (PC_BJacobi*)pc-&gt;data;
+<a name="line625">625: </a>  PC_BJacobi_Singleblock *bjac = (PC_BJacobi_Singleblock*)jac-&gt;data;
+
+<a name="line628">628: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetLocalVectorRead.html#VecGetLocalVectorRead">VecGetLocalVectorRead</a>(x, bjac-&gt;x);
+<a name="line629">629: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetLocalVector.html#VecGetLocalVector">VecGetLocalVector</a>(y, bjac-&gt;y);
+<a name="line630">630: </a> <font color="#B22222">/* Since the inner <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> matrix may point directly to the diagonal block of an MPI matrix the inner</font>
+<a name="line631">631: </a><font color="#B22222">     matrix may change even if the outter <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>/<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> has not updated the preconditioner, this will trigger a rebuild</font>
+<a name="line632">632: </a><font color="#B22222">     of the inner preconditioner automatically unless we pass down the outter preconditioners reuse flag.*/</font>
+<a name="line633">633: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSetReusePreconditioner.html#KSPSetReusePreconditioner">KSPSetReusePreconditioner</a>(jac-&gt;ksp[0],pc-&gt;reusepreconditioner);
+<a name="line634">634: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(jac-&gt;ksp[0],bjac-&gt;x,bjac-&gt;y);
+<a name="line635">635: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCheckSolve.html#KSPCheckSolve">KSPCheckSolve</a>(jac-&gt;ksp[0],pc,bjac-&gt;y);
+<a name="line636">636: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreLocalVectorRead.html#VecRestoreLocalVectorRead">VecRestoreLocalVectorRead</a>(x, bjac-&gt;x);
+<a name="line637">637: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreLocalVector.html#VecRestoreLocalVector">VecRestoreLocalVector</a>(y, bjac-&gt;y);
+<a name="line638">638: </a>  <font color="#4169E1">return</font>(0);
+<a name="line639">639: </a>}
+
+<a name="line641">641: </a><strong><font color="#4169E1"><a name="PCApplySymmetricLeft_BJacobi_Singleblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApplySymmetricLeft_BJacobi_Singleblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line642">642: </a>{
+<a name="line643">643: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+<a name="line644">644: </a>  PC_BJacobi             *jac  = (PC_BJacobi*)pc-&gt;data;
+<a name="line645">645: </a>  PC_BJacobi_Singleblock *bjac = (PC_BJacobi_Singleblock*)jac-&gt;data;
+<a name="line646">646: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>            *y_array;
+<a name="line647">647: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>      *x_array;
+<a name="line648">648: </a>  <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>                     subpc;
+
+<a name="line651">651: </a>  <font color="#B22222">/*</font>
+<a name="line652">652: </a><font color="#B22222">      The <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>() is to avoid having to copy the</font>
+<a name="line653">653: </a><font color="#B22222">    y vector into the bjac-&gt;x vector. The reason for</font>
+<a name="line654">654: </a><font color="#B22222">    the bjac-&gt;x vector is that we need a sequential vector</font>
+<a name="line655">655: </a><font color="#B22222">    for the sequential solve.</font>
+<a name="line656">656: </a><font color="#B22222">  */</font>
+<a name="line657">657: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(x,&amp;x_array);
+<a name="line658">658: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(y,&amp;y_array);
+<a name="line659">659: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(bjac-&gt;x,x_array);
+<a name="line660">660: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(bjac-&gt;y,y_array);
+<a name="line661">661: </a>  <font color="#B22222">/* apply the symmetric left portion of the inner <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> operator */</font>
+<a name="line662">662: </a>  <font color="#B22222">/* note this by-passes the inner <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> and its options completely */</font>
+<a name="line663">663: </a>  <a href="../../../../../docs/manualpages/KSP/KSPGetPC.html#KSPGetPC">KSPGetPC</a>(jac-&gt;ksp[0],&amp;subpc);
+<a name="line664">664: </a>  <a href="../../../../../docs/manualpages/PC/PCApplySymmetricLeft.html#PCApplySymmetricLeft">PCApplySymmetricLeft</a>(subpc,bjac-&gt;x,bjac-&gt;y);
+<a name="line665">665: </a>  <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(bjac-&gt;x);
+<a name="line666">666: </a>  <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(bjac-&gt;y);
+<a name="line667">667: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(x,&amp;x_array);
+<a name="line668">668: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(y,&amp;y_array);
+<a name="line669">669: </a>  <font color="#4169E1">return</font>(0);
+<a name="line670">670: </a>}
+
+<a name="line672">672: </a><strong><font color="#4169E1"><a name="PCApplySymmetricRight_BJacobi_Singleblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApplySymmetricRight_BJacobi_Singleblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line673">673: </a>{
+<a name="line674">674: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+<a name="line675">675: </a>  PC_BJacobi             *jac  = (PC_BJacobi*)pc-&gt;data;
+<a name="line676">676: </a>  PC_BJacobi_Singleblock *bjac = (PC_BJacobi_Singleblock*)jac-&gt;data;
+<a name="line677">677: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>            *y_array;
+<a name="line678">678: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>      *x_array;
+<a name="line679">679: </a>  <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>                     subpc;
+
+<a name="line682">682: </a>  <font color="#B22222">/*</font>
+<a name="line683">683: </a><font color="#B22222">      The <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>() is to avoid having to copy the</font>
+<a name="line684">684: </a><font color="#B22222">    y vector into the bjac-&gt;x vector. The reason for</font>
+<a name="line685">685: </a><font color="#B22222">    the bjac-&gt;x vector is that we need a sequential vector</font>
+<a name="line686">686: </a><font color="#B22222">    for the sequential solve.</font>
+<a name="line687">687: </a><font color="#B22222">  */</font>
+<a name="line688">688: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(x,&amp;x_array);
+<a name="line689">689: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(y,&amp;y_array);
+<a name="line690">690: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(bjac-&gt;x,x_array);
+<a name="line691">691: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(bjac-&gt;y,y_array);
+
+<a name="line693">693: </a>  <font color="#B22222">/* apply the symmetric right portion of the inner <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> operator */</font>
+<a name="line694">694: </a>  <font color="#B22222">/* note this by-passes the inner <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a> and its options completely */</font>
+
+<a name="line696">696: </a>  <a href="../../../../../docs/manualpages/KSP/KSPGetPC.html#KSPGetPC">KSPGetPC</a>(jac-&gt;ksp[0],&amp;subpc);
+<a name="line697">697: </a>  <a href="../../../../../docs/manualpages/PC/PCApplySymmetricRight.html#PCApplySymmetricRight">PCApplySymmetricRight</a>(subpc,bjac-&gt;x,bjac-&gt;y);
+
+<a name="line699">699: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(x,&amp;x_array);
+<a name="line700">700: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(y,&amp;y_array);
+<a name="line701">701: </a>  <font color="#4169E1">return</font>(0);
+<a name="line702">702: </a>}
+
+<a name="line704">704: </a><strong><font color="#4169E1"><a name="PCApplyTranspose_BJacobi_Singleblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApplyTranspose_BJacobi_Singleblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line705">705: </a>{
+<a name="line706">706: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+<a name="line707">707: </a>  PC_BJacobi             *jac  = (PC_BJacobi*)pc-&gt;data;
+<a name="line708">708: </a>  PC_BJacobi_Singleblock *bjac = (PC_BJacobi_Singleblock*)jac-&gt;data;
+<a name="line709">709: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>            *y_array;
+<a name="line710">710: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>      *x_array;
+
+<a name="line713">713: </a>  <font color="#B22222">/*</font>
+<a name="line714">714: </a><font color="#B22222">      The <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>() is to avoid having to copy the</font>
+<a name="line715">715: </a><font color="#B22222">    y vector into the bjac-&gt;x vector. The reason for</font>
+<a name="line716">716: </a><font color="#B22222">    the bjac-&gt;x vector is that we need a sequential vector</font>
+<a name="line717">717: </a><font color="#B22222">    for the sequential solve.</font>
+<a name="line718">718: </a><font color="#B22222">  */</font>
+<a name="line719">719: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(x,&amp;x_array);
+<a name="line720">720: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(y,&amp;y_array);
+<a name="line721">721: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(bjac-&gt;x,x_array);
+<a name="line722">722: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(bjac-&gt;y,y_array);
+<a name="line723">723: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSolveTranspose.html#KSPSolveTranspose">KSPSolveTranspose</a>(jac-&gt;ksp[0],bjac-&gt;x,bjac-&gt;y);
+<a name="line724">724: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCheckSolve.html#KSPCheckSolve">KSPCheckSolve</a>(jac-&gt;ksp[0],pc,bjac-&gt;y);
+<a name="line725">725: </a>  <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(bjac-&gt;x);
+<a name="line726">726: </a>  <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(bjac-&gt;y);
+<a name="line727">727: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(x,&amp;x_array);
+<a name="line728">728: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(y,&amp;y_array);
+<a name="line729">729: </a>  <font color="#4169E1">return</font>(0);
+<a name="line730">730: </a>}
+
+<a name="line732">732: </a><strong><font color="#4169E1"><a name="PCSetUp_BJacobi_Singleblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUp_BJacobi_Singleblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> mat,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> pmat)</font></strong>
+<a name="line733">733: </a>{
+<a name="line734">734: </a>  PC_BJacobi             *jac = (PC_BJacobi*)pc-&gt;data;
+<a name="line735">735: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>         ierr;
+<a name="line736">736: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>               m;
+<a name="line737">737: </a>  <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>                    ksp;
+<a name="line738">738: </a>  PC_BJacobi_Singleblock *bjac;
+<a name="line739">739: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>              wasSetup = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line740">740: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA) || defined(PETSC_HAVE_VIENNACL)</font>
+<a name="line741">741: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>              is_gpumatrix = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line742">742: </a><font color="#A020F0">#endif</font>
+
+<a name="line745">745: </a>  <font color="#4169E1">if</font> (!pc-&gt;setupcalled) {
+<a name="line746">746: </a>    const char *prefix;
+
+<a name="line748">748: </a>    <font color="#4169E1">if</font> (!jac-&gt;ksp) {
+<a name="line749">749: </a>      wasSetup = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+
+<a name="line751">751: </a>      <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;ksp);
+<a name="line752">752: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetErrorIfNotConverged.html#KSPSetErrorIfNotConverged">KSPSetErrorIfNotConverged</a>(ksp,pc-&gt;erroriffailure);
+<a name="line753">753: </a>      <a href="../../../../../docs/manualpages/Sys/PetscObjectIncrementTabLevel.html#PetscObjectIncrementTabLevel">PetscObjectIncrementTabLevel</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,1);
+<a name="line754">754: </a>      PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp);
+<a name="line755">755: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetType.html#KSPSetType">KSPSetType</a>(ksp,<a href="../../../../../docs/manualpages/KSP/KSPPREONLY.html#KSPPREONLY">KSPPREONLY</a>);
+<a name="line756">756: </a>      <a href="../../../../../docs/manualpages/PC/PCGetOptionsPrefix.html#PCGetOptionsPrefix">PCGetOptionsPrefix</a>(pc,&amp;prefix);
+<a name="line757">757: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetOptionsPrefix.html#KSPSetOptionsPrefix">KSPSetOptionsPrefix</a>(ksp,prefix);
+<a name="line758">758: </a>      <a href="../../../../../docs/manualpages/KSP/KSPAppendOptionsPrefix.html#KSPAppendOptionsPrefix">KSPAppendOptionsPrefix</a>(ksp,<font color="#666666">"sub_"</font>);
+
+<a name="line760">760: </a>      pc-&gt;ops-&gt;reset               = PCReset_BJacobi_Singleblock;
+<a name="line761">761: </a>      pc-&gt;ops-&gt;destroy             = PCDestroy_BJacobi_Singleblock;
+<a name="line762">762: </a>      pc-&gt;ops-&gt;apply               = PCApply_BJacobi_Singleblock;
+<a name="line763">763: </a>      pc-&gt;ops-&gt;applysymmetricleft  = PCApplySymmetricLeft_BJacobi_Singleblock;
+<a name="line764">764: </a>      pc-&gt;ops-&gt;applysymmetricright = PCApplySymmetricRight_BJacobi_Singleblock;
+<a name="line765">765: </a>      pc-&gt;ops-&gt;applytranspose      = PCApplyTranspose_BJacobi_Singleblock;
+<a name="line766">766: </a>      pc-&gt;ops-&gt;setuponblocks       = PCSetUpOnBlocks_BJacobi_Singleblock;
+
+<a name="line768">768: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(1,&amp;jac-&gt;ksp);
+<a name="line769">769: </a>      jac-&gt;ksp[0] = ksp;
+
+<a name="line771">771: </a>      <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(pc,&amp;bjac);
+<a name="line772">772: </a>      jac-&gt;data = (void*)bjac;
+<a name="line773">773: </a>    } <font color="#4169E1">else</font> {
+<a name="line774">774: </a>      ksp  = jac-&gt;ksp[0];
+<a name="line775">775: </a>      bjac = (PC_BJacobi_Singleblock*)jac-&gt;data;
+<a name="line776">776: </a>    }
+
+<a name="line778">778: </a>    <font color="#B22222">/*</font>
+<a name="line779">779: </a><font color="#B22222">      The reason we need to generate these vectors is to serve</font>
+<a name="line780">780: </a><font color="#B22222">      as the right-hand side and solution vector for the solve on the</font>
+<a name="line781">781: </a><font color="#B22222">      block. We do not need to allocate space for the vectors since</font>
+<a name="line782">782: </a><font color="#B22222">      that is provided via <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>() just before the call to</font>
+<a name="line783">783: </a><font color="#B22222">      <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>() on the block.</font>
+<a name="line784">784: </a><font color="#B22222">    */</font>
+<a name="line785">785: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetSize.html#MatGetSize">MatGetSize</a>(pmat,&amp;m,&amp;m);
+<a name="line786">786: </a>    <a href="../../../../../docs/manualpages/Vec/VecCreateSeqWithArray.html#VecCreateSeqWithArray">VecCreateSeqWithArray</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,1,m,NULL,&amp;bjac-&gt;x);
+<a name="line787">787: </a>    <a href="../../../../../docs/manualpages/Vec/VecCreateSeqWithArray.html#VecCreateSeqWithArray">VecCreateSeqWithArray</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,1,m,NULL,&amp;bjac-&gt;y);
+<a name="line788">788: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line789">789: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompareAny.html#PetscObjectTypeCompareAny">PetscObjectTypeCompareAny</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pmat,&amp;is_gpumatrix,<a href="../../../../../docs/manualpages/Mat/MATAIJCUSPARSE.html#MATAIJCUSPARSE">MATAIJCUSPARSE</a>,<a href="../../../../../docs/manualpages/Mat/MATSEQAIJCUSPARSE.html#MATSEQAIJCUSPARSE">MATSEQAIJCUSPARSE</a>,MATMPIAIJCUSPARSE,<font color="#666666">""</font>);
+<a name="line790">790: </a>    <font color="#4169E1">if</font> (is_gpumatrix) {
+<a name="line791">791: </a>      <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(bjac-&gt;x,VECCUDA);
+<a name="line792">792: </a>      <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(bjac-&gt;y,VECCUDA);
+<a name="line793">793: </a>    }
+<a name="line794">794: </a><font color="#A020F0">#endif</font>
+<a name="line795">795: </a><font color="#A020F0">#if defined(PETSC_HAVE_VIENNACL)</font>
+<a name="line796">796: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompareAny.html#PetscObjectTypeCompareAny">PetscObjectTypeCompareAny</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pmat,&amp;is_gpumatrix,<a href="../../../../../docs/manualpages/Mat/MATAIJVIENNACL.html#MATAIJVIENNACL">MATAIJVIENNACL</a>,<a href="../../../../../docs/manualpages/Mat/MATSEQAIJVIENNACL.html#MATSEQAIJVIENNACL">MATSEQAIJVIENNACL</a>,MATMPIAIJVIENNACL,<font color="#666666">""</font>);
+<a name="line797">797: </a>    <font color="#4169E1">if</font> (is_gpumatrix) {
+<a name="line798">798: </a>      <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(bjac-&gt;x,VECVIENNACL);
+<a name="line799">799: </a>      <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(bjac-&gt;y,VECVIENNACL);
+<a name="line800">800: </a>    }
+<a name="line801">801: </a><font color="#A020F0">#endif</font>
+<a name="line802">802: </a>    PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)bjac-&gt;x);
+<a name="line803">803: </a>    PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)bjac-&gt;y);
+<a name="line804">804: </a>  } <font color="#4169E1">else</font> {
+<a name="line805">805: </a>    ksp  = jac-&gt;ksp[0];
+<a name="line806">806: </a>    bjac = (PC_BJacobi_Singleblock*)jac-&gt;data;
+<a name="line807">807: </a>  }
+<a name="line808">808: </a>  <font color="#4169E1">if</font> (pc-&gt;useAmat) {
+<a name="line809">809: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(ksp,mat,pmat);
+<a name="line810">810: </a>  } <font color="#4169E1">else</font> {
+<a name="line811">811: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(ksp,pmat,pmat);
+<a name="line812">812: </a>  }
+<a name="line813">813: </a>  <font color="#4169E1">if</font> (!wasSetup &amp;&amp; pc-&gt;setfromoptionscalled) {
+<a name="line814">814: </a>    <font color="#B22222">/* If PCSetFromOptions_BJacobi is called later, <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a> will be called at that time. */</font>
+<a name="line815">815: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(ksp);
+<a name="line816">816: </a>  }
+<a name="line817">817: </a>  <font color="#4169E1">return</font>(0);
+<a name="line818">818: </a>}
+
+<a name="line820">820: </a><font color="#B22222">/* ---------------------------------------------------------------------------------------------*/</font>
+<a name="line821">821: </a><strong><font color="#4169E1"><a name="PCReset_BJacobi_Multiblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCReset_BJacobi_Multiblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line822">822: </a>{
+<a name="line823">823: </a>  PC_BJacobi            *jac  = (PC_BJacobi*)pc-&gt;data;
+<a name="line824">824: </a>  PC_BJacobi_Multiblock *bjac = (PC_BJacobi_Multiblock*)jac-&gt;data;
+<a name="line825">825: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>        ierr;
+<a name="line826">826: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>              i;
+
+<a name="line829">829: </a>  <font color="#4169E1">if</font> (bjac &amp;&amp; bjac-&gt;pmat) {
+<a name="line830">830: </a>    <a href="../../../../../docs/manualpages/Mat/MatDestroyMatrices.html#MatDestroyMatrices">MatDestroyMatrices</a>(jac-&gt;n_local,&amp;bjac-&gt;pmat);
+<a name="line831">831: </a>    <font color="#4169E1">if</font> (pc-&gt;useAmat) {
+<a name="line832">832: </a>      <a href="../../../../../docs/manualpages/Mat/MatDestroyMatrices.html#MatDestroyMatrices">MatDestroyMatrices</a>(jac-&gt;n_local,&amp;bjac-&gt;mat);
+<a name="line833">833: </a>    }
+<a name="line834">834: </a>  }
+
+<a name="line836">836: </a>  <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n_local; i++) {
+<a name="line837">837: </a>    <a href="../../../../../docs/manualpages/KSP/KSPReset.html#KSPReset">KSPReset</a>(jac-&gt;ksp[i]);
+<a name="line838">838: </a>    <font color="#4169E1">if</font> (bjac &amp;&amp; bjac-&gt;x) {
+<a name="line839">839: </a>      <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;bjac-&gt;x[i]);
+<a name="line840">840: </a>      <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;bjac-&gt;y[i]);
+<a name="line841">841: </a>      <a href="../../../../../docs/manualpages/IS/ISDestroy.html#ISDestroy">ISDestroy</a>(&amp;bjac-&gt;is[i]);
+<a name="line842">842: </a>    }
+<a name="line843">843: </a>  }
+<a name="line844">844: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(jac-&gt;l_lens);
+<a name="line845">845: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(jac-&gt;g_lens);
+<a name="line846">846: </a>  <font color="#4169E1">return</font>(0);
+<a name="line847">847: </a>}
+
+<a name="line849">849: </a><strong><font color="#4169E1"><a name="PCDestroy_BJacobi_Multiblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCDestroy_BJacobi_Multiblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line850">850: </a>{
+<a name="line851">851: </a>  PC_BJacobi            *jac  = (PC_BJacobi*)pc-&gt;data;
+<a name="line852">852: </a>  PC_BJacobi_Multiblock *bjac = (PC_BJacobi_Multiblock*)jac-&gt;data;
+<a name="line853">853: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>        ierr;
+<a name="line854">854: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>              i;
+
+<a name="line857">857: </a>  PCReset_BJacobi_Multiblock(pc);
+<a name="line858">858: </a>  <font color="#4169E1">if</font> (bjac) {
+<a name="line859">859: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree2.html#PetscFree2">PetscFree2</a>(bjac-&gt;x,bjac-&gt;y);
+<a name="line860">860: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(bjac-&gt;starts);
+<a name="line861">861: </a>    <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(bjac-&gt;is);
+<a name="line862">862: </a>  }
+<a name="line863">863: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(jac-&gt;data);
+<a name="line864">864: </a>  <font color="#4169E1">for</font> (i=0; i&lt;jac-&gt;n_local; i++) {
+<a name="line865">865: </a>    <a href="../../../../../docs/manualpages/KSP/KSPDestroy.html#KSPDestroy">KSPDestroy</a>(&amp;jac-&gt;ksp[i]);
+<a name="line866">866: </a>  }
+<a name="line867">867: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(jac-&gt;ksp);
+<a name="line868">868: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pc-&gt;data);
+<a name="line869">869: </a>  <font color="#4169E1">return</font>(0);
+<a name="line870">870: </a>}
+
+<a name="line872">872: </a><strong><font color="#4169E1"><a name="PCSetUpOnBlocks_BJacobi_Multiblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUpOnBlocks_BJacobi_Multiblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line873">873: </a>{
+<a name="line874">874: </a>  PC_BJacobi         *jac = (PC_BJacobi*)pc-&gt;data;
+<a name="line875">875: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>     ierr;
+<a name="line876">876: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>           i,n_local = jac-&gt;n_local;
+<a name="line877">877: </a>  <a href="../../../../../docs/manualpages/KSP/KSPConvergedReason.html#KSPConvergedReason">KSPConvergedReason</a> reason;
+
+<a name="line880">880: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n_local; i++) {
+<a name="line881">881: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetUp.html#KSPSetUp">KSPSetUp</a>(jac-&gt;ksp[i]);
+<a name="line882">882: </a>    <a href="../../../../../docs/manualpages/KSP/KSPGetConvergedReason.html#KSPGetConvergedReason">KSPGetConvergedReason</a>(jac-&gt;ksp[i],&amp;reason);
+<a name="line883">883: </a>    <font color="#4169E1">if</font> (reason == <a href="../../../../../docs/manualpages/KSP/KSP_DIVERGED_PC_FAILED.html#KSP_DIVERGED_PC_FAILED">KSP_DIVERGED_PC_FAILED</a>) {
+<a name="line884">884: </a>      pc-&gt;failedreason = <a href="../../../../../docs/manualpages/PC/PCFailedReason.html#PCFailedReason">PC_SUBPC_ERROR</a>;
+<a name="line885">885: </a>    }
+<a name="line886">886: </a>  }
+<a name="line887">887: </a>  <font color="#4169E1">return</font>(0);
+<a name="line888">888: </a>}
+
+<a name="line890">890: </a><font color="#B22222">/*</font>
+<a name="line891">891: </a><font color="#B22222">      Preconditioner for block Jacobi</font>
+<a name="line892">892: </a><font color="#B22222">*/</font>
+<a name="line893">893: </a><strong><font color="#4169E1"><a name="PCApply_BJacobi_Multiblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApply_BJacobi_Multiblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line894">894: </a>{
+<a name="line895">895: </a>  PC_BJacobi            *jac = (PC_BJacobi*)pc-&gt;data;
+<a name="line896">896: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>        ierr;
+<a name="line897">897: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>              i,n_local = jac-&gt;n_local;
+<a name="line898">898: </a>  PC_BJacobi_Multiblock *bjac = (PC_BJacobi_Multiblock*)jac-&gt;data;
+<a name="line899">899: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>           *yin;
+<a name="line900">900: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>     *xin;
+
+<a name="line903">903: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(x,&amp;xin);
+<a name="line904">904: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(y,&amp;yin);
+<a name="line905">905: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n_local; i++) {
+<a name="line906">906: </a>    <font color="#B22222">/*</font>
+<a name="line907">907: </a><font color="#B22222">       To avoid copying the subvector from x into a workspace we instead</font>
+<a name="line908">908: </a><font color="#B22222">       make the workspace vector array point to the subpart of the array of</font>
+<a name="line909">909: </a><font color="#B22222">       the global vector.</font>
+<a name="line910">910: </a><font color="#B22222">    */</font>
+<a name="line911">911: </a>    <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(bjac-&gt;x[i],xin+bjac-&gt;starts[i]);
+<a name="line912">912: </a>    <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(bjac-&gt;y[i],yin+bjac-&gt;starts[i]);
+
+<a name="line914">914: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(PC_ApplyOnBlocks,jac-&gt;ksp[i],bjac-&gt;x[i],bjac-&gt;y[i],0);
+<a name="line915">915: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(jac-&gt;ksp[i],bjac-&gt;x[i],bjac-&gt;y[i]);
+<a name="line916">916: </a>    <a href="../../../../../docs/manualpages/KSP/KSPCheckSolve.html#KSPCheckSolve">KSPCheckSolve</a>(jac-&gt;ksp[i],pc,bjac-&gt;y[i]);
+<a name="line917">917: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(PC_ApplyOnBlocks,jac-&gt;ksp[i],bjac-&gt;x[i],bjac-&gt;y[i],0);
+
+<a name="line919">919: </a>    <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(bjac-&gt;x[i]);
+<a name="line920">920: </a>    <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(bjac-&gt;y[i]);
+<a name="line921">921: </a>  }
+<a name="line922">922: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(x,&amp;xin);
+<a name="line923">923: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(y,&amp;yin);
+<a name="line924">924: </a>  <font color="#4169E1">return</font>(0);
+<a name="line925">925: </a>}
+
+<a name="line927">927: </a><font color="#B22222">/*</font>
+<a name="line928">928: </a><font color="#B22222">      Preconditioner for block Jacobi</font>
+<a name="line929">929: </a><font color="#B22222">*/</font>
+<a name="line930">930: </a><strong><font color="#4169E1"><a name="PCApplyTranspose_BJacobi_Multiblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApplyTranspose_BJacobi_Multiblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line931">931: </a>{
+<a name="line932">932: </a>  PC_BJacobi            *jac = (PC_BJacobi*)pc-&gt;data;
+<a name="line933">933: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>        ierr;
+<a name="line934">934: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>              i,n_local = jac-&gt;n_local;
+<a name="line935">935: </a>  PC_BJacobi_Multiblock *bjac = (PC_BJacobi_Multiblock*)jac-&gt;data;
+<a name="line936">936: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>           *yin;
+<a name="line937">937: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>     *xin;
+
+<a name="line940">940: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(x,&amp;xin);
+<a name="line941">941: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(y,&amp;yin);
+<a name="line942">942: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n_local; i++) {
+<a name="line943">943: </a>    <font color="#B22222">/*</font>
+<a name="line944">944: </a><font color="#B22222">       To avoid copying the subvector from x into a workspace we instead</font>
+<a name="line945">945: </a><font color="#B22222">       make the workspace vector array point to the subpart of the array of</font>
+<a name="line946">946: </a><font color="#B22222">       the global vector.</font>
+<a name="line947">947: </a><font color="#B22222">    */</font>
+<a name="line948">948: </a>    <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(bjac-&gt;x[i],xin+bjac-&gt;starts[i]);
+<a name="line949">949: </a>    <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(bjac-&gt;y[i],yin+bjac-&gt;starts[i]);
+
+<a name="line951">951: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(PC_ApplyTransposeOnBlocks,jac-&gt;ksp[i],bjac-&gt;x[i],bjac-&gt;y[i],0);
+<a name="line952">952: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSolveTranspose.html#KSPSolveTranspose">KSPSolveTranspose</a>(jac-&gt;ksp[i],bjac-&gt;x[i],bjac-&gt;y[i]);
+<a name="line953">953: </a>    <a href="../../../../../docs/manualpages/KSP/KSPCheckSolve.html#KSPCheckSolve">KSPCheckSolve</a>(jac-&gt;ksp[i],pc,bjac-&gt;y[i]);
+<a name="line954">954: </a>    <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(PC_ApplyTransposeOnBlocks,jac-&gt;ksp[i],bjac-&gt;x[i],bjac-&gt;y[i],0);
+
+<a name="line956">956: </a>    <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(bjac-&gt;x[i]);
+<a name="line957">957: </a>    <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(bjac-&gt;y[i]);
+<a name="line958">958: </a>  }
+<a name="line959">959: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(x,&amp;xin);
+<a name="line960">960: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(y,&amp;yin);
+<a name="line961">961: </a>  <font color="#4169E1">return</font>(0);
+<a name="line962">962: </a>}
+
+<a name="line964">964: </a><strong><font color="#4169E1"><a name="PCSetUp_BJacobi_Multiblock"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUp_BJacobi_Multiblock(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> mat,<a href="../../../../../docs/manualpages/Mat/Mat.html#Mat">Mat</a> pmat)</font></strong>
+<a name="line965">965: </a>{
+<a name="line966">966: </a>  PC_BJacobi            *jac = (PC_BJacobi*)pc-&gt;data;
+<a name="line967">967: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>        ierr;
+<a name="line968">968: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>              m,n_local,N,M,start,i;
+<a name="line969">969: </a>  const char            *prefix,*pprefix,*mprefix;
+<a name="line970">970: </a>  <a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>                   ksp;
+<a name="line971">971: </a>  <a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a>                   x,y;
+<a name="line972">972: </a>  PC_BJacobi_Multiblock *bjac = (PC_BJacobi_Multiblock*)jac-&gt;data;
+<a name="line973">973: </a>  <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a>                    subpc;
+<a name="line974">974: </a>  <a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>                    is;
+<a name="line975">975: </a>  <a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MatReuse</a>              scall;
+<a name="line976">976: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA) || defined(PETSC_HAVE_VIENNACL)</font>
+<a name="line977">977: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>              is_gpumatrix = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line978">978: </a><font color="#A020F0">#endif</font>
+
+<a name="line981">981: </a>  <a href="../../../../../docs/manualpages/Mat/MatGetLocalSize.html#MatGetLocalSize">MatGetLocalSize</a>(pc-&gt;pmat,&amp;M,&amp;N);
+
+<a name="line983">983: </a>  n_local = jac-&gt;n_local;
+
+<a name="line985">985: </a>  <font color="#4169E1">if</font> (pc-&gt;useAmat) {
+<a name="line986">986: </a>    <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a> same;
+<a name="line987">987: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompare.html#PetscObjectTypeCompare">PetscObjectTypeCompare</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat,((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pmat)-&gt;type_name,&amp;same);
+<a name="line988">988: </a>    <font color="#4169E1">if</font> (!same) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PetscObjectComm.html#PetscObjectComm">PetscObjectComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc),PETSC_ERR_ARG_INCOMP,<font color="#666666">"Matrices not of same type"</font>);
+<a name="line989">989: </a>  }
+
+<a name="line991">991: </a>  <font color="#4169E1">if</font> (!pc-&gt;setupcalled) {
+<a name="line992">992: </a>    scall = <a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>;
+
+<a name="line994">994: </a>    <font color="#4169E1">if</font> (!jac-&gt;ksp) {
+<a name="line995">995: </a>      pc-&gt;ops-&gt;reset         = PCReset_BJacobi_Multiblock;
+<a name="line996">996: </a>      pc-&gt;ops-&gt;destroy       = PCDestroy_BJacobi_Multiblock;
+<a name="line997">997: </a>      pc-&gt;ops-&gt;apply         = PCApply_BJacobi_Multiblock;
+<a name="line998">998: </a>      pc-&gt;ops-&gt;applytranspose= PCApplyTranspose_BJacobi_Multiblock;
+<a name="line999">999: </a>      pc-&gt;ops-&gt;setuponblocks = PCSetUpOnBlocks_BJacobi_Multiblock;
+
+<a name="line1001">1001: </a>      <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(pc,&amp;bjac);
+<a name="line1002">1002: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n_local,&amp;jac-&gt;ksp);
+<a name="line1003">1003: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#4169E1">sizeof</font>(n_local*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/KSP/KSP.html#KSP">KSP</a>)));
+<a name="line1004">1004: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc2.html#PetscMalloc2">PetscMalloc2</a>(n_local,&amp;bjac-&gt;x,n_local,&amp;bjac-&gt;y);
+<a name="line1005">1005: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n_local,&amp;bjac-&gt;starts);
+<a name="line1006">1006: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#4169E1">sizeof</font>(n_local*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>)));
+
+<a name="line1008">1008: </a>      jac-&gt;data = (void*)bjac;
+<a name="line1009">1009: </a>      <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(n_local,&amp;bjac-&gt;is);
+<a name="line1010">1010: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#4169E1">sizeof</font>(n_local*<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/IS/IS.html#IS">IS</a>)));
+
+<a name="line1012">1012: </a>      <font color="#4169E1">for</font> (i=0; i&lt;n_local; i++) {
+<a name="line1013">1013: </a>        <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,&amp;ksp);
+<a name="line1014">1014: </a>        <a href="../../../../../docs/manualpages/KSP/KSPSetErrorIfNotConverged.html#KSPSetErrorIfNotConverged">KSPSetErrorIfNotConverged</a>(ksp,pc-&gt;erroriffailure);
+<a name="line1015">1015: </a>        <a href="../../../../../docs/manualpages/Sys/PetscObjectIncrementTabLevel.html#PetscObjectIncrementTabLevel">PetscObjectIncrementTabLevel</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,1);
+<a name="line1016">1016: </a>        PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)ksp);
+<a name="line1017">1017: </a>        <a href="../../../../../docs/manualpages/KSP/KSPSetType.html#KSPSetType">KSPSetType</a>(ksp,<a href="../../../../../docs/manualpages/KSP/KSPPREONLY.html#KSPPREONLY">KSPPREONLY</a>);
+<a name="line1018">1018: </a>        <a href="../../../../../docs/manualpages/KSP/KSPGetPC.html#KSPGetPC">KSPGetPC</a>(ksp,&amp;subpc);
+<a name="line1019">1019: </a>        <a href="../../../../../docs/manualpages/PC/PCGetOptionsPrefix.html#PCGetOptionsPrefix">PCGetOptionsPrefix</a>(pc,&amp;prefix);
+<a name="line1020">1020: </a>        <a href="../../../../../docs/manualpages/KSP/KSPSetOptionsPrefix.html#KSPSetOptionsPrefix">KSPSetOptionsPrefix</a>(ksp,prefix);
+<a name="line1021">1021: </a>        <a href="../../../../../docs/manualpages/KSP/KSPAppendOptionsPrefix.html#KSPAppendOptionsPrefix">KSPAppendOptionsPrefix</a>(ksp,<font color="#666666">"sub_"</font>);
+
+<a name="line1023">1023: </a>        jac-&gt;ksp[i] = ksp;
+<a name="line1024">1024: </a>      }
+<a name="line1025">1025: </a>    } <font color="#4169E1">else</font> {
+<a name="line1026">1026: </a>      bjac = (PC_BJacobi_Multiblock*)jac-&gt;data;
+<a name="line1027">1027: </a>    }
+
+<a name="line1029">1029: </a>    start = 0;
+<a name="line1030">1030: </a>    <font color="#4169E1">for</font> (i=0; i&lt;n_local; i++) {
+<a name="line1031">1031: </a>      m = jac-&gt;l_lens[i];
+<a name="line1032">1032: </a>      <font color="#B22222">/*</font>
+<a name="line1033">1033: </a><font color="#B22222">      The reason we need to generate these vectors is to serve</font>
+<a name="line1034">1034: </a><font color="#B22222">      as the right-hand side and solution vector for the solve on the</font>
+<a name="line1035">1035: </a><font color="#B22222">      block. We do not need to allocate space for the vectors since</font>
+<a name="line1036">1036: </a><font color="#B22222">      that is provided via <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>() just before the call to</font>
+<a name="line1037">1037: </a><font color="#B22222">      <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>() on the block.</font>
+
+<a name="line1039">1039: </a><font color="#B22222">      */</font>
+<a name="line1040">1040: </a>      <a href="../../../../../docs/manualpages/Vec/VecCreateSeq.html#VecCreateSeq">VecCreateSeq</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,m,&amp;x);
+<a name="line1041">1041: </a>      <a href="../../../../../docs/manualpages/Vec/VecCreateSeqWithArray.html#VecCreateSeqWithArray">VecCreateSeqWithArray</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,1,m,NULL,&amp;y);
+<a name="line1042">1042: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line1043">1043: </a>      <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompareAny.html#PetscObjectTypeCompareAny">PetscObjectTypeCompareAny</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pmat,&amp;is_gpumatrix,<a href="../../../../../docs/manualpages/Mat/MATAIJCUSPARSE.html#MATAIJCUSPARSE">MATAIJCUSPARSE</a>,<a href="../../../../../docs/manualpages/Mat/MATSEQAIJCUSPARSE.html#MATSEQAIJCUSPARSE">MATSEQAIJCUSPARSE</a>,MATMPIAIJCUSPARSE,<font color="#666666">""</font>);
+<a name="line1044">1044: </a>      <font color="#4169E1">if</font> (is_gpumatrix) {
+<a name="line1045">1045: </a>        <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(x,VECCUDA);
+<a name="line1046">1046: </a>        <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(y,VECCUDA);
+<a name="line1047">1047: </a>      }
+<a name="line1048">1048: </a><font color="#A020F0">#endif</font>
+<a name="line1049">1049: </a><font color="#A020F0">#if defined(PETSC_HAVE_VIENNACL)</font>
+<a name="line1050">1050: </a>      <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompareAny.html#PetscObjectTypeCompareAny">PetscObjectTypeCompareAny</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pmat,&amp;is_gpumatrix,<a href="../../../../../docs/manualpages/Mat/MATAIJVIENNACL.html#MATAIJVIENNACL">MATAIJVIENNACL</a>,<a href="../../../../../docs/manualpages/Mat/MATSEQAIJVIENNACL.html#MATSEQAIJVIENNACL">MATSEQAIJVIENNACL</a>,MATMPIAIJVIENNACL,<font color="#666666">""</font>);
+<a name="line1051">1051: </a>      <font color="#4169E1">if</font> (is_gpumatrix) {
+<a name="line1052">1052: </a>        <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(x,VECVIENNACL);
+<a name="line1053">1053: </a>        <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(y,VECVIENNACL);
+<a name="line1054">1054: </a>      }
+<a name="line1055">1055: </a><font color="#A020F0">#endif</font>
+<a name="line1056">1056: </a>      PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)x);
+<a name="line1057">1057: </a>      PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)y);
+
+<a name="line1059">1059: </a>      bjac-&gt;x[i]      = x;
+<a name="line1060">1060: </a>      bjac-&gt;y[i]      = y;
+<a name="line1061">1061: </a>      bjac-&gt;starts[i] = start;
+
+<a name="line1063">1063: </a>      <a href="../../../../../docs/manualpages/IS/ISCreateStride.html#ISCreateStride">ISCreateStride</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,m,start,1,&amp;is);
+<a name="line1064">1064: </a>      bjac-&gt;is[i] = is;
+<a name="line1065">1065: </a>      PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)is);
+
+<a name="line1067">1067: </a>      start += m;
+<a name="line1068">1068: </a>    }
+<a name="line1069">1069: </a>  } <font color="#4169E1">else</font> {
+<a name="line1070">1070: </a>    bjac = (PC_BJacobi_Multiblock*)jac-&gt;data;
+<a name="line1071">1071: </a>    <font color="#B22222">/*</font>
+<a name="line1072">1072: </a><font color="#B22222">       Destroy the blocks from the previous iteration</font>
+<a name="line1073">1073: </a><font color="#B22222">    */</font>
+<a name="line1074">1074: </a>    <font color="#4169E1">if</font> (pc-&gt;flag == <a href="../../../../../docs/manualpages/Mat/MatStructure.html#MatStructure">DIFFERENT_NONZERO_PATTERN</a>) {
+<a name="line1075">1075: </a>      <a href="../../../../../docs/manualpages/Mat/MatDestroyMatrices.html#MatDestroyMatrices">MatDestroyMatrices</a>(n_local,&amp;bjac-&gt;pmat);
+<a name="line1076">1076: </a>      <font color="#4169E1">if</font> (pc-&gt;useAmat) {
+<a name="line1077">1077: </a>        <a href="../../../../../docs/manualpages/Mat/MatDestroyMatrices.html#MatDestroyMatrices">MatDestroyMatrices</a>(n_local,&amp;bjac-&gt;mat);
+<a name="line1078">1078: </a>      }
+<a name="line1079">1079: </a>      scall = <a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>;
+<a name="line1080">1080: </a>    } <font color="#4169E1">else</font> scall = <a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_REUSE_MATRIX</a>;
+<a name="line1081">1081: </a>  }
+
+<a name="line1083">1083: </a>  <a href="../../../../../docs/manualpages/Mat/MatCreateSubMatrices.html#MatCreateSubMatrices">MatCreateSubMatrices</a>(pmat,n_local,bjac-&gt;is,bjac-&gt;is,scall,&amp;bjac-&gt;pmat);
+<a name="line1084">1084: </a>  <font color="#4169E1">if</font> (pc-&gt;useAmat) {
+<a name="line1085">1085: </a>    <a href="../../../../../docs/manualpages/Mat/MatCreateSubMatrices.html#MatCreateSubMatrices">MatCreateSubMatrices</a>(mat,n_local,bjac-&gt;is,bjac-&gt;is,scall,&amp;bjac-&gt;mat);
+<a name="line1086">1086: </a>  }
+<a name="line1087">1087: </a>  <font color="#B22222">/* Return control to the user so that the submatrices can be modified (e.g., to apply</font>
+<a name="line1088">1088: </a><font color="#B22222">     different boundary conditions for the submatrices than for the global problem) */</font>
+<a name="line1089">1089: </a>  <a href="../../../../../docs/manualpages/PC/PCModifySubMatrices.html#PCModifySubMatrices">PCModifySubMatrices</a>(pc,n_local,bjac-&gt;is,bjac-&gt;is,bjac-&gt;pmat,pc-&gt;modifysubmatricesP);
+
+<a name="line1091">1091: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectGetOptionsPrefix.html#PetscObjectGetOptionsPrefix">PetscObjectGetOptionsPrefix</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pmat,&amp;pprefix);
+<a name="line1092">1092: </a>  <font color="#4169E1">for</font> (i=0; i&lt;n_local; i++) {
+<a name="line1093">1093: </a>    PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)bjac-&gt;pmat[i]);
+<a name="line1094">1094: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectSetOptionsPrefix.html#PetscObjectSetOptionsPrefix">PetscObjectSetOptionsPrefix</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)bjac-&gt;pmat[i],pprefix);
+<a name="line1095">1095: </a>    <font color="#4169E1">if</font> (pc-&gt;useAmat) {
+<a name="line1096">1096: </a>      PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)bjac-&gt;mat[i]);
+<a name="line1097">1097: </a>      <a href="../../../../../docs/manualpages/Sys/PetscObjectGetOptionsPrefix.html#PetscObjectGetOptionsPrefix">PetscObjectGetOptionsPrefix</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mat,&amp;mprefix);
+<a name="line1098">1098: </a>      <a href="../../../../../docs/manualpages/Sys/PetscObjectSetOptionsPrefix.html#PetscObjectSetOptionsPrefix">PetscObjectSetOptionsPrefix</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)bjac-&gt;mat[i],mprefix);
+<a name="line1099">1099: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(jac-&gt;ksp[i],bjac-&gt;mat[i],bjac-&gt;pmat[i]);
+<a name="line1100">1100: </a>    } <font color="#4169E1">else</font> {
+<a name="line1101">1101: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(jac-&gt;ksp[i],bjac-&gt;pmat[i],bjac-&gt;pmat[i]);
+<a name="line1102">1102: </a>    }
+<a name="line1103">1103: </a>    <font color="#4169E1">if</font> (pc-&gt;setfromoptionscalled) {
+<a name="line1104">1104: </a>      <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(jac-&gt;ksp[i]);
+<a name="line1105">1105: </a>    }
+<a name="line1106">1106: </a>  }
+<a name="line1107">1107: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1108">1108: </a>}
+
+<a name="line1110">1110: </a><font color="#B22222">/* ---------------------------------------------------------------------------------------------*/</font>
+<a name="line1111">1111: </a><font color="#B22222">/*</font>
+<a name="line1112">1112: </a><font color="#B22222">      These are for a single block with multiple processes;</font>
+<a name="line1113">1113: </a><font color="#B22222">*/</font>
+<a name="line1114">1114: </a><strong><font color="#4169E1"><a name="PCReset_BJacobi_Multiproc"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCReset_BJacobi_Multiproc(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line1115">1115: </a>{
+<a name="line1116">1116: </a>  PC_BJacobi           *jac   = (PC_BJacobi*)pc-&gt;data;
+<a name="line1117">1117: </a>  PC_BJacobi_Multiproc *mpjac = (PC_BJacobi_Multiproc*)jac-&gt;data;
+<a name="line1118">1118: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>       ierr;
+
+<a name="line1121">1121: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;mpjac-&gt;ysub);
+<a name="line1122">1122: </a>  <a href="../../../../../docs/manualpages/Vec/VecDestroy.html#VecDestroy">VecDestroy</a>(&amp;mpjac-&gt;xsub);
+<a name="line1123">1123: </a>  <a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;mpjac-&gt;submats);
+<a name="line1124">1124: </a>  <font color="#4169E1">if</font> (jac-&gt;ksp) {<a href="../../../../../docs/manualpages/KSP/KSPReset.html#KSPReset">KSPReset</a>(jac-&gt;ksp[0]);}
+<a name="line1125">1125: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1126">1126: </a>}
+
+<a name="line1128">1128: </a><strong><font color="#4169E1"><a name="PCDestroy_BJacobi_Multiproc"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCDestroy_BJacobi_Multiproc(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line1129">1129: </a>{
+<a name="line1130">1130: </a>  PC_BJacobi           *jac   = (PC_BJacobi*)pc-&gt;data;
+<a name="line1131">1131: </a>  PC_BJacobi_Multiproc *mpjac = (PC_BJacobi_Multiproc*)jac-&gt;data;
+<a name="line1132">1132: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>       ierr;
+
+<a name="line1135">1135: </a>  PCReset_BJacobi_Multiproc(pc);
+<a name="line1136">1136: </a>  <a href="../../../../../docs/manualpages/KSP/KSPDestroy.html#KSPDestroy">KSPDestroy</a>(&amp;jac-&gt;ksp[0]);
+<a name="line1137">1137: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(jac-&gt;ksp);
+<a name="line1138">1138: </a>  <a href="../../../../../docs/manualpages/Sys/PetscSubcommDestroy.html#PetscSubcommDestroy">PetscSubcommDestroy</a>(&amp;mpjac-&gt;psubcomm);
+
+<a name="line1140">1140: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(mpjac);
+<a name="line1141">1141: </a>  <a href="../../../../../docs/manualpages/Sys/PetscFree.html#PetscFree">PetscFree</a>(pc-&gt;data);
+<a name="line1142">1142: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1143">1143: </a>}
+
+<a name="line1145">1145: </a><strong><font color="#4169E1"><a name="PCApply_BJacobi_Multiproc"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCApply_BJacobi_Multiproc(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> x,<a href="../../../../../docs/manualpages/Vec/Vec.html#Vec">Vec</a> y)</font></strong>
+<a name="line1146">1146: </a>{
+<a name="line1147">1147: </a>  PC_BJacobi           *jac   = (PC_BJacobi*)pc-&gt;data;
+<a name="line1148">1148: </a>  PC_BJacobi_Multiproc *mpjac = (PC_BJacobi_Multiproc*)jac-&gt;data;
+<a name="line1149">1149: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>       ierr;
+<a name="line1150">1150: </a>  <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>          *yarray;
+<a name="line1151">1151: </a>  const <a href="../../../../../docs/manualpages/Sys/PetscScalar.html#PetscScalar">PetscScalar</a>    *xarray;
+<a name="line1152">1152: </a>  <a href="../../../../../docs/manualpages/KSP/KSPConvergedReason.html#KSPConvergedReason">KSPConvergedReason</a>   reason;
+
+<a name="line1155">1155: </a>  <font color="#B22222">/* place x's and y's local arrays into xsub and ysub */</font>
+<a name="line1156">1156: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArrayRead.html#VecGetArrayRead">VecGetArrayRead</a>(x,&amp;xarray);
+<a name="line1157">1157: </a>  <a href="../../../../../docs/manualpages/Vec/VecGetArray.html#VecGetArray">VecGetArray</a>(y,&amp;yarray);
+<a name="line1158">1158: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(mpjac-&gt;xsub,xarray);
+<a name="line1159">1159: </a>  <a href="../../../../../docs/manualpages/Vec/VecPlaceArray.html#VecPlaceArray">VecPlaceArray</a>(mpjac-&gt;ysub,yarray);
+
+<a name="line1161">1161: </a>  <font color="#B22222">/* apply preconditioner on each matrix block */</font>
+<a name="line1162">1162: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogEventBegin.html#PetscLogEventBegin">PetscLogEventBegin</a>(PC_ApplyOnBlocks,jac-&gt;ksp[0],mpjac-&gt;xsub,mpjac-&gt;ysub,0);
+<a name="line1163">1163: </a>  <a href="../../../../../docs/manualpages/KSP/KSPSolve.html#KSPSolve">KSPSolve</a>(jac-&gt;ksp[0],mpjac-&gt;xsub,mpjac-&gt;ysub);
+<a name="line1164">1164: </a>  <a href="../../../../../docs/manualpages/KSP/KSPCheckSolve.html#KSPCheckSolve">KSPCheckSolve</a>(jac-&gt;ksp[0],pc,mpjac-&gt;ysub);
+<a name="line1165">1165: </a>  <a href="../../../../../docs/manualpages/Profiling/PetscLogEventEnd.html#PetscLogEventEnd">PetscLogEventEnd</a>(PC_ApplyOnBlocks,jac-&gt;ksp[0],mpjac-&gt;xsub,mpjac-&gt;ysub,0);
+<a name="line1166">1166: </a>  <a href="../../../../../docs/manualpages/KSP/KSPGetConvergedReason.html#KSPGetConvergedReason">KSPGetConvergedReason</a>(jac-&gt;ksp[0],&amp;reason);
+<a name="line1167">1167: </a>  <font color="#4169E1">if</font> (reason == <a href="../../../../../docs/manualpages/KSP/KSP_DIVERGED_PC_FAILED.html#KSP_DIVERGED_PC_FAILED">KSP_DIVERGED_PC_FAILED</a>) {
+<a name="line1168">1168: </a>    pc-&gt;failedreason = <a href="../../../../../docs/manualpages/PC/PCFailedReason.html#PCFailedReason">PC_SUBPC_ERROR</a>;
+<a name="line1169">1169: </a>  }
+
+<a name="line1171">1171: </a>  <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(mpjac-&gt;xsub);
+<a name="line1172">1172: </a>  <a href="../../../../../docs/manualpages/Vec/VecResetArray.html#VecResetArray">VecResetArray</a>(mpjac-&gt;ysub);
+<a name="line1173">1173: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArrayRead.html#VecRestoreArrayRead">VecRestoreArrayRead</a>(x,&amp;xarray);
+<a name="line1174">1174: </a>  <a href="../../../../../docs/manualpages/Vec/VecRestoreArray.html#VecRestoreArray">VecRestoreArray</a>(y,&amp;yarray);
+<a name="line1175">1175: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1176">1176: </a>}
+
+<a name="line1178">1178: </a><strong><font color="#4169E1"><a name="PCSetUp_BJacobi_Multiproc"></a>static <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a> PCSetUp_BJacobi_Multiproc(<a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> pc)</font></strong>
+<a name="line1179">1179: </a>{
+<a name="line1180">1180: </a>  PC_BJacobi           *jac   = (PC_BJacobi*)pc-&gt;data;
+<a name="line1181">1181: </a>  PC_BJacobi_Multiproc *mpjac = (PC_BJacobi_Multiproc*)jac-&gt;data;
+<a name="line1182">1182: </a>  <a href="../../../../../docs/manualpages/Sys/PetscErrorCode.html#PetscErrorCode">PetscErrorCode</a>       ierr;
+<a name="line1183">1183: </a>  <a href="../../../../../docs/manualpages/Sys/PetscInt.html#PetscInt">PetscInt</a>             m,n;
+<a name="line1184">1184: </a>  <a href="../../../../../docs/manualpages/Sys/MPI_Comm.html#MPI_Comm">MPI_Comm</a>             comm,subcomm=0;
+<a name="line1185">1185: </a>  const char           *prefix;
+<a name="line1186">1186: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>            wasSetup = <a href="../../../../../docs/manualpages/Sys/PETSC_TRUE.html#PETSC_TRUE">PETSC_TRUE</a>;
+<a name="line1187">1187: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA) || defined(PETSC_HAVE_VIENNACL)</font>
+<a name="line1188">1188: </a>  <a href="../../../../../docs/manualpages/Sys/PetscBool.html#PetscBool">PetscBool</a>              is_gpumatrix = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1189">1189: </a><font color="#A020F0">#endif</font>
+
+
+<a name="line1193">1193: </a>  <a href="../../../../../docs/manualpages/Sys/PetscObjectGetComm.html#PetscObjectGetComm">PetscObjectGetComm</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,&amp;comm);
+<a name="line1194">1194: </a>  <font color="#4169E1">if</font> (jac-&gt;n_local &gt; 1) <a href="../../../../../docs/manualpages/Sys/SETERRQ.html#SETERRQ">SETERRQ</a>(<a href="../../../../../docs/manualpages/Sys/PETSC_COMM_SELF.html#PETSC_COMM_SELF">PETSC_COMM_SELF</a>,PETSC_ERR_ARG_OUTOFRANGE,<font color="#666666">"Only a single block in a subcommunicator is supported"</font>);
+<a name="line1195">1195: </a>  jac-&gt;n_local = 1; <font color="#B22222">/* currently only a single block is supported for a subcommunicator */</font>
+<a name="line1196">1196: </a>  <font color="#4169E1">if</font> (!pc-&gt;setupcalled) {
+<a name="line1197">1197: </a>    wasSetup  = <a href="../../../../../docs/manualpages/Sys/PETSC_FALSE.html#PETSC_FALSE">PETSC_FALSE</a>;
+<a name="line1198">1198: </a>    <a href="../../../../../docs/manualpages/Sys/PetscNewLog.html#PetscNewLog">PetscNewLog</a>(pc,&amp;mpjac);
+<a name="line1199">1199: </a>    jac-&gt;data = (void*)mpjac;
+
+<a name="line1201">1201: </a>    <font color="#B22222">/* initialize datastructure mpjac */</font>
+<a name="line1202">1202: </a>    <font color="#4169E1">if</font> (!jac-&gt;psubcomm) {
+<a name="line1203">1203: </a>      <font color="#B22222">/* Create default contiguous subcommunicatiors if user does not provide them */</font>
+<a name="line1204">1204: </a>      <a href="../../../../../docs/manualpages/Sys/PetscSubcommCreate.html#PetscSubcommCreate">PetscSubcommCreate</a>(comm,&amp;jac-&gt;psubcomm);
+<a name="line1205">1205: </a>      <a href="../../../../../docs/manualpages/Sys/PetscSubcommSetNumber.html#PetscSubcommSetNumber">PetscSubcommSetNumber</a>(jac-&gt;psubcomm,jac-&gt;n);
+<a name="line1206">1206: </a>      <a href="../../../../../docs/manualpages/Sys/PetscSubcommSetType.html#PetscSubcommSetType">PetscSubcommSetType</a>(jac-&gt;psubcomm,PETSC_SUBCOMM_CONTIGUOUS);
+<a name="line1207">1207: </a>      <a href="../../../../../docs/manualpages/Profiling/PetscLogObjectMemory.html#PetscLogObjectMemory">PetscLogObjectMemory</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,<font color="#4169E1">sizeof</font>(<a href="../../../../../docs/manualpages/Sys/PetscSubcomm.html#PetscSubcomm">PetscSubcomm</a>));
+<a name="line1208">1208: </a>    }
+<a name="line1209">1209: </a>    mpjac-&gt;psubcomm = jac-&gt;psubcomm;
+<a name="line1210">1210: </a>    subcomm         = PetscSubcommChild(mpjac-&gt;psubcomm);
+
+<a name="line1212">1212: </a>    <font color="#B22222">/* Get matrix blocks of pmat */</font>
+<a name="line1213">1213: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetMultiProcBlock.html#MatGetMultiProcBlock">MatGetMultiProcBlock</a>(pc-&gt;pmat,subcomm,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;mpjac-&gt;submats);
+
+<a name="line1215">1215: </a>    <font color="#B22222">/* create a new <a href="../../../../../docs/manualpages/PC/PC.html#PC">PC</a> that processors in each subcomm have copy of */</font>
+<a name="line1216">1216: </a>    <a href="../../../../../docs/manualpages/Sys/PetscMalloc1.html#PetscMalloc1">PetscMalloc1</a>(1,&amp;jac-&gt;ksp);
+<a name="line1217">1217: </a>    <a href="../../../../../docs/manualpages/KSP/KSPCreate.html#KSPCreate">KSPCreate</a>(subcomm,&amp;jac-&gt;ksp[0]);
+<a name="line1218">1218: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetErrorIfNotConverged.html#KSPSetErrorIfNotConverged">KSPSetErrorIfNotConverged</a>(jac-&gt;ksp[0],pc-&gt;erroriffailure);
+<a name="line1219">1219: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectIncrementTabLevel.html#PetscObjectIncrementTabLevel">PetscObjectIncrementTabLevel</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)jac-&gt;ksp[0],(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,1);
+<a name="line1220">1220: </a>    PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)jac-&gt;ksp[0]);
+<a name="line1221">1221: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(jac-&gt;ksp[0],mpjac-&gt;submats,mpjac-&gt;submats);
+<a name="line1222">1222: </a>    <a href="../../../../../docs/manualpages/KSP/KSPGetPC.html#KSPGetPC">KSPGetPC</a>(jac-&gt;ksp[0],&amp;mpjac-&gt;pc);
+
+<a name="line1224">1224: </a>    <a href="../../../../../docs/manualpages/PC/PCGetOptionsPrefix.html#PCGetOptionsPrefix">PCGetOptionsPrefix</a>(pc,&amp;prefix);
+<a name="line1225">1225: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetOptionsPrefix.html#KSPSetOptionsPrefix">KSPSetOptionsPrefix</a>(jac-&gt;ksp[0],prefix);
+<a name="line1226">1226: </a>    <a href="../../../../../docs/manualpages/KSP/KSPAppendOptionsPrefix.html#KSPAppendOptionsPrefix">KSPAppendOptionsPrefix</a>(jac-&gt;ksp[0],<font color="#666666">"sub_"</font>);
+<a name="line1227">1227: </a>    <font color="#B22222">/*</font>
+<a name="line1228">1228: </a><font color="#B22222">      <a href="../../../../../docs/manualpages/Sys/PetscMPIInt.html#PetscMPIInt">PetscMPIInt</a> rank,subsize,subrank;</font>
+<a name="line1229">1229: </a><font color="#B22222">      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(comm,&amp;rank);</font>
+<a name="line1230">1230: </a><font color="#B22222">      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_size.html#MPI_Comm_size">MPI_Comm_size</a>(subcomm,&amp;subsize);</font>
+<a name="line1231">1231: </a><font color="#B22222">      <a href="http://www.mpich.org/static/docs/latest/www3/MPI_Comm_rank.html#MPI_Comm_rank">MPI_Comm_rank</a>(subcomm,&amp;subrank);</font>
+
+<a name="line1233">1233: </a><font color="#B22222">      <a href="../../../../../docs/manualpages/Mat/MatGetLocalSize.html#MatGetLocalSize">MatGetLocalSize</a>(mpjac-&gt;submats,&amp;m,NULL);</font>
+<a name="line1234">1234: </a><font color="#B22222">      <a href="../../../../../docs/manualpages/Mat/MatGetSize.html#MatGetSize">MatGetSize</a>(mpjac-&gt;submats,&amp;n,NULL);</font>
+<a name="line1235">1235: </a><font color="#B22222">      <a href="../../../../../docs/manualpages/Sys/PetscSynchronizedPrintf.html#PetscSynchronizedPrintf">PetscSynchronizedPrintf</a>(comm,"[%d], sub-size %d,sub-rank %d\n",rank,subsize,subrank);</font>
+<a name="line1236">1236: </a><font color="#B22222">      <a href="../../../../../docs/manualpages/Sys/PetscSynchronizedFlush.html#PetscSynchronizedFlush">PetscSynchronizedFlush</a>(comm,PETSC_STDOUT);</font>
+<a name="line1237">1237: </a><font color="#B22222">    */</font>
+
+<a name="line1239">1239: </a>    <font color="#B22222">/* create dummy vectors xsub and ysub */</font>
+<a name="line1240">1240: </a>    <a href="../../../../../docs/manualpages/Mat/MatGetLocalSize.html#MatGetLocalSize">MatGetLocalSize</a>(mpjac-&gt;submats,&amp;m,&amp;n);
+<a name="line1241">1241: </a>    <a href="../../../../../docs/manualpages/Vec/VecCreateMPIWithArray.html#VecCreateMPIWithArray">VecCreateMPIWithArray</a>(subcomm,1,n,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,NULL,&amp;mpjac-&gt;xsub);
+<a name="line1242">1242: </a>    <a href="../../../../../docs/manualpages/Vec/VecCreateMPIWithArray.html#VecCreateMPIWithArray">VecCreateMPIWithArray</a>(subcomm,1,m,<a href="../../../../../docs/manualpages/Sys/PETSC_DECIDE.html#PETSC_DECIDE">PETSC_DECIDE</a>,NULL,&amp;mpjac-&gt;ysub);
+<a name="line1243">1243: </a><font color="#A020F0">#if defined(PETSC_HAVE_CUDA)</font>
+<a name="line1244">1244: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompareAny.html#PetscObjectTypeCompareAny">PetscObjectTypeCompareAny</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mpjac-&gt;submats,&amp;is_gpumatrix,<a href="../../../../../docs/manualpages/Mat/MATAIJCUSPARSE.html#MATAIJCUSPARSE">MATAIJCUSPARSE</a>,MATMPIAIJCUSPARSE,<font color="#666666">""</font>);
+<a name="line1245">1245: </a>    <font color="#4169E1">if</font> (is_gpumatrix) {
+<a name="line1246">1246: </a>      <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(mpjac-&gt;xsub,<a href="../../../../../docs/manualpages/Vec/VECMPICUDA.html#VECMPICUDA">VECMPICUDA</a>);
+<a name="line1247">1247: </a>      <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(mpjac-&gt;ysub,<a href="../../../../../docs/manualpages/Vec/VECMPICUDA.html#VECMPICUDA">VECMPICUDA</a>);
+<a name="line1248">1248: </a>    }
+<a name="line1249">1249: </a><font color="#A020F0">#endif</font>
+<a name="line1250">1250: </a><font color="#A020F0">#if defined(PETSC_HAVE_VIENNACL)</font>
+<a name="line1251">1251: </a>    <a href="../../../../../docs/manualpages/Sys/PetscObjectTypeCompareAny.html#PetscObjectTypeCompareAny">PetscObjectTypeCompareAny</a>((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mpjac-&gt;submats,&amp;is_gpumatrix,<a href="../../../../../docs/manualpages/Mat/MATAIJVIENNACL.html#MATAIJVIENNACL">MATAIJVIENNACL</a>,MATMPIAIJVIENNACL,<font color="#666666">""</font>);
+<a name="line1252">1252: </a>    <font color="#4169E1">if</font> (is_gpumatrix) {
+<a name="line1253">1253: </a>      <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(mpjac-&gt;xsub,<a href="../../../../../docs/manualpages/Vec/VECMPIVIENNACL.html#VECMPIVIENNACL">VECMPIVIENNACL</a>);
+<a name="line1254">1254: </a>      <a href="../../../../../docs/manualpages/Vec/VecSetType.html#VecSetType">VecSetType</a>(mpjac-&gt;ysub,<a href="../../../../../docs/manualpages/Vec/VECMPIVIENNACL.html#VECMPIVIENNACL">VECMPIVIENNACL</a>);
+<a name="line1255">1255: </a>    }
+<a name="line1256">1256: </a><font color="#A020F0">#endif</font>
+<a name="line1257">1257: </a>    PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mpjac-&gt;xsub);
+<a name="line1258">1258: </a>    PetscLogObjectParent((<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)pc,(<a href="../../../../../docs/manualpages/Sys/PetscObject.html#PetscObject">PetscObject</a>)mpjac-&gt;ysub);
+
+<a name="line1260">1260: </a>    pc-&gt;ops-&gt;reset   = PCReset_BJacobi_Multiproc;
+<a name="line1261">1261: </a>    pc-&gt;ops-&gt;destroy = PCDestroy_BJacobi_Multiproc;
+<a name="line1262">1262: </a>    pc-&gt;ops-&gt;apply   = PCApply_BJacobi_Multiproc;
+<a name="line1263">1263: </a>  } <font color="#4169E1">else</font> { <font color="#B22222">/* pc-&gt;setupcalled */</font>
+<a name="line1264">1264: </a>    subcomm = PetscSubcommChild(mpjac-&gt;psubcomm);
+<a name="line1265">1265: </a>    <font color="#4169E1">if</font> (pc-&gt;flag == <a href="../../../../../docs/manualpages/Mat/MatStructure.html#MatStructure">DIFFERENT_NONZERO_PATTERN</a>) {
+<a name="line1266">1266: </a>      <font color="#B22222">/* destroy old matrix blocks, then get new matrix blocks */</font>
+<a name="line1267">1267: </a>      <font color="#4169E1">if</font> (mpjac-&gt;submats) {<a href="../../../../../docs/manualpages/Mat/MatDestroy.html#MatDestroy">MatDestroy</a>(&amp;mpjac-&gt;submats);}
+<a name="line1268">1268: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetMultiProcBlock.html#MatGetMultiProcBlock">MatGetMultiProcBlock</a>(pc-&gt;pmat,subcomm,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_INITIAL_MATRIX</a>,&amp;mpjac-&gt;submats);
+<a name="line1269">1269: </a>    } <font color="#4169E1">else</font> {
+<a name="line1270">1270: </a>      <a href="../../../../../docs/manualpages/Mat/MatGetMultiProcBlock.html#MatGetMultiProcBlock">MatGetMultiProcBlock</a>(pc-&gt;pmat,subcomm,<a href="../../../../../docs/manualpages/Mat/MatReuse.html#MatReuse">MAT_REUSE_MATRIX</a>,&amp;mpjac-&gt;submats);
+<a name="line1271">1271: </a>    }
+<a name="line1272">1272: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetOperators.html#KSPSetOperators">KSPSetOperators</a>(jac-&gt;ksp[0],mpjac-&gt;submats,mpjac-&gt;submats);
+<a name="line1273">1273: </a>  }
+
+<a name="line1275">1275: </a>  <font color="#4169E1">if</font> (!wasSetup &amp;&amp; pc-&gt;setfromoptionscalled) {
+<a name="line1276">1276: </a>    <a href="../../../../../docs/manualpages/KSP/KSPSetFromOptions.html#KSPSetFromOptions">KSPSetFromOptions</a>(jac-&gt;ksp[0]);
+<a name="line1277">1277: </a>  }
+<a name="line1278">1278: </a>  <font color="#4169E1">return</font>(0);
+<a name="line1279">1279: </a>}
+</pre>
+</body>
+
+</html>

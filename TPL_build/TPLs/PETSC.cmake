@@ -95,6 +95,7 @@ IF ( CMAKE_BUILD_PETSC )
       --download-superlu_dist=1
       --download-scalapack=1
       --download-mumps=1
+      --download-slepc=1
       --with-cc=${CMAKE_C_COMPILER}
       --with-cxx=mpicxx
       --with-fc=${CMAKE_Fortran_COMPILER}
